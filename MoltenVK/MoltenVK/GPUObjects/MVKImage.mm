@@ -1656,10 +1656,17 @@ VkResult MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffe
 		if (presentInfo.presentMode != VK_PRESENT_MODE_MAX_ENUM_KHR) {
 			mtlDrwbl.layer.displaySyncEnabledMVK = (presentInfo.presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
 		}
+		bool presentsWithTransaction = mtlDrwbl.layer.presentsWithTransaction;
+		if (presentsWithTransaction) {
+			[CATransaction begin];
+		}
 		if (presentInfo.desiredPresentTime) {
 			[mtlDrwbl presentAtTime: (double)presentInfo.desiredPresentTime * 1.0e-9];
 		} else {
 			[mtlDrwbl present];
+		}
+		if (presentsWithTransaction) {
+			[CATransaction commit];
 		}
 	}];
 

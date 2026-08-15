@@ -25,6 +25,16 @@
 #include "MVKStrings.h"
 #include "MTLRenderPipelineDescriptor+MoltenVK.h"
 #include "mvk_datatypes.hpp"
+#include <array>
+#include <cmath>
+#include <condition_variable>
+#include <cstdarg>
+#include <cstdio>
+#include <limits>
+#include <memory>
+#if MVK_IOS
+#include <os/proc.h>
+#endif
 #include <sys/stat.h>
 #include <sstream>
 
@@ -42,6 +52,1906 @@
 using namespace std;
 using namespace mvk;
 using namespace SPIRV_CROSS_NAMESPACE;
+
+
+#pragma mark - MVKMetal4CompilerService
+
+static constexpr uint64_t kMetal4TelemetryInterval = 512;
+static constexpr uint64_t kMetal4CacheMaintenanceInterval = 256;
+static constexpr size_t kMetal4DistinctFingerprintCapacity = 4096;
+static constexpr size_t kMetal4RecentEvictionCapacity = 512;
+static constexpr size_t kMetal4CardinalityBitmapWords = 32;
+static constexpr double kMetal4CacheConfiguredHardLimit = 1024.0;
+static constexpr size_t kMetal4PendingCandidateLimit = 16;
+static constexpr uint64_t kMetal4UnknownAllocationSizeFloor = 64ULL * 1024ULL;
+static constexpr uint64_t kMetal4FrequencyLimit = 1024;
+static constexpr uint64_t kMetal4DefaultCompilerTimeoutNs = 30ULL * NSEC_PER_SEC;
+
+struct MVKMetal4ApproxCardinality {
+	array<uint64_t, kMetal4CardinalityBitmapWords> bitmap = {};
+
+	void record(uint64_t fingerprint) {
+		size_t bitIndex = static_cast<size_t>(fingerprint) &
+			(kMetal4CardinalityBitmapWords * 64 - 1);
+		bitmap[bitIndex / 64] |= 1ULL << (bitIndex % 64);
+	}
+
+	size_t estimate() const {
+		size_t occupiedBits = 0;
+		for (uint64_t word : bitmap) {
+			occupiedBits += static_cast<size_t>(__builtin_popcountll(word));
+		}
+		constexpr size_t bitCount = kMetal4CardinalityBitmapWords * 64;
+		if (occupiedBits == 0) { return 0; }
+		if (occupiedBits >= bitCount) { return bitCount; }
+		double zeroFraction = static_cast<double>(bitCount - occupiedBits) /
+			static_cast<double>(bitCount);
+		return static_cast<size_t>(llround(-static_cast<double>(bitCount) * log(zeroFraction)));
+	}
+};
+
+struct MVKMetal4BaseKeyFingerprints {
+	uint64_t vertexFunction = 0;
+	uint64_t fragmentFunction = 0;
+	uint64_t shaderPair = 0;
+	uint64_t pointerShaderPair = 0;
+	uint64_t vertexLayout = 0;
+	uint64_t fixedState = 0;
+	uint64_t rasterSampleCount = 0;
+	uint64_t alphaToCoverage = 0;
+	uint64_t alphaToOne = 0;
+	uint64_t rasterization = 0;
+	uint64_t vertexAmplification = 0;
+	uint64_t primitiveTopology = 0;
+	uint64_t indirectCommandBuffers = 0;
+	uint64_t shaderValidation = 0;
+	uint64_t withoutVertexFunction = 0;
+	uint64_t withoutFragmentFunction = 0;
+	uint64_t withoutShaderPair = 0;
+	uint64_t withoutVertexLayout = 0;
+	uint64_t withoutFixedState = 0;
+	uint64_t withoutRasterSampleCount = 0;
+	uint64_t withoutAlphaToCoverage = 0;
+	uint64_t withoutAlphaToOne = 0;
+	uint64_t withoutRasterization = 0;
+	uint64_t withoutVertexAmplification = 0;
+	uint64_t withoutPrimitiveTopology = 0;
+	uint64_t withoutIndirectCommandBuffers = 0;
+	uint64_t withoutShaderValidation = 0;
+};
+
+struct MVKMetal4BaseGhostEntry {
+	uint64_t fingerprint = 0;
+	uint64_t compileTaskNs = 0;
+	uint64_t allocatedBytes = 0;
+	uint32_t sightings = 0;
+	bool residentEviction = false;
+	bool compileFailed = false;
+};
+
+enum class MVKMetal4CompilerLane : uint8_t {
+	Library,
+	Render,
+	Compute,
+};
+
+struct MVKMetal4CompilerLaneStats {
+	uint64_t attempts = 0;
+	uint64_t successes = 0;
+	uint64_t failures = 0;
+	uint64_t breakerTrips = 0;
+	uint64_t queueWaitTotalNs = 0;
+	uint64_t queueWaitMaxNs = 0;
+	uint64_t taskTotalNs = 0;
+	uint64_t taskMaxNs = 0;
+	uint64_t legacyFallbacks = 0;
+	uint64_t directLegacyCompiles = 0;
+};
+
+struct MVKMetal4CompilerService::Impl {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	struct BaseEntry {
+		id<MTLRenderPipelineState> pipeline = nil;
+		MTL4FunctionDescriptor* vertexFunction = nil;
+		MTL4FunctionDescriptor* fragmentFunction = nil;
+		bool compiling = true;
+		bool failed = false;
+		bool resident = false;
+		uint64_t fingerprint = 0;
+		uint64_t compileTaskNs = 0;
+		uint64_t allocatedBytes = 0;
+		uint64_t frequency = 1;
+		uint64_t score = 0;
+		uint64_t lastUse = 0;
+		condition_variable ready;
+
+		~BaseEntry() {
+			[pipeline release];
+			[vertexFunction release];
+			[fragmentFunction release];
+		}
+	};
+
+	MVKDevice* device;
+	id<MTL4Compiler> compiler;
+	size_t cacheMax;
+	size_t dynamicCacheTarget;
+	uint32_t cachePolicy;
+	bool useAsyncCompilerTasks;
+	size_t configuredTaskMax = 1;
+	size_t deviceTaskMax = 1;
+	size_t compilerTaskMax = 1;
+	unordered_map<string, shared_ptr<BaseEntry>> baseCache;
+	mutex cacheLock;
+	condition_variable compilerSlotReady;
+	condition_variable baseCandidateReady;
+	size_t compilerTasksInFlight = 0;
+	uint64_t compilerTimeoutNs = kMetal4DefaultCompilerTimeoutNs;
+	bool shuttingDown = false;
+	bool fatalCompilerTimeout = false;
+	bool libraryBreakerOpen = false;
+	bool renderBreakerOpen = false;
+	bool computeBreakerOpen = false;
+	MVKMetal4CompilerLaneStats libraryStats;
+	MVKMetal4CompilerLaneStats renderStats;
+	MVKMetal4CompilerLaneStats computeStats;
+	array<uint64_t, 4096> distinctKeyFingerprints = {};
+	array<MVKMetal4BaseGhostEntry, 512> recentEvictedFingerprints = {};
+	MVKMetal4ApproxCardinality vertexFunctionCardinality;
+	MVKMetal4ApproxCardinality fragmentFunctionCardinality;
+	MVKMetal4ApproxCardinality shaderPairCardinality;
+	MVKMetal4ApproxCardinality pointerShaderPairCardinality;
+	MVKMetal4ApproxCardinality vertexLayoutCardinality;
+	MVKMetal4ApproxCardinality fixedStateCardinality;
+	MVKMetal4ApproxCardinality rasterSampleCountCardinality;
+	MVKMetal4ApproxCardinality alphaToCoverageCardinality;
+	MVKMetal4ApproxCardinality alphaToOneCardinality;
+	MVKMetal4ApproxCardinality rasterizationCardinality;
+	MVKMetal4ApproxCardinality vertexAmplificationCardinality;
+	MVKMetal4ApproxCardinality primitiveTopologyCardinality;
+	MVKMetal4ApproxCardinality indirectCommandBuffersCardinality;
+	MVKMetal4ApproxCardinality shaderValidationCardinality;
+	MVKMetal4ApproxCardinality withoutVertexFunctionCardinality;
+	MVKMetal4ApproxCardinality withoutFragmentFunctionCardinality;
+	MVKMetal4ApproxCardinality withoutShaderPairCardinality;
+	MVKMetal4ApproxCardinality withoutVertexLayoutCardinality;
+	MVKMetal4ApproxCardinality withoutFixedStateCardinality;
+	MVKMetal4ApproxCardinality withoutRasterSampleCountCardinality;
+	MVKMetal4ApproxCardinality withoutAlphaToCoverageCardinality;
+	MVKMetal4ApproxCardinality withoutAlphaToOneCardinality;
+	MVKMetal4ApproxCardinality withoutRasterizationCardinality;
+	MVKMetal4ApproxCardinality withoutVertexAmplificationCardinality;
+	MVKMetal4ApproxCardinality withoutPrimitiveTopologyCardinality;
+	MVKMetal4ApproxCardinality withoutIndirectCommandBuffersCardinality;
+	MVKMetal4ApproxCardinality withoutShaderValidationCardinality;
+	size_t recentEvictionCursor = 0;
+	size_t distinctBaseKeys = 0;
+	size_t cacheHighWater = 0;
+	size_t residentEntries = 0;
+	size_t unknownSizeEntries = 0;
+	size_t pendingCompilations = 0;
+	size_t pendingCompilationsHighWater = 0;
+	size_t asyncInflightHighWater = 0;
+	uint64_t useClock = 0;
+	uint64_t attempts = 0;
+	uint64_t baseHits = 0;
+	uint64_t baseMisses = 0;
+	uint64_t baseFailures = 0;
+	uint64_t baseEvictions = 0;
+	uint64_t candidateAdmissions = 0;
+	uint64_t candidateRejections = 0;
+	uint64_t valuePolicyEvictions = 0;
+	uint64_t pressureEvictions = 0;
+	uint64_t pendingCapacityWaits = 0;
+	uint64_t pendingCapacityWaitTotalNs = 0;
+	uint64_t pendingCapacityWaitMaxNs = 0;
+	uint64_t failedGhostFallbacks = 0;
+	uint64_t ghostHits = 0;
+	uint64_t scoreSaturations = 0;
+	uint64_t globalAgingValue = 0;
+	uint64_t residentMeasuredBytes = 0;
+	uint64_t peakResidentMeasuredBytes = 0;
+	uint64_t pipelineAllocatedTotalBytes = 0;
+	uint64_t pipelineAllocatedMinBytes = numeric_limits<uint64_t>::max();
+	uint64_t pipelineAllocatedMaxBytes = 0;
+	uint64_t pipelineAllocatedSamples = 0;
+	uint64_t unknownSizeMeasurements = 0;
+	uint64_t availableMemoryBytes = 0;
+	uint64_t deviceAllocatedBytes = 0;
+	uint32_t memoryPressureLevel = 0;
+	uint64_t recentRebuildsAfterEviction = 0;
+	uint64_t distinctOverflow = 0;
+	uint64_t baseCompileTotalNs = 0;
+	uint64_t baseCompileMaxNs = 0;
+	uint64_t specializationSuccesses = 0;
+	uint64_t specializationFailures = 0;
+	uint64_t specializationTotalNs = 0;
+	uint64_t specializationMaxNs = 0;
+	uint64_t legacyFallbacks = 0;
+	uint64_t legacyCompileEvents = 0;
+	uint64_t legacyLibraryCompiles = 0;
+	uint64_t legacyLibraryFailures = 0;
+	uint64_t legacyLibraryTotalNs = 0;
+	uint64_t legacyLibraryMaxNs = 0;
+	uint64_t legacyGraphicsCompiles = 0;
+	uint64_t legacyGraphicsFailures = 0;
+	uint64_t legacyGraphicsTotalNs = 0;
+	uint64_t legacyGraphicsMaxNs = 0;
+	uint64_t legacyTessellationCompiles = 0;
+	uint64_t legacyTessellationFailures = 0;
+	uint64_t legacyTessellationTotalNs = 0;
+	uint64_t legacyTessellationMaxNs = 0;
+	uint64_t legacyComputeCompiles = 0;
+	uint64_t legacyComputeFailures = 0;
+	uint64_t legacyComputeTotalNs = 0;
+	uint64_t legacyComputeMaxNs = 0;
+	uint64_t asyncTasks = 0;
+	uint64_t asyncTaskTotalNs = 0;
+	uint64_t asyncTaskMaxNs = 0;
+	uint64_t asyncSlotWaitTotalNs = 0;
+	uint64_t asyncSlotWaitMaxNs = 0;
+	uint64_t taskTimeouts = 0;
+	uint64_t slotWaitTimeouts = 0;
+	uint64_t baseCoalescingWaitTimeouts = 0;
+	uint64_t pendingCapacityWaitTimeouts = 0;
+	uint64_t shutdownBypasses = 0;
+
+	Impl(MVKDevice* mvkDevice,
+		 id<MTL4Compiler> mtlCompiler,
+		 size_t maxEntries,
+		 uint32_t policy,
+		 bool useAsyncTasks,
+		 size_t configuredTasks,
+		 size_t deviceTasks,
+		 size_t effectiveTasks,
+		 uint64_t timeoutNs) :
+		device(mvkDevice),
+		compiler(mtlCompiler),
+		cacheMax(maxEntries),
+		dynamicCacheTarget(maxEntries),
+		cachePolicy(policy),
+		useAsyncCompilerTasks(useAsyncTasks),
+		configuredTaskMax(configuredTasks),
+		deviceTaskMax(deviceTasks),
+		compilerTaskMax(effectiveTasks),
+		compilerTimeoutNs(timeoutNs) {}
+
+	~Impl() { [compiler release]; }
+#endif
+};
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+template<typename ResultType>
+struct MVKMetal4CompilerTaskContext {
+	mutex lock;
+	condition_variable ready;
+	id<MTL4Compiler> compiler = nil;
+	id retainedInput = nil;
+	id<MTL4CompilerTask> task = nil;
+	ResultType result = nil;
+	NSError* error = nil;
+	bool completed = false;
+
+	MVKMetal4CompilerTaskContext(id<MTL4Compiler> mtlCompiler, id input) :
+		compiler([mtlCompiler retain]),
+		retainedInput([input retain]) {}
+
+	~MVKMetal4CompilerTaskContext() {
+		[task release];
+		[result release];
+		[error release];
+		[retainedInput release];
+		[compiler release];
+	}
+
+	void adoptTask(id<MTL4CompilerTask> newTask) {
+		bool releaseImmediately = false;
+		{
+			lock_guard<mutex> guard(lock);
+			if (completed) {
+				releaseImmediately = true;
+			} else {
+				task = newTask;
+			}
+		}
+		if (releaseImmediately) { [newTask release]; }
+	}
+
+	void complete(ResultType value, NSError* taskError) {
+		id<MTL4CompilerTask> completedTask = nil;
+		{
+			lock_guard<mutex> guard(lock);
+			if (completed) { return; }
+			result = [value retain];
+			error = [taskError retain];
+			completed = true;
+			completedTask = task;
+			task = nil;
+		}
+		ready.notify_all();
+		[completedTask release];
+	}
+
+	bool waitFor(uint64_t timeoutNs, ResultType* value, NSError** taskError) {
+		unique_lock<mutex> guard(lock);
+		bool finished = ready.wait_for(
+			guard,
+			chrono::nanoseconds(timeoutNs),
+			[this] { return completed; });
+		if (!finished) { return false; }
+		if (value) {
+			*value = result;
+			result = nil;
+		}
+		if (taskError) {
+			*taskError = error;
+			error = nil;
+		}
+		return true;
+	}
+};
+
+static NSError* newMetal4CompilerTimeoutError(const char* activity, uint64_t timeoutNs) {
+	NSString* description = [NSString stringWithFormat:
+		@"Metal 4 %s timed out after %.3f milliseconds; the shared compiler was disabled for this device.",
+		activity,
+		static_cast<double>(timeoutNs) / 1e6];
+	return [[NSError alloc] initWithDomain:@(kMVKMoltenVKDriverLayerName)
+		code:1
+		userInfo:@{NSLocalizedDescriptionKey : description}];
+}
+
+static NSError* newMetal4CompilerTaskCreationError(const char* activity) {
+	NSString* description = [NSString stringWithFormat:
+		@"Metal 4 %s did not return a compiler task; the lane was disabled for this device.",
+		activity];
+	return [[NSError alloc] initWithDomain:@(kMVKMoltenVKDriverLayerName)
+		code:2
+		userInfo:@{NSLocalizedDescriptionKey : description}];
+}
+
+static uint64_t getMetal4BaseKeyFingerprint(const string& key) {
+	uint64_t fingerprint = 1469598103934665603ULL;
+	for (uint8_t value : key) {
+		fingerprint ^= value;
+		fingerprint *= 1099511628211ULL;
+	}
+	return fingerprint == 0 ? 1 : fingerprint;
+}
+
+static uint64_t saturatingMetal4Add(uint64_t left,
+									uint64_t right,
+									uint64_t* saturationCount = nullptr) {
+	if (right > numeric_limits<uint64_t>::max() - left) {
+		if (saturationCount) { (*saturationCount)++; }
+		return numeric_limits<uint64_t>::max();
+	}
+	return left + right;
+}
+
+static uint64_t saturatingMetal4Multiply(uint64_t left,
+										 uint64_t right,
+										 uint64_t* saturationCount = nullptr) {
+	if (left != 0 && right > numeric_limits<uint64_t>::max() / left) {
+		if (saturationCount) { (*saturationCount)++; }
+		return numeric_limits<uint64_t>::max();
+	}
+	return left * right;
+}
+
+static MVKMetal4CompilerLaneStats& getMetal4CompilerLaneStats(
+	MVKMetal4CompilerService::Impl* impl,
+	MVKMetal4CompilerLane lane) {
+	switch (lane) {
+		case MVKMetal4CompilerLane::Library: return impl->libraryStats;
+		case MVKMetal4CompilerLane::Render: return impl->renderStats;
+		case MVKMetal4CompilerLane::Compute: return impl->computeStats;
+	}
+	return impl->renderStats;
+}
+
+static bool& getMetal4CompilerLaneBreaker(MVKMetal4CompilerService::Impl* impl,
+											  MVKMetal4CompilerLane lane) {
+	switch (lane) {
+		case MVKMetal4CompilerLane::Library: return impl->libraryBreakerOpen;
+		case MVKMetal4CompilerLane::Render: return impl->renderBreakerOpen;
+		case MVKMetal4CompilerLane::Compute: return impl->computeBreakerOpen;
+	}
+	return impl->renderBreakerOpen;
+}
+
+static void openAllMetal4CompilerBreakersLocked(MVKMetal4CompilerService::Impl* impl) {
+	auto openBreaker = [](bool& breaker, MVKMetal4CompilerLaneStats& stats) {
+		if (breaker) { return; }
+		breaker = true;
+		stats.breakerTrips++;
+	};
+	openBreaker(impl->libraryBreakerOpen, impl->libraryStats);
+	openBreaker(impl->renderBreakerOpen, impl->renderStats);
+	openBreaker(impl->computeBreakerOpen, impl->computeStats);
+}
+
+static void notifyMetal4CompilerWaiters(MVKMetal4CompilerService::Impl* impl) {
+	impl->compilerSlotReady.notify_all();
+	impl->baseCandidateReady.notify_all();
+}
+
+static void markMetal4CompilerTimedOut(MVKMetal4CompilerService::Impl* impl,
+										  bool waitingForSlot) {
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		impl->fatalCompilerTimeout = true;
+		if (waitingForSlot) {
+			impl->slotWaitTimeouts++;
+		} else {
+			impl->taskTimeouts++;
+		}
+		openAllMetal4CompilerBreakersLocked(impl);
+		for (const auto& item : impl->baseCache) { item.second->ready.notify_all(); }
+	}
+	notifyMetal4CompilerWaiters(impl);
+}
+
+static void shutdownMetal4Compiler(const shared_ptr<MVKMetal4CompilerService::Impl>& impl) {
+	if (!impl) { return; }
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		impl->shuttingDown = true;
+		impl->libraryBreakerOpen = true;
+		impl->renderBreakerOpen = true;
+		impl->computeBreakerOpen = true;
+		for (const auto& item : impl->baseCache) { item.second->ready.notify_all(); }
+	}
+	notifyMetal4CompilerWaiters(impl.get());
+}
+
+static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
+									  MVKMetal4CompilerLane lane,
+									  bool* attemptedMetal4) {
+	if (attemptedMetal4) { *attemptedMetal4 = false; }
+	uint64_t waitStart = mvkGetTimestamp();
+	unique_lock<mutex> lock(impl->cacheLock);
+	bool& breaker = getMetal4CompilerLaneBreaker(impl, lane);
+	if (impl->shuttingDown) {
+		impl->shutdownBypasses++;
+		return false;
+	}
+	if (impl->fatalCompilerTimeout || breaker) { return false; }
+	if (attemptedMetal4) { *attemptedMetal4 = true; }
+	MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
+	stats.attempts++;
+	bool slotReady = impl->compilerSlotReady.wait_for(
+		lock,
+		chrono::nanoseconds(impl->compilerTimeoutNs),
+		[&] {
+			return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
+				impl->compilerTasksInFlight < impl->compilerTaskMax;
+		});
+
+	uint64_t waitDuration = mvkGetElapsedNanoseconds(waitStart);
+	stats.queueWaitTotalNs = saturatingMetal4Add(stats.queueWaitTotalNs, waitDuration);
+	stats.queueWaitMaxNs = max(stats.queueWaitMaxNs, waitDuration);
+	impl->asyncSlotWaitTotalNs = saturatingMetal4Add(impl->asyncSlotWaitTotalNs, waitDuration);
+	impl->asyncSlotWaitMaxNs = max(impl->asyncSlotWaitMaxNs, waitDuration);
+	if (!slotReady) {
+		impl->fatalCompilerTimeout = true;
+		impl->slotWaitTimeouts++;
+		openAllMetal4CompilerBreakersLocked(impl);
+		for (const auto& item : impl->baseCache) { item.second->ready.notify_all(); }
+		lock.unlock();
+		notifyMetal4CompilerWaiters(impl);
+		return false;
+	}
+	if (impl->shuttingDown) {
+		impl->shutdownBypasses++;
+		return false;
+	}
+	if (impl->fatalCompilerTimeout || breaker) { return false; }
+	impl->compilerTasksInFlight++;
+	impl->asyncInflightHighWater = max(impl->asyncInflightHighWater, impl->compilerTasksInFlight);
+	return true;
+}
+
+static void finishMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
+									 MVKMetal4CompilerLane lane,
+									 uint64_t taskDuration,
+									 bool success) {
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
+		stats.taskTotalNs = saturatingMetal4Add(stats.taskTotalNs, taskDuration);
+		stats.taskMaxNs = max(stats.taskMaxNs, taskDuration);
+		impl->asyncTasks++;
+		impl->asyncTaskTotalNs = saturatingMetal4Add(impl->asyncTaskTotalNs, taskDuration);
+		impl->asyncTaskMaxNs = max(impl->asyncTaskMaxNs, taskDuration);
+		if (success) {
+			stats.successes++;
+		} else {
+			stats.failures++;
+			bool& breaker = getMetal4CompilerLaneBreaker(impl, lane);
+			if (!breaker) {
+				breaker = true;
+				stats.breakerTrips++;
+			}
+		}
+		if (impl->compilerTasksInFlight > 0) {
+			impl->compilerTasksInFlight--;
+		}
+	}
+	impl->compilerSlotReady.notify_all();
+	if (lane == MVKMetal4CompilerLane::Render) {
+		impl->baseCandidateReady.notify_all();
+	}
+}
+
+static void recordMetal4LegacyLane(MVKMetal4CompilerService::Impl* impl,
+								   MVKMetal4CompilerLane lane,
+								   bool fallback) {
+	MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
+	if (fallback) {
+		stats.legacyFallbacks++;
+	} else {
+		stats.directLegacyCompiles++;
+	}
+}
+
+static uint64_t scoreMetal4BaseCacheEntry(uint64_t compileTaskNs,
+										  uint64_t frequency,
+										  uint64_t allocatedBytes,
+										  uint64_t globalAgingValue,
+										  uint64_t* saturationCount = nullptr) {
+	uint64_t costMicroseconds = max<uint64_t>(1, compileTaskNs / 1000);
+	uint64_t boundedFrequency = min<uint64_t>(max<uint64_t>(1, frequency), kMetal4FrequencyLimit);
+	uint64_t effectiveBytes = max<uint64_t>(allocatedBytes, kMetal4UnknownAllocationSizeFloor);
+	uint64_t sizeKiB = max<uint64_t>(1, effectiveBytes / 1024);
+	uint64_t benefit = saturatingMetal4Multiply(costMicroseconds, boundedFrequency, saturationCount);
+	benefit = max<uint64_t>(1, benefit / sizeKiB);
+	return saturatingMetal4Add(globalAgingValue, benefit, saturationCount);
+}
+
+static uint64_t combineMetal4BaseKeyFingerprints(initializer_list<uint64_t> components) {
+	string bytes;
+	bytes.reserve(components.size() * sizeof(uint64_t));
+	for (uint64_t component : components) {
+		bytes.append(reinterpret_cast<const char*>(&component), sizeof(component));
+	}
+	return getMetal4BaseKeyFingerprint(bytes);
+}
+
+template<typename T>
+static uint64_t getMetal4BaseKeyValueFingerprint(const T& value) {
+	string bytes(reinterpret_cast<const char*>(&value), sizeof(value));
+	return getMetal4BaseKeyFingerprint(bytes);
+}
+
+static void recordMetal4BaseKeyCardinality(MVKMetal4CompilerService::Impl* impl,
+											 const MVKMetal4BaseKeyFingerprints& fingerprints) {
+	impl->vertexFunctionCardinality.record(fingerprints.vertexFunction);
+	impl->fragmentFunctionCardinality.record(fingerprints.fragmentFunction);
+	impl->shaderPairCardinality.record(fingerprints.shaderPair);
+	impl->pointerShaderPairCardinality.record(fingerprints.pointerShaderPair);
+	impl->vertexLayoutCardinality.record(fingerprints.vertexLayout);
+	impl->fixedStateCardinality.record(fingerprints.fixedState);
+	impl->rasterSampleCountCardinality.record(fingerprints.rasterSampleCount);
+	impl->alphaToCoverageCardinality.record(fingerprints.alphaToCoverage);
+	impl->alphaToOneCardinality.record(fingerprints.alphaToOne);
+	impl->rasterizationCardinality.record(fingerprints.rasterization);
+	impl->vertexAmplificationCardinality.record(fingerprints.vertexAmplification);
+	impl->primitiveTopologyCardinality.record(fingerprints.primitiveTopology);
+	impl->indirectCommandBuffersCardinality.record(fingerprints.indirectCommandBuffers);
+	impl->shaderValidationCardinality.record(fingerprints.shaderValidation);
+	impl->withoutVertexFunctionCardinality.record(fingerprints.withoutVertexFunction);
+	impl->withoutFragmentFunctionCardinality.record(fingerprints.withoutFragmentFunction);
+	impl->withoutShaderPairCardinality.record(fingerprints.withoutShaderPair);
+	impl->withoutVertexLayoutCardinality.record(fingerprints.withoutVertexLayout);
+	impl->withoutFixedStateCardinality.record(fingerprints.withoutFixedState);
+	impl->withoutRasterSampleCountCardinality.record(fingerprints.withoutRasterSampleCount);
+	impl->withoutAlphaToCoverageCardinality.record(fingerprints.withoutAlphaToCoverage);
+	impl->withoutAlphaToOneCardinality.record(fingerprints.withoutAlphaToOne);
+	impl->withoutRasterizationCardinality.record(fingerprints.withoutRasterization);
+	impl->withoutVertexAmplificationCardinality.record(fingerprints.withoutVertexAmplification);
+	impl->withoutPrimitiveTopologyCardinality.record(fingerprints.withoutPrimitiveTopology);
+	impl->withoutIndirectCommandBuffersCardinality.record(fingerprints.withoutIndirectCommandBuffers);
+	impl->withoutShaderValidationCardinality.record(fingerprints.withoutShaderValidation);
+}
+
+static void recordMetal4DistinctBaseKey(MVKMetal4CompilerService::Impl* impl,
+										 uint64_t fingerprint) {
+	size_t slot = static_cast<size_t>(fingerprint) & (kMetal4DistinctFingerprintCapacity - 1);
+	for (size_t probe = 0; probe < kMetal4DistinctFingerprintCapacity; probe++) {
+		uint64_t& existing = impl->distinctKeyFingerprints[slot];
+		if (existing == fingerprint) { return; }
+		if (existing == 0) {
+			existing = fingerprint;
+			impl->distinctBaseKeys++;
+			return;
+		}
+		slot = (slot + 1) & (kMetal4DistinctFingerprintCapacity - 1);
+	}
+	impl->distinctOverflow++;
+}
+
+static const MVKMetal4BaseGhostEntry* findMetal4BaseGhost(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t fingerprint) {
+	for (const auto& ghost : impl->recentEvictedFingerprints) {
+		if (ghost.fingerprint == fingerprint) { return &ghost; }
+	}
+	return nullptr;
+}
+
+static void recordMetal4BaseGhost(MVKMetal4CompilerService::Impl* impl,
+									  const MVKMetal4CompilerService::Impl::BaseEntry& entry,
+									  bool residentEviction,
+									  bool compileFailed = false) {
+	MVKMetal4BaseGhostEntry ghost;
+	ghost.fingerprint = entry.fingerprint;
+	ghost.compileTaskNs = entry.compileTaskNs;
+	ghost.allocatedBytes = entry.allocatedBytes;
+	ghost.residentEviction = residentEviction;
+	ghost.compileFailed = compileFailed;
+	for (auto& existing : impl->recentEvictedFingerprints) {
+		if (existing.fingerprint != entry.fingerprint) { continue; }
+		ghost.sightings = existing.sightings == numeric_limits<uint32_t>::max()
+			? existing.sightings : existing.sightings + 1;
+		existing = ghost;
+		return;
+	}
+	ghost.sightings = 1;
+	impl->recentEvictedFingerprints[
+		impl->recentEvictionCursor++ % kMetal4RecentEvictionCapacity] = ghost;
+}
+
+using MVKMetal4BaseCacheIterator = unordered_map<
+	string,
+	shared_ptr<MVKMetal4CompilerService::Impl::BaseEntry>>::iterator;
+
+static MVKMetal4BaseCacheIterator findMetal4BaseCacheVictim(
+	MVKMetal4CompilerService::Impl* impl) {
+	auto victim = impl->baseCache.end();
+	for (auto it = impl->baseCache.begin(); it != impl->baseCache.end(); ++it) {
+		const auto& candidate = it->second;
+		if (candidate->compiling || !candidate->resident) { continue; }
+		if (victim == impl->baseCache.end()) {
+			victim = it;
+			continue;
+		}
+		const auto& current = victim->second;
+		bool lowerValue = impl->cachePolicy == 0
+			? candidate->lastUse < current->lastUse
+			: candidate->score < current->score;
+		bool equalValue = impl->cachePolicy == 0
+			? candidate->lastUse == current->lastUse
+			: candidate->score == current->score;
+		if (lowerValue || (equalValue &&
+			(candidate->lastUse < current->lastUse ||
+			 (candidate->lastUse == current->lastUse && it->first < victim->first)))) {
+			victim = it;
+		}
+	}
+	return victim;
+}
+
+static void removeMetal4ResidentAccounting(
+	MVKMetal4CompilerService::Impl* impl,
+	const shared_ptr<MVKMetal4CompilerService::Impl::BaseEntry>& entry) {
+	if (!entry->resident) { return; }
+	entry->resident = false;
+	if (impl->residentEntries > 0) { impl->residentEntries--; }
+	impl->residentMeasuredBytes = entry->allocatedBytes > impl->residentMeasuredBytes
+		? 0 : impl->residentMeasuredBytes - entry->allocatedBytes;
+	if (entry->allocatedBytes == 0 && impl->unknownSizeEntries > 0) {
+		impl->unknownSizeEntries--;
+	}
+}
+
+static void evictMetal4BaseCacheEntry(
+	MVKMetal4CompilerService::Impl* impl,
+	MVKMetal4BaseCacheIterator victim) {
+	auto entry = victim->second;
+	if (impl->cachePolicy != 0) {
+		impl->globalAgingValue = max(impl->globalAgingValue, entry->score);
+	}
+	recordMetal4BaseGhost(impl, *entry, true);
+	removeMetal4ResidentAccounting(impl, entry);
+	impl->baseEvictions++;
+	if (impl->cachePolicy != 0) {
+		impl->valuePolicyEvictions++;
+	}
+	impl->baseCache.erase(victim);
+}
+
+static void admitMetal4BaseCacheEntry(
+	MVKMetal4CompilerService::Impl* impl,
+	const shared_ptr<MVKMetal4CompilerService::Impl::BaseEntry>& entry) {
+	entry->resident = true;
+	impl->residentEntries++;
+	impl->residentMeasuredBytes = saturatingMetal4Add(
+		impl->residentMeasuredBytes,
+		entry->allocatedBytes,
+		&impl->scoreSaturations);
+	impl->peakResidentMeasuredBytes = max(
+		impl->peakResidentMeasuredBytes,
+		impl->residentMeasuredBytes);
+	if (entry->allocatedBytes == 0) { impl->unknownSizeEntries++; }
+	impl->cacheHighWater = max(impl->cacheHighWater, impl->residentEntries);
+	impl->candidateAdmissions++;
+}
+
+static void maintainMetal4BaseCache(MVKMetal4CompilerService::Impl* impl) {
+	uint64_t availableMemory = 0;
+#if MVK_IOS
+	availableMemory = static_cast<uint64_t>(os_proc_available_memory());
+#endif
+	uint64_t deviceAllocated = 0;
+	if (@available(macOS 10.13, iOS 11.0, *)) {
+		deviceAllocated = static_cast<uint64_t>(
+			[impl->device->getPhysicalDevice()->getMTLDevice() currentAllocatedSize]);
+	}
+
+	lock_guard<mutex> lock(impl->cacheLock);
+	impl->availableMemoryBytes = availableMemory;
+	impl->deviceAllocatedBytes = deviceAllocated;
+	impl->memoryPressureLevel = 0;
+	impl->dynamicCacheTarget = impl->cacheMax;
+}
+
+static string formatMetal4Message(const char* format, ...) {
+	va_list arguments;
+	va_start(arguments, format);
+	va_list copiedArguments;
+	va_copy(copiedArguments, arguments);
+	int length = vsnprintf(nullptr, 0, format, copiedArguments);
+	va_end(copiedArguments);
+	if (length <= 0) {
+		va_end(arguments);
+		return {};
+	}
+	vector<char> buffer(static_cast<size_t>(length) + 1);
+	vsnprintf(buffer.data(), buffer.size(), format, arguments);
+	va_end(arguments);
+	return string(buffer.data(), static_cast<size_t>(length));
+}
+
+struct MVKMetal4TelemetryMessages {
+	string unified;
+	string flexible;
+	string cache;
+	string fields;
+};
+
+static string formatMetal4UnifiedCompilerTelemetryLocked(MVKMetal4CompilerService::Impl* impl,
+													 bool finalSummary) {
+	const char* format = finalSummary
+		? "Metal 4 unified compiler summary: configured_task_max=%zu, device_task_max=%zu, effective_task_max=%zu, "
+		  "compiler_timeout_ns=%llu, shutting_down=%u, fatal_timeout=%u, task_timeouts=%llu, slot_wait_timeouts=%llu, shutdown_bypasses=%llu, "
+		  "inflight_high_water=%zu, library_breaker=%u, render_breaker=%u, compute_breaker=%u, "
+		  "library_attempts=%llu, library_successes=%llu, library_failures=%llu, library_queue_wait_ns=%llu, library_task_ns=%llu, library_fallback=%llu, library_direct_legacy=%llu, "
+		  "render_attempts=%llu, render_successes=%llu, render_failures=%llu, render_queue_wait_ns=%llu, render_task_ns=%llu, render_fallback=%llu, render_direct_legacy=%llu, "
+		  "compute_attempts=%llu, compute_successes=%llu, compute_failures=%llu, compute_queue_wait_ns=%llu, compute_task_ns=%llu, compute_fallback=%llu, compute_direct_legacy=%llu."
+		: "Metal 4 unified compiler telemetry (periodic): configured_task_max=%zu, device_task_max=%zu, effective_task_max=%zu, "
+		  "compiler_timeout_ns=%llu, shutting_down=%u, fatal_timeout=%u, task_timeouts=%llu, slot_wait_timeouts=%llu, shutdown_bypasses=%llu, "
+		  "inflight_high_water=%zu, library_breaker=%u, render_breaker=%u, compute_breaker=%u, "
+		  "library_attempts=%llu, library_successes=%llu, library_failures=%llu, library_queue_wait_ns=%llu, library_task_ns=%llu, library_fallback=%llu, library_direct_legacy=%llu, "
+		  "render_attempts=%llu, render_successes=%llu, render_failures=%llu, render_queue_wait_ns=%llu, render_task_ns=%llu, render_fallback=%llu, render_direct_legacy=%llu, "
+		  "compute_attempts=%llu, compute_successes=%llu, compute_failures=%llu, compute_queue_wait_ns=%llu, compute_task_ns=%llu, compute_fallback=%llu, compute_direct_legacy=%llu.";
+	return formatMetal4Message(
+		format,
+		impl->configuredTaskMax,
+		impl->deviceTaskMax,
+		impl->compilerTaskMax,
+		static_cast<unsigned long long>(impl->compilerTimeoutNs),
+		impl->shuttingDown ? 1u : 0u,
+		impl->fatalCompilerTimeout ? 1u : 0u,
+		static_cast<unsigned long long>(impl->taskTimeouts),
+		static_cast<unsigned long long>(impl->slotWaitTimeouts),
+		static_cast<unsigned long long>(impl->shutdownBypasses),
+		impl->asyncInflightHighWater,
+		impl->libraryBreakerOpen ? 1u : 0u,
+		impl->renderBreakerOpen ? 1u : 0u,
+		impl->computeBreakerOpen ? 1u : 0u,
+		static_cast<unsigned long long>(impl->libraryStats.attempts),
+		static_cast<unsigned long long>(impl->libraryStats.successes),
+		static_cast<unsigned long long>(impl->libraryStats.failures),
+		static_cast<unsigned long long>(impl->libraryStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->libraryStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->libraryStats.legacyFallbacks),
+		static_cast<unsigned long long>(impl->libraryStats.directLegacyCompiles),
+		static_cast<unsigned long long>(impl->renderStats.attempts),
+		static_cast<unsigned long long>(impl->renderStats.successes),
+		static_cast<unsigned long long>(impl->renderStats.failures),
+		static_cast<unsigned long long>(impl->renderStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->renderStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->renderStats.legacyFallbacks),
+		static_cast<unsigned long long>(impl->renderStats.directLegacyCompiles),
+		static_cast<unsigned long long>(impl->computeStats.attempts),
+		static_cast<unsigned long long>(impl->computeStats.successes),
+		static_cast<unsigned long long>(impl->computeStats.failures),
+		static_cast<unsigned long long>(impl->computeStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->computeStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->computeStats.legacyFallbacks),
+		static_cast<unsigned long long>(impl->computeStats.directLegacyCompiles));
+}
+
+static MVKMetal4TelemetryMessages snapshotMetal4TelemetryMessages(
+	MVKMetal4CompilerService::Impl* impl,
+	bool finalSummary) {
+	MVKMetal4TelemetryMessages messages;
+	lock_guard<mutex> lock(impl->cacheLock);
+	messages.unified = formatMetal4UnifiedCompilerTelemetryLocked(impl, finalSummary);
+	const char* format = finalSummary
+		? "Metal 4 flexible pipeline summary: attempts=%llu, base_hits=%llu, base_misses=%llu, "
+		  "base_failures=%llu, base_total_ns=%llu, base_max_ns=%llu, specialization_successes=%llu, "
+		  "specialization_failures=%llu, specialization_total_ns=%llu, specialization_max_ns=%llu, "
+		  "fallbacks=%llu, base_evictions=%llu, recent_rebuilds_after_eviction=%llu, "
+		  "distinct_base_keys=%zu, distinct_overflow=%llu, cache_high_water=%zu, async_enabled=%u, "
+		  "vertex_fn_distinct=%zu, fragment_fn_distinct=%zu, shader_pair_distinct=%zu, "
+		  "stable_shader_pair_distinct=%zu, pointer_shader_pair_distinct=%zu, "
+		  "vertex_layout_distinct=%zu, fixed_state_distinct=%zu, without_vertex_fn_distinct=%zu, "
+		  "without_fragment_fn_distinct=%zu, without_shader_pair_distinct=%zu, "
+		  "without_vertex_layout_distinct=%zu, without_fixed_state_distinct=%zu, "
+		  "async_tasks=%llu, async_inflight_high_water=%zu, async_task_total_ns=%llu, "
+		  "async_task_max_ns=%llu, async_slot_wait_total_ns=%llu, async_slot_wait_max_ns=%llu, "
+		  "legacy_graphics_compiles=%llu, legacy_graphics_failures=%llu, legacy_graphics_total_ns=%llu, legacy_graphics_max_ns=%llu, "
+		  "legacy_tessellation_compiles=%llu, legacy_tessellation_failures=%llu, legacy_tessellation_total_ns=%llu, legacy_tessellation_max_ns=%llu, "
+		  "legacy_compute_compiles=%llu, legacy_compute_failures=%llu, legacy_compute_total_ns=%llu, legacy_compute_max_ns=%llu."
+		: "Metal 4 flexible pipeline telemetry (periodic): attempts=%llu, base_hits=%llu, base_misses=%llu, "
+		  "base_failures=%llu, base_total_ns=%llu, base_max_ns=%llu, specialization_successes=%llu, "
+		  "specialization_failures=%llu, specialization_total_ns=%llu, specialization_max_ns=%llu, "
+		  "fallbacks=%llu, base_evictions=%llu, recent_rebuilds_after_eviction=%llu, "
+		  "distinct_base_keys=%zu, distinct_overflow=%llu, cache_high_water=%zu, async_enabled=%u, "
+		  "vertex_fn_distinct=%zu, fragment_fn_distinct=%zu, shader_pair_distinct=%zu, "
+		  "stable_shader_pair_distinct=%zu, pointer_shader_pair_distinct=%zu, "
+		  "vertex_layout_distinct=%zu, fixed_state_distinct=%zu, without_vertex_fn_distinct=%zu, "
+		  "without_fragment_fn_distinct=%zu, without_shader_pair_distinct=%zu, "
+		  "without_vertex_layout_distinct=%zu, without_fixed_state_distinct=%zu, "
+		  "async_tasks=%llu, async_inflight_high_water=%zu, async_task_total_ns=%llu, "
+		  "async_task_max_ns=%llu, async_slot_wait_total_ns=%llu, async_slot_wait_max_ns=%llu, "
+		  "legacy_graphics_compiles=%llu, legacy_graphics_failures=%llu, legacy_graphics_total_ns=%llu, legacy_graphics_max_ns=%llu, "
+		  "legacy_tessellation_compiles=%llu, legacy_tessellation_failures=%llu, legacy_tessellation_total_ns=%llu, legacy_tessellation_max_ns=%llu, "
+		  "legacy_compute_compiles=%llu, legacy_compute_failures=%llu, legacy_compute_total_ns=%llu, legacy_compute_max_ns=%llu.";
+	messages.flexible = formatMetal4Message(
+		format,
+		static_cast<unsigned long long>(impl->attempts),
+		static_cast<unsigned long long>(impl->baseHits),
+		static_cast<unsigned long long>(impl->baseMisses),
+		static_cast<unsigned long long>(impl->baseFailures),
+		static_cast<unsigned long long>(impl->baseCompileTotalNs),
+		static_cast<unsigned long long>(impl->baseCompileMaxNs),
+		static_cast<unsigned long long>(impl->specializationSuccesses),
+		static_cast<unsigned long long>(impl->specializationFailures),
+		static_cast<unsigned long long>(impl->specializationTotalNs),
+		static_cast<unsigned long long>(impl->specializationMaxNs),
+		static_cast<unsigned long long>(impl->legacyFallbacks),
+		static_cast<unsigned long long>(impl->baseEvictions),
+		static_cast<unsigned long long>(impl->recentRebuildsAfterEviction),
+		impl->distinctBaseKeys,
+		static_cast<unsigned long long>(impl->distinctOverflow),
+		impl->cacheHighWater,
+		impl->useAsyncCompilerTasks ? 1u : 0u,
+		impl->vertexFunctionCardinality.estimate(),
+		impl->fragmentFunctionCardinality.estimate(),
+		impl->pointerShaderPairCardinality.estimate(),
+		impl->shaderPairCardinality.estimate(),
+		impl->pointerShaderPairCardinality.estimate(),
+		impl->vertexLayoutCardinality.estimate(),
+		impl->fixedStateCardinality.estimate(),
+		impl->withoutVertexFunctionCardinality.estimate(),
+		impl->withoutFragmentFunctionCardinality.estimate(),
+		impl->withoutShaderPairCardinality.estimate(),
+		impl->withoutVertexLayoutCardinality.estimate(),
+		impl->withoutFixedStateCardinality.estimate(),
+		static_cast<unsigned long long>(impl->asyncTasks),
+		impl->asyncInflightHighWater,
+		static_cast<unsigned long long>(impl->asyncTaskTotalNs),
+		static_cast<unsigned long long>(impl->asyncTaskMaxNs),
+		static_cast<unsigned long long>(impl->asyncSlotWaitTotalNs),
+		static_cast<unsigned long long>(impl->asyncSlotWaitMaxNs),
+		static_cast<unsigned long long>(impl->legacyGraphicsCompiles),
+		static_cast<unsigned long long>(impl->legacyGraphicsFailures),
+		static_cast<unsigned long long>(impl->legacyGraphicsTotalNs),
+		static_cast<unsigned long long>(impl->legacyGraphicsMaxNs),
+		static_cast<unsigned long long>(impl->legacyTessellationCompiles),
+		static_cast<unsigned long long>(impl->legacyTessellationFailures),
+		static_cast<unsigned long long>(impl->legacyTessellationTotalNs),
+		static_cast<unsigned long long>(impl->legacyTessellationMaxNs),
+		static_cast<unsigned long long>(impl->legacyComputeCompiles),
+		static_cast<unsigned long long>(impl->legacyComputeFailures),
+		static_cast<unsigned long long>(impl->legacyComputeTotalNs),
+		static_cast<unsigned long long>(impl->legacyComputeMaxNs));
+	const char* cacheFormat = finalSummary
+		? "Metal 4 base cache summary: cache_policy=%u, cache_resident_entries=%zu, "
+		  "cache_dynamic_target=%zu, cache_resident_bytes=%llu, cache_peak_bytes=%llu, "
+		  "unknown_size_entries=%zu, pending_compilations=%zu, pending_high_water=%zu, "
+		  "pending_capacity_waits=%llu, pending_capacity_wait_timeouts=%llu, pending_capacity_wait_total_ns=%llu, pending_capacity_wait_max_ns=%llu, "
+		  "base_coalescing_wait_timeouts=%llu, "
+		  "failed_ghost_fallbacks=%llu, candidate_admissions=%llu, candidate_rejections=%llu, "
+		  "value_evictions=%llu, pressure_evictions=%llu, ghost_hits=%llu, score_saturations=%llu, "
+		  "available_memory_bytes=%llu, device_allocated_bytes=%llu, pressure_level=%u, "
+		  "pipeline_size_samples=%llu, pipeline_size_min_bytes=%llu, pipeline_size_max_bytes=%llu, "
+		  "pipeline_size_average_bytes=%llu, unknown_size_measurements=%llu."
+		: "Metal 4 base cache telemetry (periodic): cache_policy=%u, cache_resident_entries=%zu, "
+		  "cache_dynamic_target=%zu, cache_resident_bytes=%llu, cache_peak_bytes=%llu, "
+		  "unknown_size_entries=%zu, pending_compilations=%zu, pending_high_water=%zu, "
+		  "pending_capacity_waits=%llu, pending_capacity_wait_timeouts=%llu, pending_capacity_wait_total_ns=%llu, pending_capacity_wait_max_ns=%llu, "
+		  "base_coalescing_wait_timeouts=%llu, "
+		  "failed_ghost_fallbacks=%llu, candidate_admissions=%llu, candidate_rejections=%llu, "
+		  "value_evictions=%llu, pressure_evictions=%llu, ghost_hits=%llu, score_saturations=%llu, "
+		  "available_memory_bytes=%llu, device_allocated_bytes=%llu, pressure_level=%u, "
+		  "pipeline_size_samples=%llu, pipeline_size_min_bytes=%llu, pipeline_size_max_bytes=%llu, "
+		  "pipeline_size_average_bytes=%llu, unknown_size_measurements=%llu.";
+	uint64_t minimumPipelineSize = impl->pipelineAllocatedSamples == 0
+		? 0 : impl->pipelineAllocatedMinBytes;
+	uint64_t averagePipelineSize = impl->pipelineAllocatedSamples == 0
+		? 0 : impl->pipelineAllocatedTotalBytes / impl->pipelineAllocatedSamples;
+	messages.cache = formatMetal4Message(
+		cacheFormat,
+		impl->cachePolicy,
+		impl->residentEntries,
+		impl->dynamicCacheTarget,
+		static_cast<unsigned long long>(impl->residentMeasuredBytes),
+		static_cast<unsigned long long>(impl->peakResidentMeasuredBytes),
+		impl->unknownSizeEntries,
+		impl->pendingCompilations,
+		impl->pendingCompilationsHighWater,
+		static_cast<unsigned long long>(impl->pendingCapacityWaits),
+		static_cast<unsigned long long>(impl->pendingCapacityWaitTimeouts),
+		static_cast<unsigned long long>(impl->pendingCapacityWaitTotalNs),
+		static_cast<unsigned long long>(impl->pendingCapacityWaitMaxNs),
+		static_cast<unsigned long long>(impl->baseCoalescingWaitTimeouts),
+		static_cast<unsigned long long>(impl->failedGhostFallbacks),
+		static_cast<unsigned long long>(impl->candidateAdmissions),
+		static_cast<unsigned long long>(impl->candidateRejections),
+		static_cast<unsigned long long>(impl->valuePolicyEvictions),
+		static_cast<unsigned long long>(impl->pressureEvictions),
+		static_cast<unsigned long long>(impl->ghostHits),
+		static_cast<unsigned long long>(impl->scoreSaturations),
+		static_cast<unsigned long long>(impl->availableMemoryBytes),
+		static_cast<unsigned long long>(impl->deviceAllocatedBytes),
+		impl->memoryPressureLevel,
+		static_cast<unsigned long long>(impl->pipelineAllocatedSamples),
+		static_cast<unsigned long long>(minimumPipelineSize),
+		static_cast<unsigned long long>(impl->pipelineAllocatedMaxBytes),
+		static_cast<unsigned long long>(averagePipelineSize),
+		static_cast<unsigned long long>(impl->unknownSizeMeasurements));
+	const char* fieldFormat = finalSummary
+		? "Metal 4 base key fields summary: raster_samples_distinct=%zu, alpha_to_coverage_distinct=%zu, "
+		  "alpha_to_one_distinct=%zu, rasterization_distinct=%zu, vertex_amplification_distinct=%zu, "
+		  "primitive_topology_distinct=%zu, icb_support_distinct=%zu, shader_validation_distinct=%zu, "
+		  "without_raster_samples_distinct=%zu, without_alpha_to_coverage_distinct=%zu, "
+		  "without_alpha_to_one_distinct=%zu, without_rasterization_distinct=%zu, "
+		  "without_vertex_amplification_distinct=%zu, without_primitive_topology_distinct=%zu, "
+		  "without_icb_support_distinct=%zu, without_shader_validation_distinct=%zu."
+		: "Metal 4 base key fields (periodic): raster_samples_distinct=%zu, alpha_to_coverage_distinct=%zu, "
+		  "alpha_to_one_distinct=%zu, rasterization_distinct=%zu, vertex_amplification_distinct=%zu, "
+		  "primitive_topology_distinct=%zu, icb_support_distinct=%zu, shader_validation_distinct=%zu, "
+		  "without_raster_samples_distinct=%zu, without_alpha_to_coverage_distinct=%zu, "
+		  "without_alpha_to_one_distinct=%zu, without_rasterization_distinct=%zu, "
+		  "without_vertex_amplification_distinct=%zu, without_primitive_topology_distinct=%zu, "
+		  "without_icb_support_distinct=%zu, without_shader_validation_distinct=%zu.";
+	messages.fields = formatMetal4Message(
+		fieldFormat,
+		impl->rasterSampleCountCardinality.estimate(),
+		impl->alphaToCoverageCardinality.estimate(),
+		impl->alphaToOneCardinality.estimate(),
+		impl->rasterizationCardinality.estimate(),
+		impl->vertexAmplificationCardinality.estimate(),
+		impl->primitiveTopologyCardinality.estimate(),
+		impl->indirectCommandBuffersCardinality.estimate(),
+		impl->shaderValidationCardinality.estimate(),
+		impl->withoutRasterSampleCountCardinality.estimate(),
+		impl->withoutAlphaToCoverageCardinality.estimate(),
+		impl->withoutAlphaToOneCardinality.estimate(),
+		impl->withoutRasterizationCardinality.estimate(),
+		impl->withoutVertexAmplificationCardinality.estimate(),
+		impl->withoutPrimitiveTopologyCardinality.estimate(),
+		impl->withoutIndirectCommandBuffersCardinality.estimate(),
+		impl->withoutShaderValidationCardinality.estimate());
+	return messages;
+}
+
+static void logMetal4FlexiblePipelineTelemetry(MVKMetal4CompilerService::Impl* impl,
+											 bool finalSummary) {
+	MVKMetal4TelemetryMessages messages = snapshotMetal4TelemetryMessages(impl, finalSummary);
+	for (const string* message : {&messages.unified, &messages.flexible, &messages.cache, &messages.fields}) {
+		if (!message->empty()) {
+			impl->device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "%s", message->c_str());
+		}
+	}
+}
+#endif
+
+MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
+	double requested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMPILER", 0.0);
+	double flexibleRenderRequested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_PIPELINES", 0.0);
+	if (requested == 0.0 || flexibleRenderRequested == 0.0) { return nullptr; }
+
+#if MVK_USE_METAL_PRIVATE_API
+	device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 unified compiler disabled in Metal private-API builds.");
+	return nullptr;
+#endif
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (device->getMVKConfig().useMetalPrivateAPI) {
+		device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 unified compiler disabled because Metal private APIs are active.");
+		return nullptr;
+	}
+	if (!device->getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4 ||
+		!mvkOSVersionIsAtLeast(26.0)) {
+		device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 unified compiler requested but unavailable on this OS or GPU.");
+		return nullptr;
+	}
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		id<MTLDevice> mtlDevice = device->getPhysicalDevice()->getMTLDevice();
+		if (![mtlDevice respondsToSelector:@selector(newCompilerWithDescriptor:error:)]) {
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 unified compiler requested but MTL4Compiler creation is unavailable.");
+			return nullptr;
+		}
+
+		MTL4CompilerDescriptor* descriptor = [MTL4CompilerDescriptor new];
+		descriptor.label = @"MoltenVK Metal 4 Unified Compiler";
+		NSError* error = nil;
+		id<MTL4Compiler> compiler = [mtlDevice newCompilerWithDescriptor:descriptor error:&error];
+		[descriptor release];
+		if (!compiler) {
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Could not create the Metal 4 unified compiler: %s",
+							  error.localizedDescription.UTF8String ?: "unknown error");
+			return nullptr;
+		}
+
+		double configuredMax = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_FLEXIBLE_PIPELINE_CACHE_MAX",
+			kMetal4CacheConfiguredHardLimit);
+		size_t cacheMax = static_cast<size_t>(mvkClamp(
+			configuredMax,
+			1.0,
+			kMetal4CacheConfiguredHardLimit));
+		uint32_t cachePolicy = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_CACHE_POLICY", 0.0) == 0.0
+			? 0u : 1u;
+		bool useAsyncTasks = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC", 0.0) != 0.0;
+		double configuredAsyncMax = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX", 3.0);
+		size_t configuredAsyncTaskMax = static_cast<size_t>(mvkClamp(configuredAsyncMax, 1.0, 3.0));
+		size_t deviceAsyncTaskMax = max<size_t>(
+			1,
+			static_cast<size_t>(mtlDevice.maximumConcurrentCompilationTaskCount));
+			size_t effectiveAsyncTaskMax = useAsyncTasks
+				? min(configuredAsyncTaskMax, deviceAsyncTaskMax)
+				: 1;
+			uint64_t configuredTimeoutNs = device->getMVKConfig().metalCompileTimeout;
+			uint64_t compilerTimeoutNs = configuredTimeoutNs >=
+				static_cast<uint64_t>(numeric_limits<int64_t>::max())
+				? kMetal4DefaultCompilerTimeoutNs
+				: max<uint64_t>(1, configuredTimeoutNs);
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 unified compiler enabled with a %zu-entry render base cache; cache_policy=%u, bounded_async=%u, configured_task_max=%zu, device_task_max=%zu, effective_task_max=%zu, timeout_ms=%.3f.",
+							  cacheMax,
+							  cachePolicy,
+							  useAsyncTasks ? 1u : 0u,
+							  configuredAsyncTaskMax,
+							  deviceAsyncTaskMax,
+							  effectiveAsyncTaskMax,
+							  static_cast<double>(compilerTimeoutNs) / 1e6);
+			return new MVKMetal4CompilerService(
+				make_shared<Impl>(device,
+						 compiler,
+						 cacheMax,
+						 cachePolicy,
+						 useAsyncTasks,
+						 configuredAsyncTaskMax,
+						 deviceAsyncTaskMax,
+						 effectiveAsyncTaskMax,
+						 compilerTimeoutNs));
+	}
+#endif
+
+	device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+					  "Metal 4 unified compiler requested but excluded from this MoltenVK target.");
+	return nullptr;
+}
+
+MVKMetal4CompilerService::~MVKMetal4CompilerService() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	shutdownMetal4Compiler(impl);
+	if (impl) { logMetal4FlexiblePipelineTelemetry(impl.get(), true); }
+#endif
+	_impl.reset();
+}
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+static void recordMetal4LegacyCompile(
+	MVKMetal4CompilerService::Impl* impl,
+	MVKMetal4CompilerLane lane,
+	bool fallback,
+	uint64_t& compileCount,
+	uint64_t& failureCount,
+	uint64_t& totalNs,
+	uint64_t& maxNs,
+	uint64_t durationNs,
+	bool success) {
+	bool logPeriodic = false;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		compileCount++;
+		if (!success) { failureCount++; }
+		totalNs = saturatingMetal4Add(totalNs, durationNs, &impl->scoreSaturations);
+		maxNs = max(maxNs, durationNs);
+		recordMetal4LegacyLane(impl, lane, fallback);
+		impl->legacyCompileEvents++;
+		logPeriodic = (impl->legacyCompileEvents % kMetal4TelemetryInterval) == 0;
+	}
+	if (logPeriodic) { logMetal4FlexiblePipelineTelemetry(impl, false); }
+}
+
+void MVKMetal4CompilerService::recordLegacyLibraryCompile(uint64_t durationNs,
+														 bool success,
+														 bool fallback) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	recordMetal4LegacyCompile(impl.get(),
+		MVKMetal4CompilerLane::Library,
+		fallback,
+		impl->legacyLibraryCompiles,
+		impl->legacyLibraryFailures,
+		impl->legacyLibraryTotalNs,
+		impl->legacyLibraryMaxNs,
+		durationNs,
+		success);
+}
+
+void MVKMetal4CompilerService::recordLegacyGraphicsCompile(uint64_t durationNs,
+														  bool success,
+														  bool fallback) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	recordMetal4LegacyCompile(impl.get(),
+		MVKMetal4CompilerLane::Render,
+		fallback,
+		impl->legacyGraphicsCompiles,
+		impl->legacyGraphicsFailures,
+		impl->legacyGraphicsTotalNs,
+		impl->legacyGraphicsMaxNs,
+		durationNs,
+		success);
+}
+
+void MVKMetal4CompilerService::recordLegacyTessellationCompile(uint64_t durationNs, bool success) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	recordMetal4LegacyCompile(impl.get(),
+		MVKMetal4CompilerLane::Render,
+		false,
+		impl->legacyTessellationCompiles,
+		impl->legacyTessellationFailures,
+		impl->legacyTessellationTotalNs,
+		impl->legacyTessellationMaxNs,
+		durationNs,
+		success);
+}
+
+void MVKMetal4CompilerService::recordLegacyComputeCompile(uint64_t durationNs,
+														 bool success,
+														 bool fallback) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	recordMetal4LegacyCompile(impl.get(),
+		MVKMetal4CompilerLane::Compute,
+		fallback,
+		impl->legacyComputeCompiles,
+		impl->legacyComputeFailures,
+		impl->legacyComputeTotalNs,
+		impl->legacyComputeMaxNs,
+		durationNs,
+		success);
+}
+
+id<MTLLibrary> MVKMetal4CompilerService::newMTLLibrary(NSString* source,
+												   MTLCompileOptions* options,
+												   NSError** error,
+												   bool* attemptedMetal4) {
+	if (attemptedMetal4) { *attemptedMetal4 = false; }
+	auto impl = _impl;
+	if (!impl || !source || !options) { return nil; }
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		if (!acquireMetal4CompilerSlot(impl.get(), MVKMetal4CompilerLane::Library, attemptedMetal4)) {
+			if (error && attemptedMetal4 && *attemptedMetal4) {
+				*error = [newMetal4CompilerTimeoutError("library slot wait", impl->compilerTimeoutNs) autorelease];
+			}
+			return nil;
+		}
+		MTL4LibraryDescriptor* descriptor = [MTL4LibraryDescriptor new];
+		descriptor.source = source;
+		descriptor.options = options;
+
+		id<MTLLibrary> library = nil;
+		NSError* taskError = nil;
+		uint64_t taskStart = mvkGetTimestamp();
+		auto context = make_shared<MVKMetal4CompilerTaskContext<id<MTLLibrary>>>(
+			impl->compiler,
+			descriptor);
+		id<MTL4CompilerTask> task = [impl->compiler newLibraryWithDescriptor:descriptor
+												completionHandler:^(id<MTLLibrary> result, NSError* resultError) {
+			context->complete(result, resultError);
+		}];
+		if (task) {
+			context->adoptTask(task);
+		} else {
+			NSError* creationError = newMetal4CompilerTaskCreationError("library compilation");
+			context->complete(nil, creationError);
+			[creationError release];
+		}
+		[descriptor release];
+		bool completed = context->waitFor(impl->compilerTimeoutNs, &library, &taskError);
+		uint64_t taskDuration = mvkGetElapsedNanoseconds(taskStart);
+		if (!completed) {
+			taskError = newMetal4CompilerTimeoutError("library compilation", impl->compilerTimeoutNs);
+			markMetal4CompilerTimedOut(impl.get(), false);
+		}
+		finishMetal4CompilerSlot(impl.get(), MVKMetal4CompilerLane::Library, taskDuration, library != nil);
+		if (error) {
+			*error = [taskError autorelease];
+		} else {
+			[taskError release];
+		}
+		return library;
+	}
+	return nil;
+}
+
+static id<MTLRenderPipelineState> newMetal4RenderPipelineState(
+	MVKMetal4CompilerService::Impl* impl,
+	MTL4PipelineDescriptor* descriptor,
+	id<MTLRenderPipelineState> specializationBase,
+	NSError** error,
+	uint64_t* compilerTaskDurationNs = nullptr) API_AVAILABLE(macos(26.0), ios(26.0)) {
+	bool slotAttempted = false;
+	if (!acquireMetal4CompilerSlot(impl, MVKMetal4CompilerLane::Render, &slotAttempted)) {
+		if (error && slotAttempted) {
+			*error = [newMetal4CompilerTimeoutError(
+				"render pipeline slot wait",
+				impl->compilerTimeoutNs) autorelease];
+		}
+		return nil;
+	}
+
+	id<MTLRenderPipelineState> pipeline = nil;
+	NSError* taskError = nil;
+	uint64_t taskStart = mvkGetTimestamp();
+	auto context = make_shared<MVKMetal4CompilerTaskContext<id<MTLRenderPipelineState>>>(
+		impl->compiler,
+		descriptor);
+	id<MTL4CompilerTask> task = specializationBase
+		? [impl->compiler newRenderPipelineStateBySpecializationWithDescriptor:descriptor
+												 pipeline:specializationBase
+										completionHandler:^(id<MTLRenderPipelineState> result, NSError* resultError) {
+			context->complete(result, resultError);
+		}]
+		: [impl->compiler newRenderPipelineStateWithDescriptor:descriptor
+									  compilerTaskOptions:nil
+										completionHandler:^(id<MTLRenderPipelineState> result, NSError* resultError) {
+			context->complete(result, resultError);
+		}];
+	if (task) {
+		context->adoptTask(task);
+	} else {
+		NSError* creationError = newMetal4CompilerTaskCreationError("render pipeline compilation");
+		context->complete(nil, creationError);
+		[creationError release];
+	}
+	bool completed = context->waitFor(impl->compilerTimeoutNs, &pipeline, &taskError);
+	uint64_t taskDuration = mvkGetElapsedNanoseconds(taskStart);
+	if (!completed) {
+		taskError = newMetal4CompilerTimeoutError("render pipeline compilation", impl->compilerTimeoutNs);
+		markMetal4CompilerTimedOut(impl, false);
+	}
+	if (compilerTaskDurationNs) { *compilerTaskDurationNs = taskDuration; }
+	finishMetal4CompilerSlot(impl, MVKMetal4CompilerLane::Render, taskDuration, pipeline != nil);
+
+	if (error) {
+		*error = [taskError autorelease];
+	} else {
+		[taskError release];
+	}
+	return pipeline;
+}
+
+static void appendMetal4PipelineKeyBytes(string& key, const void* bytes, size_t size) {
+	key.append(static_cast<const char*>(bytes), size);
+}
+
+template<typename T>
+static void appendMetal4PipelineKeyValue(string& key, const T& value) {
+	appendMetal4PipelineKeyBytes(key, &value, sizeof(value));
+}
+
+static string makeMetal4PipelineBaseKey(MTLRenderPipelineDescriptor* descriptor,
+											const string& vertexFunctionKey,
+											const string& fragmentFunctionKey,
+											const string& vertexPointerFunctionKey,
+											const string& fragmentPointerFunctionKey,
+											MVKMetal4BaseKeyFingerprints& fingerprints) API_AVAILABLE(macos(26.0), ios(26.0)) {
+	string key;
+	string vertexLayoutKey;
+	string fixedStateKey;
+	const uint32_t keyVersion = 2;
+	appendMetal4PipelineKeyValue(key, keyVersion);
+	appendMetal4PipelineKeyValue(key, vertexFunctionKey.size());
+	appendMetal4PipelineKeyBytes(key, vertexFunctionKey.data(), vertexFunctionKey.size());
+	appendMetal4PipelineKeyValue(key, fragmentFunctionKey.size());
+	appendMetal4PipelineKeyBytes(key, fragmentFunctionKey.data(), fragmentFunctionKey.size());
+
+	bool hasVertexDescriptor = descriptor.vertexDescriptor != nil;
+	appendMetal4PipelineKeyValue(key, hasVertexDescriptor);
+	appendMetal4PipelineKeyValue(vertexLayoutKey, hasVertexDescriptor);
+	if (hasVertexDescriptor) {
+		constexpr NSUInteger kMetalVertexSlotCount = 31;
+		for (NSUInteger attrIdx = 0; attrIdx < kMetalVertexSlotCount; attrIdx++) {
+			MTLVertexAttributeDescriptor* attr = descriptor.vertexDescriptor.attributes[attrIdx];
+			appendMetal4PipelineKeyValue(key, attr.format);
+			appendMetal4PipelineKeyValue(key, attr.offset);
+			appendMetal4PipelineKeyValue(key, attr.bufferIndex);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, attr.format);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, attr.offset);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, attr.bufferIndex);
+		}
+		for (NSUInteger layoutIdx = 0; layoutIdx < kMetalVertexSlotCount; layoutIdx++) {
+			MTLVertexBufferLayoutDescriptor* layout = descriptor.vertexDescriptor.layouts[layoutIdx];
+			appendMetal4PipelineKeyValue(key, layout.stride);
+			appendMetal4PipelineKeyValue(key, layout.stepFunction);
+			appendMetal4PipelineKeyValue(key, layout.stepRate);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, layout.stride);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, layout.stepFunction);
+			appendMetal4PipelineKeyValue(vertexLayoutKey, layout.stepRate);
+		}
+	}
+
+	appendMetal4PipelineKeyValue(key, descriptor.rasterSampleCount);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.rasterSampleCount);
+	appendMetal4PipelineKeyValue(key, descriptor.alphaToCoverageEnabled);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.alphaToCoverageEnabled);
+	appendMetal4PipelineKeyValue(key, descriptor.alphaToOneEnabled);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.alphaToOneEnabled);
+	appendMetal4PipelineKeyValue(key, descriptor.rasterizationEnabled);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.rasterizationEnabled);
+	appendMetal4PipelineKeyValue(key, descriptor.maxVertexAmplificationCount);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.maxVertexAmplificationCount);
+	appendMetal4PipelineKeyValue(key, descriptor.inputPrimitiveTopology);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.inputPrimitiveTopology);
+	appendMetal4PipelineKeyValue(key, descriptor.supportIndirectCommandBuffers);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.supportIndirectCommandBuffers);
+	appendMetal4PipelineKeyValue(key, descriptor.shaderValidation);
+	appendMetal4PipelineKeyValue(fixedStateKey, descriptor.shaderValidation);
+
+	fingerprints.vertexFunction = getMetal4BaseKeyFingerprint(vertexFunctionKey);
+	fingerprints.fragmentFunction = getMetal4BaseKeyFingerprint(fragmentFunctionKey);
+	fingerprints.shaderPair = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction });
+	fingerprints.pointerShaderPair = combineMetal4BaseKeyFingerprints(
+		{ getMetal4BaseKeyFingerprint(vertexPointerFunctionKey),
+		  getMetal4BaseKeyFingerprint(fragmentPointerFunctionKey) });
+	fingerprints.vertexLayout = getMetal4BaseKeyFingerprint(vertexLayoutKey);
+	fingerprints.fixedState = getMetal4BaseKeyFingerprint(fixedStateKey);
+	fingerprints.rasterSampleCount = getMetal4BaseKeyValueFingerprint(descriptor.rasterSampleCount);
+	fingerprints.alphaToCoverage = getMetal4BaseKeyValueFingerprint(descriptor.alphaToCoverageEnabled);
+	fingerprints.alphaToOne = getMetal4BaseKeyValueFingerprint(descriptor.alphaToOneEnabled);
+	fingerprints.rasterization = getMetal4BaseKeyValueFingerprint(descriptor.rasterizationEnabled);
+	fingerprints.vertexAmplification = getMetal4BaseKeyValueFingerprint(descriptor.maxVertexAmplificationCount);
+	fingerprints.primitiveTopology = getMetal4BaseKeyValueFingerprint(descriptor.inputPrimitiveTopology);
+	fingerprints.indirectCommandBuffers = getMetal4BaseKeyValueFingerprint(descriptor.supportIndirectCommandBuffers);
+	fingerprints.shaderValidation = getMetal4BaseKeyValueFingerprint(descriptor.shaderValidation);
+	fingerprints.withoutVertexFunction = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.fragmentFunction, fingerprints.vertexLayout, fingerprints.fixedState });
+	fingerprints.withoutFragmentFunction = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.vertexLayout, fingerprints.fixedState });
+	fingerprints.withoutShaderPair = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexLayout, fingerprints.fixedState });
+	fingerprints.withoutVertexLayout = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.fixedState });
+	fingerprints.withoutFixedState = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout });
+	fingerprints.withoutRasterSampleCount = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.alphaToCoverage, fingerprints.alphaToOne, fingerprints.rasterization,
+		  fingerprints.vertexAmplification, fingerprints.primitiveTopology,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutAlphaToCoverage = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToOne, fingerprints.rasterization,
+		  fingerprints.vertexAmplification, fingerprints.primitiveTopology,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutAlphaToOne = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.rasterization,
+		  fingerprints.vertexAmplification, fingerprints.primitiveTopology,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutRasterization = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.alphaToOne,
+		  fingerprints.vertexAmplification, fingerprints.primitiveTopology,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutVertexAmplification = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.alphaToOne,
+		  fingerprints.rasterization, fingerprints.primitiveTopology,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutPrimitiveTopology = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.alphaToOne,
+		  fingerprints.rasterization, fingerprints.vertexAmplification,
+		  fingerprints.indirectCommandBuffers, fingerprints.shaderValidation });
+	fingerprints.withoutIndirectCommandBuffers = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.alphaToOne,
+		  fingerprints.rasterization, fingerprints.vertexAmplification,
+		  fingerprints.primitiveTopology, fingerprints.shaderValidation });
+	fingerprints.withoutShaderValidation = combineMetal4BaseKeyFingerprints(
+		{ fingerprints.vertexFunction, fingerprints.fragmentFunction, fingerprints.vertexLayout,
+		  fingerprints.rasterSampleCount, fingerprints.alphaToCoverage, fingerprints.alphaToOne,
+		  fingerprints.rasterization, fingerprints.vertexAmplification,
+		  fingerprints.primitiveTopology, fingerprints.indirectCommandBuffers });
+	return key;
+}
+
+static MTL4RenderPipelineDescriptor* newMetal4FlexibleBaseDescriptor(MTLRenderPipelineDescriptor* legacyDescriptor,
+															 MTL4FunctionDescriptor* vertexFunction,
+															 MTL4FunctionDescriptor* fragmentFunction) API_AVAILABLE(macos(26.0), ios(26.0)) {
+	MTL4RenderPipelineDescriptor* descriptor = [MTL4RenderPipelineDescriptor new];
+	descriptor.label = legacyDescriptor.label;
+	descriptor.vertexFunctionDescriptor = vertexFunction;
+	descriptor.fragmentFunctionDescriptor = fragmentFunction;
+	descriptor.vertexDescriptor = legacyDescriptor.vertexDescriptor;
+	descriptor.rasterSampleCount = legacyDescriptor.rasterSampleCount;
+	descriptor.alphaToCoverageState = legacyDescriptor.alphaToCoverageEnabled
+		? MTL4AlphaToCoverageStateEnabled : MTL4AlphaToCoverageStateDisabled;
+	descriptor.alphaToOneState = legacyDescriptor.alphaToOneEnabled
+		? MTL4AlphaToOneStateEnabled : MTL4AlphaToOneStateDisabled;
+	descriptor.rasterizationEnabled = legacyDescriptor.rasterizationEnabled;
+	descriptor.maxVertexAmplificationCount = legacyDescriptor.maxVertexAmplificationCount;
+	descriptor.inputPrimitiveTopology = legacyDescriptor.inputPrimitiveTopology;
+	descriptor.supportIndirectCommandBuffers = legacyDescriptor.supportIndirectCommandBuffers
+		? MTL4IndirectCommandBufferSupportStateEnabled : MTL4IndirectCommandBufferSupportStateDisabled;
+	descriptor.colorAttachmentMappingState = MTL4LogicalToPhysicalColorAttachmentMappingStateInherited;
+
+	MTL4PipelineOptions* options = [MTL4PipelineOptions new];
+	options.shaderValidation = legacyDescriptor.shaderValidation;
+	descriptor.options = options;
+	[options release];
+
+	for (NSUInteger attachmentIdx = 0; attachmentIdx < kMVKDefaultAttachmentCount; attachmentIdx++) {
+		MTL4RenderPipelineColorAttachmentDescriptor* colorAttachment = descriptor.colorAttachments[attachmentIdx];
+		colorAttachment.pixelFormat = MTLPixelFormatUnspecialized;
+		colorAttachment.blendingState = MTL4BlendStateUnspecialized;
+		colorAttachment.writeMask = MTLColorWriteMaskUnspecialized;
+		colorAttachment.sourceRGBBlendFactor = MTLBlendFactorUnspecialized;
+		colorAttachment.destinationRGBBlendFactor = MTLBlendFactorUnspecialized;
+		colorAttachment.rgbBlendOperation = MTLBlendOperationUnspecialized;
+		colorAttachment.sourceAlphaBlendFactor = MTLBlendFactorUnspecialized;
+		colorAttachment.destinationAlphaBlendFactor = MTLBlendFactorUnspecialized;
+		colorAttachment.alphaBlendOperation = MTLBlendOperationUnspecialized;
+	}
+	return descriptor;
+}
+
+static void specializeMetal4ColorAttachments(MTL4RenderPipelineDescriptor* descriptor,
+											 MTLRenderPipelineDescriptor* legacyDescriptor) API_AVAILABLE(macos(26.0), ios(26.0)) {
+	for (NSUInteger attachmentIdx = 0; attachmentIdx < kMVKDefaultAttachmentCount; attachmentIdx++) {
+		MTLRenderPipelineColorAttachmentDescriptor* legacyColor = legacyDescriptor.colorAttachments[attachmentIdx];
+		MTL4RenderPipelineColorAttachmentDescriptor* colorAttachment = descriptor.colorAttachments[attachmentIdx];
+		colorAttachment.pixelFormat = legacyColor.pixelFormat;
+		colorAttachment.blendingState = legacyColor.blendingEnabled ? MTL4BlendStateEnabled : MTL4BlendStateDisabled;
+		colorAttachment.writeMask = legacyColor.writeMask;
+		colorAttachment.sourceRGBBlendFactor = legacyColor.sourceRGBBlendFactor;
+		colorAttachment.destinationRGBBlendFactor = legacyColor.destinationRGBBlendFactor;
+		colorAttachment.rgbBlendOperation = legacyColor.rgbBlendOperation;
+		colorAttachment.sourceAlphaBlendFactor = legacyColor.sourceAlphaBlendFactor;
+		colorAttachment.destinationAlphaBlendFactor = legacyColor.destinationAlphaBlendFactor;
+		colorAttachment.alphaBlendOperation = legacyColor.alphaBlendOperation;
+	}
+}
+
+static shared_ptr<MVKMetal4CompilerService::Impl::BaseEntry>
+getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
+								  const string& key,
+								  const MVKMetal4BaseKeyFingerprints& keyFingerprints,
+								  MTL4RenderPipelineDescriptor* descriptor,
+							  MTL4FunctionDescriptor* vertexFunction,
+							  MTL4FunctionDescriptor* fragmentFunction) API_AVAILABLE(macos(26.0), ios(26.0)) {
+	using BaseEntry = MVKMetal4CompilerService::Impl::BaseEntry;
+	shared_ptr<BaseEntry> entry;
+	uint64_t keyFingerprint = getMetal4BaseKeyFingerprint(key);
+	{
+		unique_lock<mutex> lock(impl->cacheLock);
+		recordMetal4DistinctBaseKey(impl, keyFingerprint);
+		recordMetal4BaseKeyCardinality(impl, keyFingerprints);
+		uint32_t priorSightings = 0;
+		bool checkedGhost = false;
+		while (true) {
+			auto found = impl->baseCache.find(key);
+			if (found != impl->baseCache.end()) {
+				entry = found->second;
+				bool entryReady = entry->ready.wait_for(
+					lock,
+					chrono::nanoseconds(impl->compilerTimeoutNs),
+					[&] {
+						return !entry->compiling || impl->shuttingDown ||
+							impl->fatalCompilerTimeout || impl->renderBreakerOpen;
+					});
+				if (!entryReady) {
+					// Cache coordination can outlast one compiler deadline even when the
+					// owner is healthy. Bypass only this call; no Metal task failed.
+					impl->baseCoalescingWaitTimeouts++;
+					return nullptr;
+				}
+				if (impl->shuttingDown) {
+					impl->shutdownBypasses++;
+					return nullptr;
+				}
+				if (entry->compiling) { return nullptr; }
+				impl->useClock = saturatingMetal4Add(
+					impl->useClock,
+					1,
+					&impl->scoreSaturations);
+				entry->lastUse = impl->useClock;
+				entry->frequency = min<uint64_t>(
+					saturatingMetal4Add(entry->frequency, 1, &impl->scoreSaturations),
+					kMetal4FrequencyLimit);
+				if (!entry->failed && entry->resident && impl->cachePolicy != 0) {
+					entry->score = scoreMetal4BaseCacheEntry(
+						entry->compileTaskNs,
+						entry->frequency,
+						entry->allocatedBytes,
+						impl->globalAgingValue,
+						&impl->scoreSaturations);
+				}
+				impl->baseHits++;
+				return entry;
+			}
+
+			if (impl->shuttingDown) {
+				impl->shutdownBypasses++;
+				return nullptr;
+			}
+			if (impl->fatalCompilerTimeout || impl->renderBreakerOpen) { return nullptr; }
+
+			if (!checkedGhost) {
+				checkedGhost = true;
+				if (const auto* ghost = findMetal4BaseGhost(impl, keyFingerprint)) {
+					impl->ghostHits++;
+					if (ghost->compileFailed) {
+						impl->failedGhostFallbacks++;
+						impl->baseHits++;
+						return nullptr;
+					}
+					if (ghost->residentEviction) { impl->recentRebuildsAfterEviction++; }
+					priorSightings = ghost->sightings;
+				}
+			}
+
+			if (impl->pendingCompilations >= kMetal4PendingCandidateLimit) {
+				uint64_t waitStart = mvkGetTimestamp();
+				impl->pendingCapacityWaits++;
+				bool capacityReady = impl->baseCandidateReady.wait_for(
+					lock,
+					chrono::nanoseconds(impl->compilerTimeoutNs),
+					[&] {
+						return impl->shuttingDown || impl->fatalCompilerTimeout ||
+							impl->renderBreakerOpen ||
+							impl->pendingCompilations < kMetal4PendingCandidateLimit ||
+							impl->baseCache.find(key) != impl->baseCache.end();
+					});
+				uint64_t waitDuration = mvkGetElapsedNanoseconds(waitStart);
+				impl->pendingCapacityWaitTotalNs = saturatingMetal4Add(
+					impl->pendingCapacityWaitTotalNs,
+					waitDuration,
+					&impl->scoreSaturations);
+				impl->pendingCapacityWaitMaxNs = max(
+					impl->pendingCapacityWaitMaxNs,
+					waitDuration);
+				if (!capacityReady) {
+					// Capacity pressure is not evidence that the shared compiler failed.
+					impl->pendingCapacityWaitTimeouts++;
+					return nullptr;
+				}
+				continue;
+			}
+
+			entry = make_shared<BaseEntry>();
+			entry->vertexFunction = [vertexFunction retain];
+			entry->fragmentFunction = [fragmentFunction retain];
+			entry->fingerprint = keyFingerprint;
+			entry->frequency = min<uint64_t>(
+				1ULL + static_cast<uint64_t>(priorSightings),
+				kMetal4FrequencyLimit);
+			impl->useClock = saturatingMetal4Add(
+				impl->useClock,
+				1,
+				&impl->scoreSaturations);
+			entry->lastUse = impl->useClock;
+			auto [insertedIt, inserted] = impl->baseCache.emplace(key, entry);
+			if (!inserted) {
+				entry = insertedIt->second;
+				continue;
+			}
+			impl->pendingCompilations++;
+			impl->pendingCompilationsHighWater = max(
+				impl->pendingCompilationsHighWater,
+				impl->pendingCompilations);
+			impl->baseMisses++;
+			break;
+		}
+	}
+
+	NSError* error = nil;
+	uint64_t compileStart = mvkGetTimestamp();
+	uint64_t compilerTaskDuration = 0;
+	id<MTLRenderPipelineState> basePipeline = newMetal4RenderPipelineState(
+		impl,
+		descriptor,
+		nil,
+		&error,
+		&compilerTaskDuration);
+	uint64_t compileDuration = mvkGetElapsedNanoseconds(compileStart);
+	uint64_t allocatedBytes = basePipeline
+		? static_cast<uint64_t>(basePipeline.allocatedSize)
+		: 0;
+	bool releasedPendingCandidate = false;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		auto mappedEntry = impl->baseCache.find(key);
+		bool mapOwnsEntry = mappedEntry != impl->baseCache.end() &&
+			mappedEntry->second == entry;
+		if (impl->pendingCompilations > 0) {
+			impl->pendingCompilations--;
+			releasedPendingCandidate = true;
+		}
+		entry->pipeline = basePipeline;
+		entry->failed = basePipeline == nil;
+		entry->compiling = false;
+		entry->compileTaskNs = compilerTaskDuration;
+		entry->allocatedBytes = allocatedBytes;
+		impl->useClock = saturatingMetal4Add(impl->useClock, 1, &impl->scoreSaturations);
+		entry->lastUse = impl->useClock;
+		entry->score = scoreMetal4BaseCacheEntry(
+			entry->compileTaskNs,
+			entry->frequency,
+			entry->allocatedBytes,
+			impl->globalAgingValue,
+			&impl->scoreSaturations);
+		if (!mapOwnsEntry) {
+			impl->candidateRejections++;
+		} else if (entry->failed) {
+			impl->baseFailures++;
+			recordMetal4BaseGhost(impl, *entry, false, true);
+			impl->baseCache.erase(mappedEntry);
+		} else {
+			impl->pipelineAllocatedSamples++;
+			impl->pipelineAllocatedTotalBytes = saturatingMetal4Add(
+				impl->pipelineAllocatedTotalBytes,
+				allocatedBytes,
+				&impl->scoreSaturations);
+			if (allocatedBytes == 0) {
+				impl->unknownSizeMeasurements++;
+			} else {
+				impl->pipelineAllocatedMinBytes = min(impl->pipelineAllocatedMinBytes, allocatedBytes);
+				impl->pipelineAllocatedMaxBytes = max(impl->pipelineAllocatedMaxBytes, allocatedBytes);
+			}
+
+			bool admitCandidate = impl->residentEntries < impl->dynamicCacheTarget;
+			auto victim = impl->baseCache.end();
+			if (!admitCandidate && impl->residentEntries == impl->dynamicCacheTarget) {
+				victim = findMetal4BaseCacheVictim(impl);
+				if (impl->cachePolicy == 0) {
+					admitCandidate = victim != impl->baseCache.end();
+				} else if (victim != impl->baseCache.end()) {
+					admitCandidate = entry->score > victim->second->score;
+				}
+			}
+
+			if (admitCandidate) {
+				if (victim != impl->baseCache.end()) {
+					evictMetal4BaseCacheEntry(impl, victim);
+				}
+				admitMetal4BaseCacheEntry(impl, entry);
+			} else {
+				recordMetal4BaseGhost(impl, *entry, false);
+				impl->candidateRejections++;
+				impl->baseCache.erase(mappedEntry);
+			}
+		}
+		impl->baseCompileTotalNs = saturatingMetal4Add(
+			impl->baseCompileTotalNs,
+			compileDuration,
+			&impl->scoreSaturations);
+		impl->baseCompileMaxNs = max(impl->baseCompileMaxNs, compileDuration);
+	}
+	if (releasedPendingCandidate) { impl->baseCandidateReady.notify_one(); }
+	entry->ready.notify_all();
+	if (!basePipeline) {
+		impl->device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							"Metal 4 flexible base pipeline failed; using the legacy compiler: %s",
+							error.localizedDescription.UTF8String ?: "unknown error");
+	}
+	return entry;
+}
+
+id<MTLRenderPipelineState> MVKMetal4CompilerService::newMTLRenderPipelineState(
+	MTLRenderPipelineDescriptor* legacyDescriptor,
+	MTL4FunctionDescriptor* vertexFunction,
+	const string& vertexFunctionKey,
+	const string& vertexPointerFunctionKey,
+	MTL4FunctionDescriptor* fragmentFunction,
+	const string& fragmentFunctionKey,
+	const string& fragmentPointerFunctionKey,
+	bool* attemptedMetal4) {
+	if (attemptedMetal4) { *attemptedMetal4 = false; }
+	auto impl = _impl;
+	if (!impl || !legacyDescriptor || !vertexFunction || vertexFunctionKey.empty() ||
+		vertexPointerFunctionKey.empty() ||
+		(legacyDescriptor.fragmentFunction && (!fragmentFunction || fragmentFunctionKey.empty() ||
+			fragmentPointerFunctionKey.empty()))) {
+		if (impl) {
+			lock_guard<mutex> lock(impl->cacheLock);
+			impl->legacyFallbacks++;
+		}
+		return nil;
+	}
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		if (impl->shuttingDown) {
+			impl->shutdownBypasses++;
+			return nil;
+		}
+		if (impl->fatalCompilerTimeout || impl->renderBreakerOpen) { return nil; }
+	}
+	if (attemptedMetal4) { *attemptedMetal4 = true; }
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		@autoreleasepool {
+			bool logPeriodicTelemetry = false;
+			bool maintainCache = false;
+			{
+				lock_guard<mutex> lock(impl->cacheLock);
+				impl->attempts++;
+				logPeriodicTelemetry = (impl->attempts % kMetal4TelemetryInterval) == 0;
+				maintainCache = (impl->attempts % kMetal4CacheMaintenanceInterval) == 0;
+			}
+			if (maintainCache) { maintainMetal4BaseCache(impl.get()); }
+			if (logPeriodicTelemetry) {
+				logMetal4FlexiblePipelineTelemetry(impl.get(), false);
+			}
+			MVKMetal4BaseKeyFingerprints keyFingerprints;
+			string key = makeMetal4PipelineBaseKey(
+				legacyDescriptor,
+				vertexFunctionKey,
+				fragmentFunctionKey,
+				vertexPointerFunctionKey,
+				fragmentPointerFunctionKey,
+				keyFingerprints);
+			MTL4RenderPipelineDescriptor* baseDescriptor = newMetal4FlexibleBaseDescriptor(legacyDescriptor,
+																						 vertexFunction,
+																						 fragmentFunction);
+			shared_ptr<Impl::BaseEntry> entry = getMetal4FlexibleBase(impl.get(),
+													  key,
+													  keyFingerprints,
+															  baseDescriptor,
+															  vertexFunction,
+															  fragmentFunction);
+			[baseDescriptor release];
+			if (!entry || entry->failed || !entry->pipeline) {
+				lock_guard<mutex> lock(impl->cacheLock);
+				impl->legacyFallbacks++;
+				return nil;
+			}
+
+			MTL4RenderPipelineDescriptor* specializationDescriptor =
+				(MTL4RenderPipelineDescriptor*)[entry->pipeline newRenderPipelineDescriptorForSpecialization];
+			specializeMetal4ColorAttachments(specializationDescriptor, legacyDescriptor);
+			NSError* error = nil;
+			uint64_t specializationStart = mvkGetTimestamp();
+			id<MTLRenderPipelineState> pipeline = newMetal4RenderPipelineState(
+				impl.get(),
+				specializationDescriptor,
+				entry->pipeline,
+				&error);
+			uint64_t specializationDuration = mvkGetElapsedNanoseconds(specializationStart);
+			[specializationDescriptor release];
+			{
+				lock_guard<mutex> lock(impl->cacheLock);
+				impl->specializationTotalNs += specializationDuration;
+				impl->specializationMaxNs = max(impl->specializationMaxNs, specializationDuration);
+				if (pipeline) {
+					impl->specializationSuccesses++;
+				} else {
+					impl->specializationFailures++;
+					impl->legacyFallbacks++;
+				}
+			}
+			if (!pipeline) {
+				impl->device->reportMessage(
+					MVK_CONFIG_LOG_LEVEL_INFO,
+					"Metal 4 pipeline specialization failed; using the legacy compiler: %s",
+					error.localizedDescription.UTF8String ?: "unknown error");
+			}
+			return pipeline;
+		}
+	}
+	return nil;
+}
+
+id<MTLComputePipelineState> MVKMetal4CompilerService::newMTLComputePipelineState(
+	MTLComputePipelineDescriptor* legacyDescriptor,
+	MTL4FunctionDescriptor* functionDescriptor,
+	NSError** error,
+	bool* attemptedMetal4) {
+	if (attemptedMetal4) { *attemptedMetal4 = false; }
+	auto impl = _impl;
+	if (!impl || !legacyDescriptor || !functionDescriptor) { return nil; }
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		if (!acquireMetal4CompilerSlot(impl.get(), MVKMetal4CompilerLane::Compute, attemptedMetal4)) {
+			if (error && attemptedMetal4 && *attemptedMetal4) {
+				*error = [newMetal4CompilerTimeoutError("compute slot wait", impl->compilerTimeoutNs) autorelease];
+			}
+			return nil;
+		}
+		MTL4ComputePipelineDescriptor* descriptor = [MTL4ComputePipelineDescriptor new];
+		descriptor.label = legacyDescriptor.label;
+		descriptor.computeFunctionDescriptor = functionDescriptor;
+		descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth =
+			legacyDescriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
+		descriptor.maxTotalThreadsPerThreadgroup = legacyDescriptor.maxTotalThreadsPerThreadgroup;
+		descriptor.requiredThreadsPerThreadgroup = legacyDescriptor.requiredThreadsPerThreadgroup;
+		descriptor.supportIndirectCommandBuffers = legacyDescriptor.supportIndirectCommandBuffers
+			? MTL4IndirectCommandBufferSupportStateEnabled
+			: MTL4IndirectCommandBufferSupportStateDisabled;
+		MTL4PipelineOptions* pipelineOptions = [MTL4PipelineOptions new];
+		pipelineOptions.shaderValidation = legacyDescriptor.shaderValidation;
+		descriptor.options = pipelineOptions;
+		[pipelineOptions release];
+
+		id<MTLComputePipelineState> pipeline = nil;
+		NSError* taskError = nil;
+		uint64_t taskStart = mvkGetTimestamp();
+		auto context = make_shared<MVKMetal4CompilerTaskContext<id<MTLComputePipelineState>>>(
+			impl->compiler,
+			descriptor);
+		id<MTL4CompilerTask> task = [impl->compiler newComputePipelineStateWithDescriptor:descriptor
+														 compilerTaskOptions:nil
+														   completionHandler:^(id<MTLComputePipelineState> result, NSError* resultError) {
+			context->complete(result, resultError);
+		}];
+		if (task) {
+			context->adoptTask(task);
+		} else {
+			NSError* creationError = newMetal4CompilerTaskCreationError("compute pipeline compilation");
+			context->complete(nil, creationError);
+			[creationError release];
+		}
+		[descriptor release];
+		bool completed = context->waitFor(impl->compilerTimeoutNs, &pipeline, &taskError);
+		uint64_t taskDuration = mvkGetElapsedNanoseconds(taskStart);
+		if (!completed) {
+			taskError = newMetal4CompilerTimeoutError("compute pipeline compilation", impl->compilerTimeoutNs);
+			markMetal4CompilerTimedOut(impl.get(), false);
+		}
+		finishMetal4CompilerSlot(impl.get(), MVKMetal4CompilerLane::Compute, taskDuration, pipeline != nil);
+		if (error) {
+			*error = [taskError autorelease];
+		} else {
+			[taskError release];
+		}
+		return pipeline;
+	}
+	return nil;
+}
+#endif
 
 
 #pragma mark - MVKPipelineLayout

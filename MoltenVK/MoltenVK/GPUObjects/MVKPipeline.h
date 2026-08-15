@@ -31,7 +31,9 @@
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <memory>
 #include <ostream>
+#include <string>
 
 #import <Metal/Metal.h>
 
@@ -209,6 +211,68 @@ protected:
 	bool _stageUsesPushConstants[kMVKShaderStageCount];
 	bool _hasValidMTLPipelineStates = true;
 
+};
+
+
+#pragma mark -
+#pragma mark MVKMetal4CompilerService
+
+/**
+ * Device-owned, default-off Metal 4 compiler shared by library, render, and
+ * compute creation. The existing Vulkan and legacy Metal compiler paths remain
+ * the authoritative compatibility fallback.
+ *
+ * The implementation is intentionally opaque here so non-Metal-4 targets do not
+ * expose Metal 4 types through public or cross-platform MoltenVK headers.
+ * Access is covered by Vulkan's external synchronization requirement for VkDevice
+ * destruction. Late Metal callbacks never retain or dereference this wrapper.
+ */
+class MVKMetal4CompilerService {
+
+public:
+	/** Creates the compiler only when the internal environment gate and runtime capabilities allow it. */
+	static MVKMetal4CompilerService* create(MVKDevice* device);
+
+	~MVKMetal4CompilerService();
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	/** Returns a retained library, or nil. attemptedMetal4 distinguishes bypass from a failed attempt. */
+	id<MTLLibrary> newMTLLibrary(NSString* source,
+								 MTLCompileOptions* options,
+								 NSError** error,
+								 bool* attemptedMetal4);
+
+	/**
+	 * Returns a retained specialized pipeline state, or nil so the caller can use
+	 * the existing legacy compiler in the same Vulkan pipeline creation call.
+	 */
+	id<MTLRenderPipelineState> newMTLRenderPipelineState(MTLRenderPipelineDescriptor* legacyDescriptor,
+											MTL4FunctionDescriptor* vertexFunction,
+											const std::string& vertexFunctionKey,
+											const std::string& vertexPointerFunctionKey,
+											MTL4FunctionDescriptor* fragmentFunction,
+											const std::string& fragmentFunctionKey,
+											const std::string& fragmentPointerFunctionKey,
+											bool* attemptedMetal4);
+
+	/** Returns a retained compute pipeline, or nil. */
+	id<MTLComputePipelineState> newMTLComputePipelineState(MTLComputePipelineDescriptor* legacyDescriptor,
+													 MTL4FunctionDescriptor* functionDescriptor,
+													 NSError** error,
+													 bool* attemptedMetal4);
+
+	/** Records legacy compiler work while the Metal 4 experiment is active. */
+	void recordLegacyLibraryCompile(uint64_t durationNs, bool success, bool fallback);
+	void recordLegacyGraphicsCompile(uint64_t durationNs, bool success, bool fallback);
+	void recordLegacyTessellationCompile(uint64_t durationNs, bool success);
+	void recordLegacyComputeCompile(uint64_t durationNs, bool success, bool fallback);
+#endif
+
+	struct Impl;
+
+private:
+	explicit MVKMetal4CompilerService(std::shared_ptr<Impl> impl) : _impl(impl) {}
+	std::shared_ptr<Impl> _impl;
 };
 
 

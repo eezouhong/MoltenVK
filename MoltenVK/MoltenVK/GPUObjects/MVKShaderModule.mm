@@ -21,34 +21,209 @@
 #include "MVKFoundation.h"
 #include <sys/stat.h>
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+#include <CommonCrypto/CommonDigest.h>
+#include <limits>
+#endif
+
 using namespace std;
 using namespace mvk;
 
-MVKMTLFunction::MVKMTLFunction(id<MTLFunction> mtlFunc, const SPIRVToMSLConversionResultInfo scRslts, MTLSize tgSize) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+static constexpr uint8_t kMetal4SourceLibraryContent = 1;
+static constexpr uint8_t kMetal4CompiledLibraryContent = 2;
+
+static void appendMetal4FunctionKeyBytes(string& key, const void* bytes, size_t size) {
+	key.append(static_cast<const char*>(bytes), size);
+}
+
+template<typename T>
+static void appendMetal4FunctionKeyValue(string& key, const T& value) {
+	appendMetal4FunctionKeyBytes(key, &value, sizeof(value));
+}
+
+static bool updateMetal4LibraryContentDigest(CC_SHA256_CTX& context,
+											 const void* bytes,
+											 size_t size) {
+	const uint8_t* cursor = static_cast<const uint8_t*>(bytes);
+	while (size > 0) {
+		CC_LONG chunkSize = static_cast<CC_LONG>(min<size_t>(
+			size, numeric_limits<CC_LONG>::max()));
+		if (!CC_SHA256_Update(&context, cursor, chunkSize)) { return false; }
+		cursor += chunkSize;
+		size -= chunkSize;
+	}
+	return true;
+}
+
+template<typename T>
+static bool updateMetal4LibraryContentDigestValue(CC_SHA256_CTX& context, const T& value) {
+	return updateMetal4LibraryContentDigest(context, &value, sizeof(value));
+}
+
+static string makeMetal4LibraryContentKey(
+	const void* content,
+	size_t contentSize,
+	uint8_t contentKind,
+	const SPIRVToMSLConversionResultInfo& resultInfo,
+	const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& macroDefinitions) {
+	CC_SHA256_CTX context;
+	if (!CC_SHA256_Init(&context)) { return {}; }
+	static constexpr char kDomain[] = "MoltenVK.Metal4.LibraryContent.v1";
+	const uint64_t stableContentSize = contentSize;
+	uint32_t fpFastMathFlags = 0;
+	uint8_t positionInvariant = 0;
+	uint64_t macroCount = 0;
+	if (contentKind == kMetal4SourceLibraryContent) {
+		fpFastMathFlags = resultInfo.entryPoint.fpFastMathFlags;
+		positionInvariant = resultInfo.isPositionInvariant ? 1 : 0;
+		macroCount = macroDefinitions.size();
+	} else if (contentKind != kMetal4CompiledLibraryContent) {
+		return {};
+	}
+	if (!updateMetal4LibraryContentDigest(context, kDomain, sizeof(kDomain) - 1) ||
+		!updateMetal4LibraryContentDigestValue(context, contentKind) ||
+		!updateMetal4LibraryContentDigestValue(context, stableContentSize) ||
+		!updateMetal4LibraryContentDigest(context, content, contentSize) ||
+		!updateMetal4LibraryContentDigestValue(context, fpFastMathFlags) ||
+		!updateMetal4LibraryContentDigestValue(context, positionInvariant) ||
+		!updateMetal4LibraryContentDigestValue(context, macroCount)) {
+		return {};
+	}
+	for (size_t macroIndex = 0; macroIndex < macroCount; macroIndex++) {
+		const auto& macro = macroDefinitions[macroIndex];
+		const uint64_t nameLength = macro.first.name.size();
+		const uint8_t isFloat = macro.first.isFloat ? 1 : 0;
+		const uint8_t isSigned = macro.first.isSigned ? 1 : 0;
+		const uint64_t valueSize = min(macro.second.size, sizeof(macro.second.value));
+		if (!updateMetal4LibraryContentDigestValue(context, nameLength) ||
+			!updateMetal4LibraryContentDigest(context, macro.first.name.data(), macro.first.name.size()) ||
+			!updateMetal4LibraryContentDigestValue(context, isFloat) ||
+			!updateMetal4LibraryContentDigestValue(context, isSigned) ||
+			!updateMetal4LibraryContentDigestValue(context, valueSize) ||
+			!updateMetal4LibraryContentDigest(context, &macro.second.value, valueSize)) {
+			return {};
+		}
+	}
+	uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+	if (!CC_SHA256_Final(digest, &context)) { return {}; }
+	return string(reinterpret_cast<const char*>(digest), sizeof(digest));
+}
+
+static void appendMetal4FunctionVariantKey(string& key,
+										NSString* functionName,
+										const VkSpecializationInfo* specializationInfo) {
+
+	const char* utf8Name = functionName.UTF8String ?: "";
+	size_t nameLength = strlen(utf8Name);
+	appendMetal4FunctionKeyValue(key, nameLength);
+	appendMetal4FunctionKeyBytes(key, utf8Name, nameLength);
+
+	struct SpecializationEntry {
+		uint32_t constantID;
+		vector<uint8_t> value;
+	};
+	vector<SpecializationEntry> entries;
+	if (specializationInfo) {
+		entries.reserve(specializationInfo->mapEntryCount);
+		for (uint32_t entryIdx = 0; entryIdx < specializationInfo->mapEntryCount; entryIdx++) {
+			const VkSpecializationMapEntry& mapEntry = specializationInfo->pMapEntries[entryIdx];
+			SpecializationEntry entry = { .constantID = mapEntry.constantID };
+			entry.value.resize(mapEntry.size);
+			memcpy(entry.value.data(), static_cast<const uint8_t*>(specializationInfo->pData) + mapEntry.offset, mapEntry.size);
+			entries.emplace_back(std::move(entry));
+		}
+		std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+			if (left.constantID != right.constantID) { return left.constantID < right.constantID; }
+			return left.value < right.value;
+		});
+	}
+	appendMetal4FunctionKeyValue(key, entries.size());
+	for (const auto& entry : entries) {
+		appendMetal4FunctionKeyValue(key, entry.constantID);
+		appendMetal4FunctionKeyValue(key, entry.value.size());
+		appendMetal4FunctionKeyBytes(key, entry.value.data(), entry.value.size());
+	}
+	return;
+}
+
+static string makeMetal4FunctionKey(const string& libraryContentKey,
+									NSString* functionName,
+									const VkSpecializationInfo* specializationInfo) {
+	if (libraryContentKey.empty()) { return {}; }
+	string key;
+	appendMetal4FunctionKeyValue(key, libraryContentKey.size());
+	appendMetal4FunctionKeyBytes(key, libraryContentKey.data(), libraryContentKey.size());
+	appendMetal4FunctionVariantKey(key, functionName, specializationInfo);
+	return key;
+}
+
+static string makeMetal4PointerFunctionKey(id<MTLLibrary> library,
+										   NSString* functionName,
+										   const VkSpecializationInfo* specializationInfo) {
+	string key;
+	uintptr_t libraryIdentity = reinterpret_cast<uintptr_t>(library);
+	appendMetal4FunctionKeyValue(key, libraryIdentity);
+	appendMetal4FunctionVariantKey(key, functionName, specializationInfo);
+	return key;
+}
+#endif
+
+MVKMTLFunction::MVKMTLFunction(id<MTLFunction> mtlFunc,
+								   const SPIRVToMSLConversionResultInfo scRslts,
+								   MTLSize tgSize
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+								   , MTL4FunctionDescriptor* mtl4FuncDesc,
+								   string mtl4FuncKey,
+								   string mtl4PointerFuncKey
+#endif
+								   ) {
 	_mtlFunction = [mtlFunc retain];		// retained
 	shaderConversionResults = scRslts;
 	threadGroupSize = tgSize;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_mtl4FunctionDescriptor = [mtl4FuncDesc retain];
+	_mtl4FunctionKey = std::move(mtl4FuncKey);
+	_mtl4PointerFunctionKey = std::move(mtl4PointerFuncKey);
+#endif
 }
 
 MVKMTLFunction::MVKMTLFunction(const MVKMTLFunction& other) {
 	_mtlFunction = [other._mtlFunction retain];		// retained
 	shaderConversionResults = other.shaderConversionResults;
 	threadGroupSize = other.threadGroupSize;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_mtl4FunctionDescriptor = [other._mtl4FunctionDescriptor retain];
+	_mtl4FunctionKey = other._mtl4FunctionKey;
+	_mtl4PointerFunctionKey = other._mtl4PointerFunctionKey;
+#endif
 }
 
 MVKMTLFunction& MVKMTLFunction::operator=(const MVKMTLFunction& other) {
 	// Retain new object first in case it's the same object
 	[other._mtlFunction retain];
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	[other._mtl4FunctionDescriptor retain];
+#endif
 	[_mtlFunction release];
 	_mtlFunction = other._mtlFunction;
 
 	shaderConversionResults = other.shaderConversionResults;
 	threadGroupSize = other.threadGroupSize;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	[_mtl4FunctionDescriptor release];
+	_mtl4FunctionDescriptor = other._mtl4FunctionDescriptor;
+	_mtl4FunctionKey = other._mtl4FunctionKey;
+	_mtl4PointerFunctionKey = other._mtl4PointerFunctionKey;
+#endif
 	return *this;
 }
 
 MVKMTLFunction::~MVKMTLFunction() {
 	[_mtlFunction release];
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	[_mtl4FunctionDescriptor release];
+#endif
 }
 
 
@@ -76,6 +251,9 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
 
 	id<MTLLibrary> lib = _mtlLibrary;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	const string* libraryContentKey = &_metal4LibraryContentKey;
+#endif
 
 	// If specialization happens on constants mapped to macro, find or compile a library variant
 	// with proper macro definition instead of the "generic" library
@@ -101,10 +279,16 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 			auto entry = _specializationVariants.find(spec_list);
 			if (entry != _specializationVariants.end()) {
 				lib = entry->second->_mtlLibrary;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+				libraryContentKey = &entry->second->getMetal4LibraryContentKey();
+#endif
 			} else {
 				MVKShaderLibrary *new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, _compressedMSL, &spec_list);
 				_specializationVariants[spec_list] = new_mvklib;
 				lib = new_mvklib->_mtlLibrary;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+				libraryContentKey = &new_mvklib->getMetal4LibraryContentKey();
+#endif
 			}
 		}
 	}
@@ -124,6 +308,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
 
+			MTLFunctionConstantValues* mtlFCVals = nil;
 			if (mtlFunc) {
 				// If the Metal function expects to be specialized, populate Metal function constant values from
 				// the Vulkan specialization info, and compile a specialized Metal function, otherwise simply use
@@ -132,7 +317,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 				if (mtlFCs.count > 0) {
 					// The Metal shader contains function constants and expects to be specialized.
 					// Populate the Metal function constant values from the Vulkan specialization info.
-					MTLFunctionConstantValues* mtlFCVals = [[MTLFunctionConstantValues new] autorelease];
+					mtlFCVals = [[MTLFunctionConstantValues new] autorelease];
 					if (pSpecializationInfo) {
 						// Iterate through the provided Vulkan specialization entries, and populate the
 						// Metal function constant value that matches the Vulkan specialization constantID.
@@ -167,9 +352,42 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 			_owner->setMetalObjectLabel(mtlFunc, dbName);
 
 			auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
-			return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
-																					getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
-																					getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo)));
+			MTLSize threadGroupSize = MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
+												  getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
+												  getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo));
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			MTL4FunctionDescriptor* mtl4FunctionDescriptor = nil;
+			string mtl4FunctionKey;
+			string mtl4PointerFunctionKey;
+			if (mtlFunc && getDevice()->isMetal4FlexiblePipelineEnabled()) {
+				if (@available(macOS 26.0, iOS 26.0, *)) {
+					MTL4LibraryFunctionDescriptor* libraryDescriptor = [MTL4LibraryFunctionDescriptor new];
+					libraryDescriptor.library = lib;
+					libraryDescriptor.name = mtlFuncName;
+					if (mtlFCVals) {
+						MTL4SpecializedFunctionDescriptor* specializedDescriptor = [MTL4SpecializedFunctionDescriptor new];
+						specializedDescriptor.functionDescriptor = libraryDescriptor;
+						specializedDescriptor.constantValues = mtlFCVals;
+						mtl4FunctionDescriptor = specializedDescriptor;
+						[libraryDescriptor release];
+					} else {
+						mtl4FunctionDescriptor = libraryDescriptor;
+					}
+					mtl4FunctionKey = makeMetal4FunctionKey(*libraryContentKey, mtlFuncName, pSpecializationInfo);
+					mtl4PointerFunctionKey = makeMetal4PointerFunctionKey(lib, mtlFuncName, pSpecializationInfo);
+				}
+			}
+			MVKMTLFunction result(mtlFunc,
+								  _shaderConversionResultInfo,
+								  threadGroupSize,
+								  mtl4FunctionDescriptor,
+								  std::move(mtl4FunctionKey),
+								  std::move(mtl4PointerFunctionKey));
+			[mtl4FunctionDescriptor release];
+			return result;
+#else
+			return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, threadGroupSize);
+#endif
 		}
 	}
 }
@@ -241,6 +459,13 @@ void MVKShaderLibrary::compileLibrary(const string& msl,
 		}
 	}
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey = makeMetal4LibraryContentKey(msl.data(),
+														 msl.size(),
+														 kMetal4SourceLibraryContent,
+														 _shaderConversionResultInfo,
+														 macro_def);
+#endif
 	_mtlLibrary = slc->newMTLLibrary(nsSrc, _shaderConversionResultInfo, macro_def);	// retained
 	[nsSrc release];														// release temp string
 	slc->destroy();
@@ -253,7 +478,14 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 	_owner(owner),
 	_maySpecializeWithMacro(false) {
 
-    uint64_t startTime = getPerformanceTimestamp();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey = makeMetal4LibraryContentKey(mslCompiledCodeData,
+														 mslCompiledCodeLength,
+														 kMetal4CompiledLibraryContent,
+														 _shaderConversionResultInfo,
+														 {});
+#endif
+	uint64_t startTime = getPerformanceTimestamp();
     @autoreleasepool {
         dispatch_data_t shdrData = dispatch_data_create(mslCompiledCodeData,
                                                         mslCompiledCodeLength,
@@ -276,6 +508,9 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	_mtlLibrary = [other._mtlLibrary retain];
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey = other._metal4LibraryContentKey;
+#endif
 }
 
 MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
@@ -286,6 +521,9 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
 	_owner = other._owner;
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey = other._metal4LibraryContentKey;
+#endif
 	return *this;
 }
 
@@ -555,39 +793,77 @@ MVKShaderModule::~MVKShaderModule() {
 #pragma mark MVKShaderLibraryCompiler
 
 id<MTLLibrary> MVKShaderLibraryCompiler::newMTLLibrary(NSString* mslSourceCode,
-													   const SPIRVToMSLConversionResultInfo& shaderConversionResults,
-													   const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& specializationMacroDef) {
+												   const SPIRVToMSLConversionResultInfo& shaderConversionResults,
+												   const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& specializationMacroDef) {
+	auto mtlCompileOptions = [getDevice()->getMTLCompileOptions(
+		shaderConversionResults.entryPoint.fpFastMathFlags,
+		shaderConversionResults.isPositionInvariant) retain];
+	if (!specializationMacroDef.empty()) {
+		size_t macro_count = specializationMacroDef.size();
+		NSString *macro_names[macro_count];
+		NSNumber *macro_values[macro_count];
+		for (uint32_t i = 0; i < specializationMacroDef.size(); i++) {
+			macro_names[i] = @(specializationMacroDef[i].first.name.c_str());
+			macro_values[i] = getMacroValue(
+				specializationMacroDef[i].first,
+				specializationMacroDef[i].second);
+		}
+		mtlCompileOptions.preprocessorMacros = [NSDictionary dictionaryWithObjects:macro_values
+																	  forKeys:macro_names
+																		count:macro_count];
+	}
+	logCompilation(mtlCompileOptions);
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
+	bool attemptedMetal4 = false;
+	NSError* metal4Error = nil;
+	if (metal4Compiler) {
+		id<MTLLibrary> mtl4Library = metal4Compiler->newMTLLibrary(
+			mslSourceCode,
+			mtlCompileOptions,
+			&metal4Error,
+			&attemptedMetal4);
+		if (mtl4Library) {
+			compileComplete(mtl4Library, nil);
+			[mtl4Library release];
+			[mtlCompileOptions release];
+			return [_mtlLibrary retain];
+		}
+		if (attemptedMetal4) {
+			getDevice()->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 library compile failed; using the legacy compiler once: %s",
+				metal4Error.localizedDescription.UTF8String ?: "unknown error");
+		}
+	}
+	uint64_t legacyCompileStart = metal4Compiler ? mvkGetTimestamp() : 0;
+#endif
+
 	unique_lock<mutex> lock(_completionLock);
-
 	compile(lock, ^{
-		auto mtlDev = getMTLDevice();
-		@synchronized (mtlDev) {
-			@autoreleasepool {
-				auto mtlCompileOptions = getDevice()->getMTLCompileOptions(shaderConversionResults.entryPoint.fpFastMathFlags,
-																		   shaderConversionResults.isPositionInvariant);
-				if (!specializationMacroDef.empty()) {
-					size_t macro_count = specializationMacroDef.size();
-					NSString *macro_names[macro_count];
-					NSNumber *macro_values[macro_count];
-					for (uint32_t i = 0; i < specializationMacroDef.size(); i++) {
-						macro_names[i] = @(specializationMacroDef[i].first.name.c_str());
-						macro_values[i] = getMacroValue(specializationMacroDef[i].first, specializationMacroDef[i].second);
-					}
-					mtlCompileOptions.preprocessorMacros = [NSDictionary dictionaryWithObjects: macro_values
-																					   forKeys: macro_names
-																						 count: macro_count];
-				}
-				logCompilation(mtlCompileOptions);
-
-				[mtlDev newLibraryWithSource: mslSourceCode
-									options: mtlCompileOptions
-						completionHandler: ^(id<MTLLibrary> mtlLib, NSError* error) {
-							bool isLate = compileComplete(mtlLib, error);
-							if (isLate) { destroy(); }
-						}];
+		@autoreleasepool {
+			auto mtlDev = getMTLDevice();
+			@synchronized (mtlDev) {
+				[mtlDev newLibraryWithSource:mslSourceCode
+									options:mtlCompileOptions
+							completionHandler:^(id<MTLLibrary> mtlLib, NSError* error) {
+								bool isLate = compileComplete(mtlLib, error);
+								if (isLate) { destroy(); }
+							}];
 			}
 		}
 	});
+	[mtlCompileOptions release];
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (metal4Compiler) {
+		metal4Compiler->recordLegacyLibraryCompile(
+			mvkGetElapsedNanoseconds(legacyCompileStart),
+			_mtlLibrary != nil,
+			attemptedMetal4);
+	}
+#endif
 
 	return [_mtlLibrary retain];
 }
@@ -742,3 +1018,4 @@ MVKFunctionSpecializer::~MVKFunctionSpecializer() {
 	[_mtlFunction release];
 }
 
+// End of MVK shader compilation implementations.

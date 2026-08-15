@@ -37,6 +37,7 @@
 
 class MVKInstance;
 class MVKDevice;
+class MVKMetal4CompilerService;
 class MVKQueue;
 class MVKQueueFamily;
 class MVKSurface;
@@ -436,7 +437,7 @@ public:
 	MTLStorageMode getMTLStorageModeFromVkMemoryPropertyFlags(VkMemoryPropertyFlags vkFlags);
 
 	/** Returns the MTLDevice capabilities. */
-	const MVKMTLDeviceCapabilities getMTLDeviceCapabilities() { return _gpuCapabilities; }
+	const MVKMTLDeviceCapabilities getMTLDeviceCapabilities() const { return _gpuCapabilities; }
 
 	/** Returns info on the sizes of argument buffers. */
 	const MVKPhysicalDeviceArgumentBufferSizes& getArgumentBufferSizes() const { return _argumentBufferSizes; }
@@ -674,6 +675,15 @@ public:
 
     /** Returns the common resource factory for creating command resources. */
     MVKCommandResourceFactory* getCommandResourceFactory() { return _commandResourceFactory; }
+
+	/** Returns the optional, device-owned public Metal 4 compiler service. */
+	MVKMetal4CompilerService* getMetal4CompilerService() const { return _metal4CompilerService; }
+
+	/** Returns whether the unified Metal 4 compiler path is active. */
+	bool isMetal4CompilerEnabled() const { return _metal4CompilerService != nullptr; }
+
+	/** Returns whether the flexible render specialization path is active. */
+	bool isMetal4FlexiblePipelineEnabled() const { return _metal4CompilerService != nullptr; }
 
 	/** Returns the function pointer corresponding to the specified named entry point. */
 	PFN_vkVoidFunction getProcAddr(const char* pName);
@@ -1095,6 +1105,7 @@ protected:
 
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;
+	MVKMetal4CompilerService* _metal4CompilerService = nullptr;
 	MVKSmallVector<MVKSmallVector<MVKQueue*, kMVKQueueCountPerQueueFamily>, kMVKQueueFamilyCount> _queuesByQueueFamilyIndex;
 	MVKSmallVector<MVKResource*> _resources;
 	MVKSmallVector<MVKBuffer*> _gpuAddressableBuffers;

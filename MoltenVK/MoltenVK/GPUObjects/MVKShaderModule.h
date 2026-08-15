@@ -24,6 +24,7 @@
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <mutex>
+#include <string>
 
 #import <Metal/Metal.h>
 
@@ -41,7 +42,21 @@ typedef struct MVKMTLFunction {
 	MTLSize threadGroupSize;
 	id<MTLFunction> getMTLFunction() { return _mtlFunction; }
 
-	MVKMTLFunction(id<MTLFunction> mtlFunc, const mvk::SPIRVToMSLConversionResultInfo scRslts, MTLSize tgSize);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MTL4FunctionDescriptor* getMTL4FunctionDescriptor() const { return _mtl4FunctionDescriptor; }
+	const std::string& getMTL4FunctionKey() const { return _mtl4FunctionKey; }
+	const std::string& getMTL4PointerFunctionKey() const { return _mtl4PointerFunctionKey; }
+#endif
+
+	MVKMTLFunction(id<MTLFunction> mtlFunc,
+				   const mvk::SPIRVToMSLConversionResultInfo scRslts,
+				   MTLSize tgSize
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+				   , MTL4FunctionDescriptor* mtl4FuncDesc = nil,
+				   std::string mtl4FuncKey = {},
+				   std::string mtl4PointerFuncKey = {}
+#endif
+				   );
 	MVKMTLFunction(const MVKMTLFunction& other);
 	MVKMTLFunction& operator=(const MVKMTLFunction& other);
 	MVKMTLFunction() {}
@@ -49,6 +64,12 @@ typedef struct MVKMTLFunction {
 
 private:
 	id<MTLFunction> _mtlFunction = nil;
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MTL4FunctionDescriptor* _mtl4FunctionDescriptor = nil;
+	std::string _mtl4FunctionKey;
+	std::string _mtl4PointerFunctionKey;
+#endif
 
 } MVKMTLFunction;
 
@@ -150,10 +171,18 @@ protected:
 	void decompressMSL(std::string& msl);
 	MVKCompressor<std::string>& getCompressedMSL() { return _compressedMSL; }
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	const std::string& getMetal4LibraryContentKey() const { return _metal4LibraryContentKey; }
+#endif
+
 	MVKVulkanAPIDeviceObject* _owner;
 	id<MTLLibrary> _mtlLibrary;
 	MVKCompressor<std::string> _compressedMSL;
 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	std::string _metal4LibraryContentKey;
+#endif
 
 	/** When true, representing a library created with source, but never specialized */
 	bool _maySpecializeWithMacro;

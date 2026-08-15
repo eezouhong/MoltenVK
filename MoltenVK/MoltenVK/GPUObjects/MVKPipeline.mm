@@ -4452,9 +4452,40 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 		// The best we can do at this point is set the pipeline name from the layout.
 		setMetalObjectLabel(plDesc, ((MVKPipelineLayout*)pCreateInfo->layout)->getDebugName());
 
-		MVKComputePipelineCompiler* plc = new MVKComputePipelineCompiler(this);
-		_mtlPipelineState = plc->newMTLComputePipelineState(plDesc);	// retained
-		plc->destroy();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		MVKMetal4CompilerService* metal4Compiler = device->getMetal4CompilerService();
+		bool attemptedMetal4 = false;
+		NSError* metal4Error = nil;
+		if (metal4Compiler) {
+			_mtlPipelineState = metal4Compiler->newMTLComputePipelineState(
+				plDesc,
+				func.getMTL4FunctionDescriptor(),
+				&metal4Error,
+				&attemptedMetal4);
+			if (attemptedMetal4 && !_mtlPipelineState) {
+				device->reportMessage(
+					MVK_CONFIG_LOG_LEVEL_INFO,
+					"Metal 4 compute pipeline failed; using the legacy compiler once: %s",
+					metal4Error.localizedDescription.UTF8String ?: "unknown error");
+			}
+		}
+#endif
+		if (!_mtlPipelineState) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			uint64_t legacyCompileStart = metal4Compiler ? mvkGetTimestamp() : 0;
+#endif
+			MVKComputePipelineCompiler* plc = new MVKComputePipelineCompiler(this);
+			_mtlPipelineState = plc->newMTLComputePipelineState(plDesc);	// retained
+			plc->destroy();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			if (metal4Compiler) {
+				metal4Compiler->recordLegacyComputeCompile(
+					mvkGetElapsedNanoseconds(legacyCompileStart),
+					!!_mtlPipelineState,
+					attemptedMetal4);
+			}
+#endif
+		}
 		[plDesc release];															// temp release
 
 		if ( !_mtlPipelineState ) { _hasValidMTLPipelineStates = false; }

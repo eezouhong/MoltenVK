@@ -932,13 +932,28 @@ MTLScissorRect MVKCommandEncoder::clipToRenderArea(MTLScissorRect scissor) {
 
 // Attachment locations are changing. Need to store attachments and begin another Metal renderpass.
 void MVKCommandEncoder::updateColorAttachmentLocations(const MVKArrayRef<uint32_t> colorAttLocs) {
-	if (_mtlRenderEncoder && isDynamicRendering()) {
+	MVKArrayRef<uint32_t> effectiveColorAttLocs = colorAttLocs;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MVKSmallVector<uint32_t, kMVKDefaultAttachmentCount> identityLocations;
+	MVKGraphicsPipeline* pipeline = getGraphicsPipeline();
+	if (pipeline && pipeline->usesMetal4FlexiblePipeline()) {
+		identityLocations.reserve(colorAttLocs.size());
+		for (uint32_t attachmentIdx = 0; attachmentIdx < colorAttLocs.size(); attachmentIdx++) {
+			identityLocations.push_back(attachmentIdx);
+		}
+		effectiveColorAttLocs = identityLocations.contents();
+	}
+#endif
+
+	if (isDynamicRendering()) {
 		auto atts = _pEncodingContext->getFramebuffer()->getAttachments();
 		auto* mvkSP = getSubpass();
-		if (mvkSP && mvkSP->isChangingColorAttachmentLocations(colorAttLocs, atts)) {
-			encodeStoreActions(true);
-			endMetalRenderEncoding();
-			mvkSP->updateColorAttachmentLocations(colorAttLocs, atts);
+		if (mvkSP && mvkSP->isChangingColorAttachmentLocations(effectiveColorAttLocs, atts)) {
+			if (_mtlRenderEncoder) {
+				encodeStoreActions(true);
+				endMetalRenderEncoding();
+			}
+			mvkSP->updateColorAttachmentLocations(effectiveColorAttLocs, atts);
 		}
 	}
 }

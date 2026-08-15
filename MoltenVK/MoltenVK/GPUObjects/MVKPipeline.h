@@ -320,6 +320,14 @@ public:
 	/** Returns the MTLRenderPipelineState for the final stage of the pipeline */
 	id<MTLRenderPipelineState> getMainPipelineState() const { return _mtlPipelineState; }
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	/** Returns the color map inherited by an experimental Metal 4 pipeline, or nil for a legacy pipeline. */
+	MTLLogicalToPhysicalColorAttachmentMap* getMetal4ColorAttachmentMap() const { return _metal4ColorAttachmentMap; }
+
+	/** Returns whether the final render pipeline was produced by the experimental Metal 4 path. */
+	bool usesMetal4FlexiblePipeline() const { return _usesMetal4FlexiblePipeline; }
+#endif
+
 	/** Returns the MTLRenderPipelineState for the final stage of the pipeline */
 	id<MTLRenderPipelineState> getMultiviewPipelineState(uint32_t mv) const {
 		return _multiviewMTLPipelineStates.empty() ? _mtlPipelineState : _multiviewMTLPipelineStates.find(mv)->second;
@@ -397,7 +405,9 @@ protected:
 	typedef MVKSmallVector<mvk::SPIRVShaderInterfaceVariable, 32> SPIRVShaderOutputs;
 	typedef MVKSmallVector<mvk::SPIRVShaderInterfaceVariable, 32> SPIRVShaderInputs;
 
-    id<MTLRenderPipelineState> getOrCompilePipeline(MTLRenderPipelineDescriptor* plDesc, id<MTLRenderPipelineState>& plState);
+    id<MTLRenderPipelineState> getOrCompilePipeline(MTLRenderPipelineDescriptor* plDesc,
+														id<MTLRenderPipelineState>& plState,
+														bool allowMetal4Flexible = false);
     id<MTLComputePipelineState> getOrCompilePipeline(MTLComputePipelineDescriptor* plDesc, id<MTLComputePipelineState>& plState, const char* compilerType);
 	bool compileTessVertexStageState(MTLComputePipelineDescriptor* vtxPLDesc, MVKMTLFunction* pVtxFunctions, VkPipelineCreationFeedback* pVertexFB);
 	bool compileTessControlStageState(MTLComputePipelineDescriptor* tcPLDesc, VkPipelineCreationFeedback* pTessCtlFB);
@@ -457,6 +467,17 @@ protected:
 	id<MTLComputePipelineState> _mtlTessVertexStageIndex32State = nil;
 	id<MTLComputePipelineState> _mtlTessControlStageState = nil;
 	id<MTLRenderPipelineState> _mtlPipelineState = nil;
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MTL4FunctionDescriptor* _metal4VertexFunctionDescriptor = nil;
+	MTL4FunctionDescriptor* _metal4FragmentFunctionDescriptor = nil;
+	MTLLogicalToPhysicalColorAttachmentMap* _metal4ColorAttachmentMap = nil;
+	std::string _metal4VertexFunctionKey;
+	std::string _metal4FragmentFunctionKey;
+	std::string _metal4VertexPointerFunctionKey;
+	std::string _metal4FragmentPointerFunctionKey;
+	bool _usesMetal4FlexiblePipeline = false;
+#endif
 
 	MVKShaderImplicitRezBinding _reservedVertexAttributeBufferCount;
 	VkPrimitiveTopology _vkPrimitiveTopology;

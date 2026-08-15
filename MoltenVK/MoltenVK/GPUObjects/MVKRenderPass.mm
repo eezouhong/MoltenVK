@@ -163,6 +163,14 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 													   bool loadOverride) {
 	MVKPixelFormats* pixFmts = _renderPass->getPixelFormats();
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (_renderPass->getDevice()->isMetal4FlexiblePipelineEnabled()) {
+		if (@available(macOS 26.0, iOS 26.0, *)) {
+			mtlRPDesc.supportColorAttachmentMapping = YES;
+		}
+	}
+#endif
+
 	// Populate the Metal color attachments
 	uint32_t caCnt = getColorAttachmentCount();
 	uint32_t caUsedCnt = 0;

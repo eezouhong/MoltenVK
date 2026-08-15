@@ -1435,6 +1435,13 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
 			_pipeline = mtlPipeline;
 			[encoder setRenderPipelineState:mtlPipeline];
 		}
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (pipeline->getDevice()->isMetal4FlexiblePipelineEnabled()) {
+			if (@available(macOS 26.0, iOS 26.0, *)) {
+				[encoder setColorAttachmentMap:pipeline->getMetal4ColorAttachmentMap()];
+			}
+		}
+#endif
 	}
 
 	// State
@@ -1478,6 +1485,13 @@ void MVKMetalGraphicsCommandEncoderState::prepareHelperDraw(
 	_flags.removeAll({
 		MVKMetalRenderEncoderStateFlag::PipelineReady,
 	});
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (mvkEncoder.getDevice()->isMetal4FlexiblePipelineEnabled()) {
+		if (@available(macOS 26.0, iOS 26.0, *)) {
+			[encoder setColorAttachmentMap:nil];
+		}
+	}
+#endif
 	if (_pipeline != state.pipeline) {
 		_pipeline = state.pipeline;
 		[encoder setRenderPipelineState:state.pipeline];

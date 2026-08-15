@@ -2403,6 +2403,17 @@ static void populateResourceUsage(MVKPipelineStageResourceInfo& dst, SPIRVToMSLC
 // Do updates that may require a render pass restart immediately on bind.
 void MVKGraphicsPipeline::wasBound(MVKCommandEncoder* cmdEncoder) {
 	if (_hasRemappedAttachmentLocations) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (_usesMetal4FlexiblePipeline) {
+			MVKSmallVector<uint32_t, kMVKDefaultAttachmentCount> identityLocations;
+			identityLocations.reserve(_colorAttachmentLocations.size());
+			for (uint32_t attachmentIdx = 0; attachmentIdx < _colorAttachmentLocations.size(); attachmentIdx++) {
+				identityLocations.push_back(attachmentIdx);
+			}
+			cmdEncoder->updateColorAttachmentLocations(identityLocations.contents());
+			return;
+		}
+#endif
 		cmdEncoder->updateColorAttachmentLocations(_colorAttachmentLocations.contents());
 	}
 }
@@ -2906,11 +2917,50 @@ void MVKGraphicsPipeline::populateRenderingAttachmentInfo(const VkGraphicsPipeli
 
 // Either returns an existing pipeline state or compiles a new one.
 id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPipelineDescriptor* plDesc,
-																	 id<MTLRenderPipelineState>& plState) {
+																		 id<MTLRenderPipelineState>& plState,
+																		 bool allowMetal4Flexible) {
 	if ( !plState ) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
+		bool attemptedMetal4 = false;
+		if (allowMetal4Flexible && metal4Compiler) {
+			plState = metal4Compiler->newMTLRenderPipelineState(plDesc,
+																 _metal4VertexFunctionDescriptor,
+																 _metal4VertexFunctionKey,
+																 _metal4VertexPointerFunctionKey,
+																 _metal4FragmentFunctionDescriptor,
+																 _metal4FragmentFunctionKey,
+																 _metal4FragmentPointerFunctionKey,
+																 &attemptedMetal4);
+			if (plState) {
+				_usesMetal4FlexiblePipeline = true;
+				_metal4ColorAttachmentMap = [MTLLogicalToPhysicalColorAttachmentMap new];
+				for (uint32_t physicalIdx = 0; physicalIdx < _colorAttachmentLocations.size(); physicalIdx++) {
+					uint32_t logicalIdx = _colorAttachmentLocations[physicalIdx];
+					if (logicalIdx != VK_ATTACHMENT_UNUSED) {
+						[_metal4ColorAttachmentMap setPhysicalIndex:physicalIdx forLogicalIndex:logicalIdx];
+					}
+				}
+			}
+		}
+#endif
+		if (plState) { return plState; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		uint64_t legacyCompileStart = metal4Compiler ? mvkGetTimestamp() : 0;
+#endif
 		MVKRenderPipelineCompiler* plc = new MVKRenderPipelineCompiler(this);
 		plState = plc->newMTLRenderPipelineState(plDesc);	// retained
 		plc->destroy();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (metal4Compiler) {
+			uint64_t durationNs = mvkGetElapsedNanoseconds(legacyCompileStart);
+			if (isTessellationPipeline()) {
+				metal4Compiler->recordLegacyTessellationCompile(durationNs, !!plState);
+			} else {
+				metal4Compiler->recordLegacyGraphicsCompile(durationNs, !!plState, attemptedMetal4);
+			}
+		}
+#endif
 		if ( !plState ) { _hasValidMTLPipelineStates = false; }
 	}
 	return plState;
@@ -2919,11 +2969,22 @@ id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPi
 // Either returns an existing pipeline state or compiles a new one.
 id<MTLComputePipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLComputePipelineDescriptor* plDesc,
 																	  id<MTLComputePipelineState>& plState,
-																	  const char* compilerType) {
+														  const char* compilerType) {
 	if ( !plState ) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
+		uint64_t legacyCompileStart = metal4Compiler ? mvkGetTimestamp() : 0;
+#endif
 		MVKComputePipelineCompiler* plc = new MVKComputePipelineCompiler(this, compilerType);
 		plState = plc->newMTLComputePipelineState(plDesc);	// retained
 		plc->destroy();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (metal4Compiler) {
+			metal4Compiler->recordLegacyTessellationCompile(
+				mvkGetElapsedNanoseconds(legacyCompileStart),
+				!!plState);
+		}
+#endif
 		if ( !plState ) { _hasValidMTLPipelineStates = false; }
 	}
 	return plState;
@@ -3036,7 +3097,7 @@ void MVKGraphicsPipeline::initMTLRenderPipelineState(const VkGraphicsPipelineCre
 					}
 				}
 			} else {
-				getOrCompilePipeline(plDesc, _mtlPipelineState);
+				getOrCompilePipeline(plDesc, _mtlPipelineState, true);
 			}
 			[plDesc release];																				// temp release
 		} else {
@@ -3422,6 +3483,12 @@ bool MVKGraphicsPipeline::addVertexShaderToPipeline(MTLRenderPipelineDescriptor*
 	id<MTLFunction> mtlFunc = func.getMTLFunction();
 	plDesc.vertexFunction = mtlFunc;
 	if ( !mtlFunc ) { return false; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	[_metal4VertexFunctionDescriptor release];
+	_metal4VertexFunctionDescriptor = [func.getMTL4FunctionDescriptor() retain];
+	_metal4VertexFunctionKey = func.getMTL4FunctionKey();
+	_metal4VertexPointerFunctionKey = func.getMTL4PointerFunctionKey();
+#endif
 
 	auto& funcRslts = func.shaderConversionResults;
 	plDesc.rasterizationEnabled = !funcRslts.isRasterizationDisabled;
@@ -3606,6 +3673,12 @@ bool MVKGraphicsPipeline::addFragmentShaderToPipeline(MTLRenderPipelineDescripto
 		id<MTLFunction> mtlFunc = func.getMTLFunction();
 		plDesc.fragmentFunction = mtlFunc;
 		if ( !mtlFunc ) { return false; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		[_metal4FragmentFunctionDescriptor release];
+		_metal4FragmentFunctionDescriptor = [func.getMTL4FunctionDescriptor() retain];
+		_metal4FragmentFunctionKey = func.getMTL4FunctionKey();
+		_metal4FragmentPointerFunctionKey = func.getMTL4PointerFunctionKey();
+#endif
 
 		auto& funcRslts = func.shaderConversionResults;
 		populateResourceUsage(_stageResources[kMVKShaderStageFragment], shaderConfig, funcRslts, spv::ExecutionModelFragment);
@@ -4308,6 +4381,11 @@ MVKGraphicsPipeline::~MVKGraphicsPipeline() {
 		[_mtlTessVertexStageIndex32State release];
 		[_mtlTessControlStageState release];
 		[_mtlPipelineState release];
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		[_metal4VertexFunctionDescriptor release];
+		[_metal4FragmentFunctionDescriptor release];
+		[_metal4ColorAttachmentMap release];
+#endif
 		if (_ownsVertexModule) delete _vertexModule;
 		if (_ownsTessCtlModule) delete _tessCtlModule;
 		if (_ownsTessEvalModule) delete _tessEvalModule;

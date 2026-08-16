@@ -80,10 +80,10 @@ jobs:
 
           path = Path("Scripts/test-metal4-command-backend-phase1.py")
           source = path.read_text()
-          old = r"resources\\.allBits\\.areAllBitsClear[\\s\\S]*?implicitBuffers\\.needed\\.empty"
-          new = r"resources\\.allBits\\.empty[\\s\\S]*?implicitBuffers\\.needed\\.empty"
+          old = "resources\\.allBits\\.areAllBitsClear"
+          new = "resources\\.allBits\\.empty"
           if old not in source:
-              raise SystemExit("stale descriptorless bitset source-contract pattern not found")
+              raise SystemExit("stale descriptorless bitset source-contract token not found")
           path.write_text(source.replace(old, new, 1))
           PY
 

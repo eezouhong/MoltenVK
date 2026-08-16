@@ -34,6 +34,7 @@ class MVKQueueSubmission;
 class MVKPhysicalDevice;
 class MVKGPUCaptureScope;
 struct MVKMetal4CommandQueueState;
+struct MVKMetal4SubmissionCompletion;
 
 
 #pragma mark -
@@ -120,6 +121,16 @@ public:
 
 	/** Returns whether the bounded internal Metal 4 commit probe completed without an error. */
 	bool isMetal4CommandSubmissionReady() const;
+
+	/** Reserves the total-order value used by the next Vulkan queue operation. */
+	uint64_t reserveMetal4SubmissionSequence();
+
+	/** Returns the most recently reserved total-order value. */
+	uint64_t getLastMetal4SubmissionSequence() const;
+
+	/** Adds the hybrid-backend ordering wait/signal to a legacy command buffer. */
+	void encodeMetal4OrderingWait(id<MTLCommandBuffer> commandBuffer, uint64_t sequence);
+	void encodeMetal4OrderingSignal(id<MTLCommandBuffer> commandBuffer, uint64_t sequence);
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	/**
@@ -208,6 +219,11 @@ public:
 
 	void encodeWait(id<MTLCommandBuffer> mtlCmdBuff);
 	void encodeSignal(id<MTLCommandBuffer> mtlCmdBuff);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() const;
+	void encodeMetal4Wait(id<MTL4CommandQueue> queue);
+	void encodeMetal4Signal(id<MTL4CommandQueue> queue);
+#endif
 	MVKSemaphoreSubmitInfo(const VkSemaphoreSubmitInfo& semaphoreSubmitInfo);
 	MVKSemaphoreSubmitInfo(const VkSemaphore semaphore, VkPipelineStageFlags stageMask);
 	MVKSemaphoreSubmitInfo(const MVKSemaphoreSubmitInfo& other);
@@ -251,6 +267,7 @@ protected:
 	MVKQueue* _queue;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _waitSemaphores;
 	uint64_t _creationTime;
+	uint64_t _submissionSequence = 0;
 };
 
 
@@ -289,18 +306,27 @@ public:
 
 protected:
 	friend MVKCommandBuffer;
+	friend struct MVKMetal4SubmissionCompletion;
 
 	id<MTLCommandBuffer> getActiveMTLCommandBuffer();
-	void setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff);
+	void setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff, bool isPrefilled = false);
 	VkResult commitActiveMTLCommandBuffer(bool signalCompletion = false);
+	VkResult executeMetal4(bool* handled);
+	bool supportsMetal4Semaphores() const;
 	void finish() override;
 	virtual void submitCommandBuffers() {}
+	virtual bool supportsMetal4CommandBuffers() const { return true; }
+	virtual bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
+	virtual bool beginMetal4CommandBuffers() { return true; }
+	virtual void endMetal4CommandBuffers(bool) {}
+	virtual bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
 
 	MVKCommandEncodingContext _encodingContext;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _signalSemaphores;
 	MVKFence* _fence = nullptr;
 	id<MTLCommandBuffer> _activeMTLCommandBuffer = nil;
 	MVKCommandUse _commandUse = kMVKCommandUseNone;
+	bool _legacyOrderingWaitEncoded = false;
 	bool _emulatedWaitDone = false;		//Used to track if we've already waited for emulated semaphores.
 };
 
@@ -325,8 +351,14 @@ public:
 
 protected:
 	void submitCommandBuffers() override;
+	bool supportsMetal4CommandBuffers() const override;
+	bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
+	bool beginMetal4CommandBuffers() override;
+	void endMetal4CommandBuffers(bool committed) override;
+	bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
 
 	MVKSmallVector<MVKCommandBufferSubmitInfo, N> _cmdBuffers;
+	MVKSmallVector<uint8_t, N> _metal4PreviousExecutionState;
 };
 
 

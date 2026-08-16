@@ -123,6 +123,20 @@ void MVKSemaphoreMTLEvent::encodeSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_
 	if (mtlCmdBuff) { [mtlCmdBuff encodeSignalEvent: _mtlEvent value: _mtlEventValue]; }
 }
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+void MVKSemaphoreMTLEvent::encodeMetal4Wait(id<MTL4CommandQueue> queue, uint64_t) {
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		[queue waitForEvent:_mtlEvent value:_mtlEventValue++];
+	}
+}
+
+void MVKSemaphoreMTLEvent::encodeMetal4Signal(id<MTL4CommandQueue> queue, uint64_t) {
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		[queue signalEvent:_mtlEvent value:_mtlEventValue];
+	}
+}
+#endif
+
 uint64_t MVKSemaphoreMTLEvent::deferSignal() {
 	return _mtlEventValue;
 }
@@ -169,6 +183,16 @@ void MVKSemaphoreEmulated::encodeSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_
 	if ( !mtlCmdBuff ) { _blocker.release(); }
 }
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+void MVKSemaphoreEmulated::encodeMetal4Wait(id<MTL4CommandQueue>, uint64_t value) {
+	encodeWait(nil, value);
+}
+
+void MVKSemaphoreEmulated::encodeMetal4Signal(id<MTL4CommandQueue>, uint64_t) {
+	// Host-side signal occurs from MVKQueueCommandBufferSubmission::finish().
+}
+#endif
+
 uint64_t MVKSemaphoreEmulated::deferSignal() {
 	return 0;
 }
@@ -202,6 +226,20 @@ void MVKTimelineSemaphoreMTLEvent::encodeWait(id<MTLCommandBuffer> mtlCmdBuff, u
 void MVKTimelineSemaphoreMTLEvent::encodeSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t value) {
 	[mtlCmdBuff encodeSignalEvent: _mtlEvent value: value];
 }
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+void MVKTimelineSemaphoreMTLEvent::encodeMetal4Wait(id<MTL4CommandQueue> queue, uint64_t value) {
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		[queue waitForEvent:_mtlEvent value:value];
+	}
+}
+
+void MVKTimelineSemaphoreMTLEvent::encodeMetal4Signal(id<MTL4CommandQueue> queue, uint64_t value) {
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		[queue signalEvent:_mtlEvent value:value];
+	}
+}
+#endif
 
 void MVKTimelineSemaphoreMTLEvent::signal(const VkSemaphoreSignalInfo* pSignalInfo) {
 	_mtlEvent.signaledValue = pSignalInfo->value;

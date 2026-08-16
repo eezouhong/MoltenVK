@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Lock the safe Phase 1 Metal 4 command-backend boundary.
-
-Phase 1A validates queue/allocator/command-buffer object creation. Phase 1B adds
-an independent command-backend residency set, one bounded internal empty commit,
-and allocator/feedback lifetime tracking. Vulkan submissions remain on legacy
-Metal until synchronization, command encoding, and resource collection land as
-one whole-submission checkpoint.
-"""
+"""Source contract for the usable Phase 1 Metal 4 transfer backend."""
 
 from __future__ import annotations
 
@@ -14,15 +7,14 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read(relative_path: str) -> str:
-    path = ROOT / relative_path
-    if not path.is_file():
-        raise AssertionError(f"missing source file: {relative_path}")
-    return path.read_text(encoding="utf-8")
+def read(path: str) -> str:
+    target = ROOT / path
+    if not target.is_file():
+        raise AssertionError(f"missing source file: {path}")
+    return target.read_text(encoding="utf-8")
 
 
 def require(source: str, pattern: str, message: str) -> None:
@@ -35,303 +27,191 @@ def reject(source: str, pattern: str, message: str) -> None:
         raise AssertionError(message)
 
 
-def function_body(source: str, signature: str, next_signature: str) -> str:
-    start = source.find(signature)
-    if start < 0:
-        raise AssertionError(f"missing function: {signature}")
-    end = source.find(next_signature, start + len(signature))
-    if end < 0:
-        raise AssertionError(
-            f"missing boundary after {signature}: {next_signature}"
-        )
-    return source[start:end]
+def function_body(source: str, start: str, end: str) -> str:
+    start_index = source.find(start)
+    if start_index < 0:
+        raise AssertionError(f"missing function: {start}")
+    end_index = source.find(end, start_index + len(start))
+    if end_index < 0:
+        raise AssertionError(f"missing boundary after {start}: {end}")
+    return source[start_index:end_index]
 
 
 def main() -> int:
+    command_h = read("MoltenVK/MoltenVK/Commands/MVKCommand.h")
+    command_buffer_h = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h")
+    command_buffer_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm")
+    transfer_h = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.h")
+    transfer_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm")
     queue_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.h")
     queue_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm")
-    config_members = read("MoltenVK/MoltenVK/Utility/MVKConfigMembers.def")
-    implementation = queue_h + "\n" + queue_mm
+    sync_h = read("MoltenVK/MoltenVK/GPUObjects/MVKSync.h")
+    sync_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKSync.mm")
+    config = read("MoltenVK/MoltenVK/Utility/MVKConfigMembers.def")
+    e2e = read("Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp")
+    runner = read("Tests/Metal4CommandBackend/run-macos.sh")
+    implementation = "\n".join(
+        (command_h, command_buffer_h, command_buffer_mm, transfer_h, transfer_mm,
+         queue_h, queue_mm, sync_h, sync_mm)
+    )
 
-    # Keep the experiment private and disabled unless explicitly requested.
+    # Private, fail-closed enablement and supported-target boundary.
     require(
         queue_mm,
         r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_METAL4_COMMAND_BACKEND"\s*,\s*0\.0\s*\)',
-        "Metal 4 command backend gate is missing or not default-off",
+        "Metal 4 command backend is not private and default-off",
     )
     reject(
-        config_members,
-        r"METAL4_COMMAND_BACKEND|METAL4_COMMAND_ALLOCATOR_COUNT",
-        "Phase 1 gates must not change the public MVKConfiguration ABI",
+        config,
+        r"METAL4_COMMAND_BACKEND|METAL4_COMMAND_ALLOCATOR_COUNT|METAL4_COMMAND_VALIDATION",
+        "experimental command controls changed the public MVKConfiguration ABI",
     )
-
-    # Preserve the same platform and compatibility boundary as the compiler POC.
     require(
         implementation,
         r"MVK_XCODE_26\s*&&\s*!MVK_TVOS\s*&&\s*!MVK_VISIONOS\s*&&\s*!MVK_OS_SIMULATOR",
-        "Xcode 26/unsupported-target compile guard is missing",
+        "Xcode 26/unsupported-target compile boundary is missing",
     )
-    require(
-        queue_mm,
-        r"#if\s+MVK_USE_METAL_PRIVATE_API",
-        "compile-time private-API exclusion is missing",
-    )
-    require(
-        queue_mm,
-        r"getMVKConfig\(\)\.useMetalPrivateAPI",
-        "runtime private-API exclusion is missing",
-    )
-    require(queue_mm, r"supportsMetal4", "Metal 4 GPU capability gate is missing")
-    require(
-        queue_mm,
-        r"mvkOSVersionIsAtLeast\(\s*26\.0\s*\)",
-        "OS 26 runtime gate is missing",
-    )
+    require(queue_mm, r"#if\s+MVK_USE_METAL_PRIVATE_API", "private-API build exclusion is missing")
+    require(queue_mm, r"supportsMetal4", "Metal 4 device capability gate is missing")
+    require(queue_mm, r"mvkOSVersionIsAtLeast\(\s*26\.0\s*\)", "OS 26 gate is missing")
 
-    init_backend = function_body(
-        queue_mm,
-        "void MVKQueue::initMTL4CommandQueue()",
-        "MVKQueue::~MVKQueue()",
-    )
-    require(
-        init_backend,
-        r"getMetalFeatures\(\)\.residencySets",
-        "residency-set capability gate is missing",
-    )
-    reject(
-        init_backend,
-        r"_device->hasResidencySet\(\)",
-        "Metal 4 command readiness still depends on legacy argument-buffer residency",
-    )
-
-    # Prove foundational Metal 4 command and residency objects exist.
-    for selector in (
-        "newMTL4CommandQueue",
-        "newCommandAllocator",
+    # Use the exact public Xcode 26 descriptor/error factories, not guessed factories.
+    for token in (
+        "newMTL4CommandQueueWithDescriptor",
+        "MTL4CommandQueueDescriptor",
+        "newCommandAllocatorWithDescriptor",
+        "MTL4CommandAllocatorDescriptor",
         "newCommandBuffer",
-        "newResidencySetWithDescriptor:error:",
+        "MTL4CommitOptions",
+        "MTL4CommitFeedback",
     ):
-        require(
-            queue_mm,
-            rf"@selector\({re.escape(selector)}\)",
-            f"runtime selector check is missing: {selector}",
-        )
-    require(
-        queue_h,
-        r"id<MTL4CommandQueue>\s+_mtl4Queue",
-        "queue-owned MTL4CommandQueue is missing",
-    )
-    require(
-        queue_mm,
-        r"id<MTL4CommandAllocator>\s+allocator\s*=\s*\[mtlDevice\s+newCommandAllocator\]",
-        "MTL4CommandAllocator creation is missing",
-    )
-    require(
-        queue_mm,
-        r"id<MTL4CommandBuffer>\s+commandBuffer\s*=\s*\[[^\]]+\s+newCommandBuffer\]",
-        "MTL4CommandBuffer creation is missing",
-    )
-    require(
-        queue_mm,
-        r"beginCommandBufferWithAllocator\s*:\s*allocator",
-        "MTL4CommandBuffer begin/allocator handoff is missing",
-    )
-    require(
-        queue_mm,
-        r"\[commandBuffer\s+endCommandBuffer\]",
-        "MTL4CommandBuffer finalization is missing",
-    )
-    require(queue_mm, r"\[_mtl4Queue\s+release\]", "MTL4 queue teardown is missing")
+        require(queue_mm, re.escape(token), f"missing public Metal 4 factory/lifecycle token: {token}")
+    reject(queue_mm, r"\[mtlDevice\s+newMTL4CommandQueue\]", "obsolete queue factory is still used")
+    reject(queue_mm, r"\[mtlDevice\s+newCommandAllocator\]", "obsolete allocator factory is still used")
+    reject(queue_mm, r"_mtl4Queue\.label\s*=", "read-only MTL4 queue label is assigned after creation")
 
-    # The MTL4 backend owns residency independently from legacy argument buffers.
+    # Whole-command-stream preflight, resource resolution, and rollback precede commit.
+    require(command_h, r"virtual\s+bool\s+supportsMetal4Encoding\(\)\s+const\s*\{\s*return\s+false", "unsupported commands do not fail closed")
     for token in (
-        "kMetal4CommandResidencyInitialCapacity",
-        "MTLResidencySetDescriptor",
-        "newResidencySetWithDescriptor",
-        "copyResidencySet",
-        "addResidencySet",
-        "removeResidencySet",
+        "prepareMetal4Encoding",
+        "beginMetal4Execution",
+        "endMetal4Execution",
+        "supportsMetal4CommandBuffers",
+        "prepareMetal4CommandBuffers",
+        "beginMetal4CommandBuffers",
+        "endMetal4CommandBuffers",
+        "encodeMetal4CommandBuffers",
     ):
-        require(implementation, re.escape(token), f"independent residency is missing: {token}")
+        require(implementation, re.escape(token), f"missing whole-submission boundary: {token}")
     require(
+        command_buffer_mm,
+        r"endMetal4Execution\(bool previousWasExecuted, bool committed\)[\s\S]*?!committed[\s\S]*?_wasExecuted\s*=\s*previousWasExecuted",
+        "pre-commit command-buffer claim cannot be rolled back",
+    )
+    execute_metal4 = function_body(
         queue_mm,
-        r"id<MTLResidencySet>\s+residencySet\s*=\s*nil",
-        "shared command state does not own its residency set",
-    )
-    require(
-        queue_mm,
-        r"residencyDescriptor\.initialCapacity\s*=\s*kMetal4CommandResidencyInitialCapacity",
-        "bounded residency initial capacity is missing",
-    )
-    require(
-        queue_mm,
-        r"\[residencySet\s+commit\]",
-        "new command-backend residency set is not committed",
-    )
-    require(
-        init_backend,
-        r"\[_mtl4Queue\s+addResidencySet\s*:\s*residencySet\]",
-        "command-backend residency set is not attached to the MTL4 queue",
-    )
-    destructor = function_body(
-        queue_mm,
-        "MVKQueue::~MVKQueue()",
-        "// Destroys the execution dispatch queue.",
-    )
-    require(
-        destructor,
-        r"shutdown\(\)[\s\S]*?removeResidencySet[\s\S]*?\[_mtl4Queue\s+release\][\s\S]*?_metal4CommandState\.reset\(\)",
-        "teardown does not shut down, detach residency, release queue, then release state",
-    )
-    require(
-        queue_mm,
-        r"~MVKMetal4CommandQueueState\(\)[\s\S]*?\[residencySet\s+release\]",
-        "shared state does not retain residency through late feedback lifetime",
-    )
-
-    # Bound the allocator arena and separate encoding from GPU completion.
-    require(
-        queue_mm,
-        r"kMetal4CommandAllocatorDefaultCount\s*=\s*4",
-        "bounded allocator default is missing",
-    )
-    require(
-        queue_mm,
-        r"kMetal4CommandAllocatorMaxCount\s*=\s*16",
-        "allocator hard limit is missing",
-    )
-    require(
-        queue_mm,
-        r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_METAL4_COMMAND_ALLOCATOR_COUNT"',
-        "private allocator-count gate is missing",
-    )
-    for token in (
-        "MVKMetal4CommandQueueState",
-        "AllocatorSlot",
-        "inFlightCount",
-        "resetPending",
-        "acquireAllocator",
-        "finishEncoding",
-        "completeSubmission",
-        "cancelSubmittedEncoding",
-    ):
-        require(implementation, re.escape(token), f"allocator ownership state is missing: {token}")
-    require(
-        queue_h,
-        r"std::shared_ptr<MVKMetal4CommandQueueState>\s+_metal4CommandState",
-        "queue does not own the Metal 4 state through shared lifetime",
-    )
-    require(
-        queue_mm,
-        r"if\s*\(slot\.inFlightCount\s*==\s*0\)[\s\S]*?\[slot\.allocator\s+reset\]",
-        "allocator reset is not gated on zero in-flight command buffers",
-    )
-
-    # Phase 1B may submit only its internal empty probe. The feedback callback
-    # retains shared state and must never dereference queue/device objects.
-    probe = function_body(
-        queue_mm,
-        "bool MVKQueue::startMTL4CommandSubmissionProbe()",
-        "// Creates the independent Metal 4 queue",
-    )
-    require(
-        probe,
-        r"auto\s+state\s*=\s*_metal4CommandState",
-        "probe callback does not capture self-contained shared state",
-    )
-    require(
-        probe,
-        r"MTL4CommitOptions\s*\*\s*options\s*=\s*\[MTL4CommitOptions\s+new\]",
-        "commit options and feedback ownership are missing",
-    )
-    require(
-        probe,
-        r"addFeedbackHandler\s*:\s*\^\s*\(id<MTL4CommitFeedback>\s+feedback\)",
-        "Metal 4 completion feedback handler is missing",
-    )
-    feedback_match = re.search(
-        r"addFeedbackHandler\s*:\s*\^\s*\(id<MTL4CommitFeedback>\s+feedback\)\s*\{(?P<body>.*?)\}\s*\]",
-        probe,
-        re.MULTILINE | re.DOTALL,
-    )
-    if not feedback_match:
-        raise AssertionError("unable to isolate Metal 4 feedback callback")
-    feedback_body = feedback_match.group("body")
-    require(
-        feedback_body,
-        r"state->completeSubmission\(slotIndex,\s*feedback\.error\)",
-        "feedback callback does not complete the allocator slot",
-    )
-    reject(
-        feedback_body,
-        r"\bthis\b|_queue|_device|_mtl4Queue|getDevice",
-        "late feedback callback captures queue/device lifetime",
-    )
-    require(
-        probe,
-        r"\[_mtl4Queue\s+commit\s*:\s*commandBuffers\s+count\s*:\s*1\s+options\s*:\s*options\]",
-        "bounded internal Metal 4 commit is missing",
-    )
-    if queue_mm.count("[_mtl4Queue commit:") != 1:
-        raise AssertionError("only the bounded internal probe may commit to MTL4 in Phase 1B")
-
-    # Expose readiness without changing Vulkan API behavior.
-    for token in (
-        "wasMetal4CommandBackendRequested",
-        "isMetal4CommandBackendReady",
-        "isMetal4CommandSubmissionReady",
-        "getMTL4CommandQueue",
-        "initMTL4CommandQueue",
-        "validateMTL4CommandObjects",
-        "startMTL4CommandSubmissionProbe",
-    ):
-        require(implementation, re.escape(token), f"missing Phase 1 boundary: {token}")
-
-    # No Vulkan submit/present work may reach MTL4 until real command ownership,
-    # barriers, descriptor tables, and resource collection are complete.
-    submit_execute = function_body(
-        queue_mm,
-        "VkResult MVKQueueCommandBufferSubmission::execute()",
+        "VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled)",
         "// Returns the active MTLCommandBuffer",
     )
-    reject(
-        submit_execute,
-        r"MTL4|_mtl4Queue|isMetal4CommandSubmissionReady",
-        "Vulkan command submission was moved to Metal 4 prematurely",
-    )
-    present_execute = function_body(
-        queue_mm,
-        "VkResult MVKQueuePresentSurfaceSubmission::execute()",
-        "void MVKQueuePresentSurfaceSubmission::finish()",
-    )
-    reject(
-        present_execute,
-        r"MTL4|_mtl4Queue|isMetal4CommandSubmissionReady",
-        "Vulkan presentation was moved to Metal 4 prematurely",
+    require(
+        execute_metal4,
+        r"supportsMetal4Semaphores\(\)[\s\S]*?supportsMetal4CommandBuffers\(\)[\s\S]*?prepareMetal4CommandBuffers",
+        "submission support is not classified before Metal 4 encoding",
     )
     require(
-        queue_h,
-        r"id<MTLCommandBuffer>\s+_activeMTLCommandBuffer",
-        "legacy submission ownership was unexpectedly removed",
+        execute_metal4,
+        r"prepareMetal4CommandBuffers[\s\S]*?acquireResidency[\s\S]*?acquireAllocator[\s\S]*?beginMetal4CommandBuffers[\s\S]*?commit:",
+        "resource/allocator/command claims are not ordered before commit",
     )
-    require(queue_mm, r"\[mtlCmdBuff\s+commit\]", "legacy commit path was removed")
+    require(
+        execute_metal4,
+        r"@catch[\s\S]*?endMetal4CommandBuffers\(false\)[\s\S]*?return\s+VK_SUCCESS",
+        "pre-commit materialization failure cannot select legacy fallback",
+    )
+
+    # First real execution slice: aligned copy and repeated-byte fill only.
+    for command in ("MVKCmdCopyBuffer", "MVKCmdFillBuffer"):
+        require(transfer_h, rf"{command}[\s\S]*?supportsMetal4Encoding", f"{command} is not opted in")
+        require(transfer_h, rf"{command}[\s\S]*?prepareMetal4Encoding", f"{command} does not resolve resources")
+        require(transfer_h, rf"{command}[\s\S]*?encodeMetal4", f"{command} does not materialize")
+    require(
+        transfer_mm,
+        r"supportsMetal4CopyBuffer[\s\S]*?mtlCopyBufferAlignment[\s\S]*?srcOffset\s*%\s*alignment[\s\S]*?dstOffset\s*%\s*alignment[\s\S]*?size\s*%\s*alignment",
+        "copy eligibility does not preserve Metal alignment rules",
+    )
+    require(transfer_mm, r"0x01010101u", "fill eligibility does not require a repeated byte")
+    require(queue_mm, r"MTL4ComputeCommandEncoder", "real MTL4 compute/transfer encoder is missing")
+    require(queue_mm, r"copyFromBuffer:[\s\S]*?destinationOffset:[\s\S]*?size:", "MTL4 buffer copy is missing")
+    require(queue_mm, r"fillBuffer:[\s\S]*?range:[\s\S]*?value:", "MTL4 buffer fill is missing")
+
+    # Independent residency remains live until the definitive completion callback.
+    for token in (
+        "MTLResidencySetDescriptor",
+        "addAllocation",
+        "removeAllocation",
+        "acquireResidency",
+        "releaseResidency",
+        "inFlightCount",
+        "resetPending",
+    ):
+        require(queue_mm, re.escape(token), f"residency/allocator lifetime is incomplete: {token}")
     require(
         queue_mm,
-        r"Phase 1 keeps all Vulkan submissions on the legacy Metal queue",
-        "explicit safe-fallback diagnostic is missing",
+        r"MVKMetal4SubmissionCompletion[\s\S]*?completeAllocator[\s\S]*?releaseResidency[\s\S]*?finish\(\)",
+        "completion does not release allocator/residency before Vulkan fence completion",
+    )
+    require(
+        queue_mm,
+        r"schedulingComplete[\s\S]*?completionRequested",
+        "an early MTL4 callback can destroy a submission while queue scheduling is still running",
     )
 
-    # Render/compute/argument-table migration belongs to the next checkpoint.
+    # Hybrid backends are totally ordered, including fallback, present, and wait-idle.
+    for token in (
+        "reserveMetal4SubmissionSequence",
+        "encodeMetal4OrderingWait",
+        "encodeMetal4OrderingSignal",
+        "waitForEvent",
+        "signalEvent",
+        "MVKQueuePresentSurfaceSubmission::execute",
+        "MVKQueue::waitIdle",
+    ):
+        require(queue_mm, re.escape(token), f"hybrid queue ordering is missing: {token}")
+    require(
+        queue_mm,
+        r"isPrefilled[\s\S]*?empty bridge[\s\S]*?encodeMetal4OrderingWait",
+        "prefilled legacy command buffers can run before the hybrid ordering wait",
+    )
+
+    # Native binary/timeline events and emulated waits are mapped; implicit single-queue semaphores fail closed.
+    require(sync_h, r"supportsMetal4QueueEncoding\(\)\s*\{\s*return\s+false", "base semaphore support does not fail closed")
+    require(sync_mm, r"MVKSemaphoreMTLEvent::encodeMetal4Wait[\s\S]*?waitForEvent", "binary Metal-event wait is missing")
+    require(sync_mm, r"MVKSemaphoreMTLEvent::encodeMetal4Signal[\s\S]*?signalEvent", "binary Metal-event signal is missing")
+    require(sync_mm, r"MVKTimelineSemaphoreMTLEvent::encodeMetal4Wait[\s\S]*?waitForEvent", "timeline wait is missing")
+    require(sync_mm, r"MVKTimelineSemaphoreMTLEvent::encodeMetal4Signal[\s\S]*?signalEvent", "timeline signal is missing")
+    require(sync_mm, r"MVKSemaphoreEmulated::encodeMetal4Wait[\s\S]*?encodeWait\(nil", "emulated semaphore wait is missing")
     reject(
-        implementation,
-        r"MTL4(?:Render|Compute)CommandEncoder|MTL4ArgumentTable",
-        "Phase 1B must not partially introduce encoder or argument-table execution",
+        function_body(sync_h, "class MVKSemaphoreSingleQueue", "#pragma mark -\n#pragma mark MVKSemaphoreMTLEvent"),
+        r"supportsMetal4QueueEncoding\(\)\s*override\s*\{\s*return\s+true",
+        "implicit single-queue semaphore was incorrectly accepted across two Metal queues",
     )
 
-    print(
-        "PASS: Metal 4 Phase 1A/1B queue, independent residency, allocator, "
-        "and empty-commit boundary is safe"
-    )
+    # Independent Vulkan e2e validates MTL4 -> legacy fallback -> MTL4, readback, and semaphore ordering.
+    for token in (
+        "vkCmdFillBuffer",
+        "vkCmdPipelineBarrier",
+        "vkCmdCopyBuffer",
+        "vkCreateSemaphore",
+        "vkWaitForFences",
+        "vkInvalidateMappedMemoryRanges",
+        "METAL4_TRANSFER_E2E_PASS",
+    ):
+        require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")
+    require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=0", "legacy control run is missing")
+    require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=1", "Metal 4 run is missing")
+    require(runner, r"Executed first Vulkan submission on the Metal 4 transfer backend", "runtime path proof is missing")
+
+    print("PASS: usable Metal 4 transfer backend source contract")
     return 0
 
 

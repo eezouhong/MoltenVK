@@ -21,9 +21,40 @@
 
 #include "MVKObjectPool.h"
 
+class MVKBuffer;
 class MVKCommandBuffer;
 class MVKCommandEncoder;
 class MVKCommandPool;
+
+
+#pragma mark -
+#pragma mark MVKMetal4CommandEncoder
+
+/**
+ * Backend-neutral command surface for the first usable Metal 4 execution
+ * slice. Concrete Vulkan commands expose MoltenVK resources here instead of
+ * Metal 4 protocol types, which keeps the command headers buildable with older
+ * SDKs and keeps all Metal 4 lifetime/commit policy inside the queue backend.
+ */
+class MVKMetal4CommandEncoder {
+
+public:
+	virtual ~MVKMetal4CommandEncoder() = default;
+
+	/** Registers a buffer and its underlying Metal allocation before execution is claimed. */
+	virtual bool useBuffer(MVKBuffer* buffer) = 0;
+
+	virtual bool copyBuffer(MVKBuffer* srcBuffer,
+							VkDeviceSize srcOffset,
+							MVKBuffer* dstBuffer,
+							VkDeviceSize dstOffset,
+							VkDeviceSize size) = 0;
+
+	virtual bool fillBuffer(MVKBuffer* dstBuffer,
+							VkDeviceSize dstOffset,
+							VkDeviceSize size,
+							uint8_t value) = 0;
+};
 
 
 #pragma mark -
@@ -66,6 +97,25 @@ public:
 
 	/** Encodes this command on the specified command encoder. */
 	virtual void encode(MVKCommandEncoder* cmdEncoder) = 0;
+
+	/**
+	 * Returns whether this command can be materialized by the current Metal 4
+	 * backend. Commands are unsupported unless they explicitly opt in.
+	 */
+	virtual bool supportsMetal4Encoding() const { return false; }
+
+	/**
+	 * Resolves and registers all Metal resources this command will touch. This is
+	 * called before any Vulkan command-buffer execution is claimed, so failure can
+	 * still select the legacy backend for the complete submission.
+	 */
+	virtual bool prepareMetal4Encoding(MVKMetal4CommandEncoder*) { return false; }
+
+	/**
+	 * Materializes this command into an uncommitted Metal 4 command buffer.
+	 * The caller preflights the complete Vulkan submission before invoking it.
+	 */
+	virtual bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) { return false; }
 
 protected:
 	friend MVKCommandBuffer;

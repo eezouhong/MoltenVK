@@ -191,6 +191,9 @@ public:
                         const VkCopyBufferInfo2* pCopyBufferInfo);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -198,6 +201,7 @@ protected:
 	MVKSmallVector<VkBufferCopy2, N> _bufferCopyRegions;
 	MVKBuffer* _srcBuffer;
 	MVKBuffer* _dstBuffer;
+	bool _supportsMetal4Encoding = false;
 };
 
 // Concrete template class implementations.
@@ -413,6 +417,9 @@ public:
 						uint32_t data);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -421,6 +428,7 @@ protected:
     VkDeviceSize _dstOffset;
     uint32_t _wordCount;
     uint32_t _dataValue;
+	bool _supportsMetal4Encoding = false;
 };
 
 

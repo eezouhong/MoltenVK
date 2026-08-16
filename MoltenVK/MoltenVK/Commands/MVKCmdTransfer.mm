@@ -966,6 +966,23 @@ template class MVKCmdResolveImage<4>;
 #pragma mark -
 #pragma mark MVKCmdCopyBuffer
 
+template <typename Regions>
+static bool supportsMetal4CopyBuffer(MVKCommandBuffer* cmdBuff,
+										 const Regions& regions) {
+	VkDeviceSize alignment = std::max<VkDeviceSize>(
+		cmdBuff->getMetalFeatures().mtlCopyBufferAlignment,
+		1);
+	for (const auto& region : regions) {
+		if (!region.size ||
+			(region.srcOffset % alignment) != 0 ||
+			(region.dstOffset % alignment) != 0 ||
+			(region.size % alignment) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 // Matches shader struct.
 typedef struct {
 	uint32_t srcOffset;
@@ -993,6 +1010,7 @@ VkResult MVKCmdCopyBuffer<N>::setContent(MVKCommandBuffer* cmdBuff,
         };
 		_bufferCopyRegions.emplace_back(std::move(region2));
 	}
+	_supportsMetal4Encoding = supportsMetal4CopyBuffer(cmdBuff, _bufferCopyRegions);
 
 	return VK_SUCCESS;
 }
@@ -1009,6 +1027,7 @@ VkResult MVKCmdCopyBuffer<N>::setContent(MVKCommandBuffer* cmdBuff,
     for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
         _bufferCopyRegions.push_back(pCopyBufferInfo->pRegions[i]);
     }
+	_supportsMetal4Encoding = supportsMetal4CopyBuffer(cmdBuff, _bufferCopyRegions);
 
     return VK_SUCCESS;
 }
@@ -1054,6 +1073,27 @@ void MVKCmdCopyBuffer<N>::encode(MVKCommandEncoder* cmdEncoder) {
 								  size: cpyRgn.size];
 		}
 	}
+}
+
+template <size_t N>
+bool MVKCmdCopyBuffer<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding && _srcBuffer && _dstBuffer &&
+		cmdEncoder->useBuffer(_srcBuffer) && cmdEncoder->useBuffer(_dstBuffer);
+}
+
+template <size_t N>
+bool MVKCmdCopyBuffer<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding || !_srcBuffer || !_dstBuffer) { return false; }
+	for (const auto& region : _bufferCopyRegions) {
+		if (!cmdEncoder->copyBuffer(_srcBuffer,
+									 region.srcOffset,
+									 _dstBuffer,
+									 region.dstOffset,
+									 region.size)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 template class MVKCmdCopyBuffer<1>;
@@ -1710,6 +1750,10 @@ VkResult MVKCmdFillBuffer::setContent(MVKCommandBuffer* cmdBuff,
 		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdFillBuffer(): Buffer fill size must fit into a 32-bit unsigned integer. Fill size %llu is too large.", wdCnt);
 	}
 
+	uint8_t fillByte = static_cast<uint8_t>(_dataValue);
+	uint32_t repeatedByte = static_cast<uint32_t>(fillByte) * 0x01010101u;
+	_supportsMetal4Encoding = _wordCount > 0 && _dataValue == repeatedByte;
+
 	return VK_SUCCESS;
 }
 
@@ -1752,6 +1796,18 @@ void MVKCmdFillBuffer::encode(MVKCommandEncoder* cmdEncoder) {
 	}
 
 	[mtlComputeEnc popDebugGroup];
+}
+
+bool MVKCmdFillBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding && _dstBuffer && cmdEncoder->useBuffer(_dstBuffer);
+}
+
+bool MVKCmdFillBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding || !_dstBuffer) { return false; }
+	return cmdEncoder->fillBuffer(_dstBuffer,
+							   _dstOffset,
+							   static_cast<VkDeviceSize>(_wordCount) * sizeof(_dataValue),
+							   static_cast<uint8_t>(_dataValue));
 }
 
 

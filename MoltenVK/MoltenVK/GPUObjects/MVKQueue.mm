@@ -24,8 +24,142 @@
 #include "MVKFoundation.h"
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
+#include <atomic>
+#include <cmath>
+#include <string>
+#include <vector>
 
 using namespace std;
+
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+static constexpr uint32_t kMetal4CommandAllocatorDefaultCount = 4;
+static constexpr uint32_t kMetal4CommandAllocatorMaxCount = 16;
+
+/**
+ * Queue-independent ownership for the first Metal 4 command submission slice.
+ * Feedback handlers retain this state, never MVKQueue or MVKDevice, so a late
+ * callback remains safe after Vulkan queue/device teardown.
+ */
+struct MVKMetal4CommandQueueState {
+	struct AllocatorSlot {
+		id<MTL4CommandAllocator> allocator = nil;
+		uint32_t inFlightCount = 0;
+		bool encoding = false;
+		bool resetPending = false;
+	};
+
+	mutex lock;
+	vector<AllocatorSlot> allocators;
+	atomic<bool> shuttingDown = false;
+	atomic<bool> probeSubmitted = false;
+	atomic<bool> probeCompleted = false;
+	atomic<bool> probeSucceeded = false;
+	atomic<uint64_t> submittedCount = 0;
+	atomic<uint64_t> completedCount = 0;
+	atomic<uint64_t> failureCount = 0;
+	string lastError;
+
+	~MVKMetal4CommandQueueState() {
+		for (auto& slot : allocators) { [slot.allocator release]; }
+	}
+
+	bool initialize(id<MTLDevice> mtlDevice, uint32_t allocatorCount) {
+		lock_guard<mutex> guard(lock);
+		allocators.resize(allocatorCount);
+		for (auto& slot : allocators) {
+			slot.allocator = [mtlDevice newCommandAllocator];
+			if (!slot.allocator) {
+				for (auto& initializedSlot : allocators) {
+					[initializedSlot.allocator release];
+					initializedSlot.allocator = nil;
+				}
+				allocators.clear();
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool acquireAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator) {
+		lock_guard<mutex> guard(lock);
+		if (shuttingDown.load(memory_order_acquire)) { return false; }
+
+		for (size_t idx = 0; idx < allocators.size(); idx++) {
+			auto& slot = allocators[idx];
+			if (slot.encoding) { continue; }
+			if (slot.resetPending && slot.inFlightCount == 0) {
+				[slot.allocator reset];
+				slot.resetPending = false;
+			}
+			slot.encoding = true;
+			*slotIndex = idx;
+			*allocator = [slot.allocator retain];
+			return true;
+		}
+		return false;
+	}
+
+	void finishEncoding(size_t slotIndex, bool submitted) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex >= allocators.size()) { return; }
+		auto& slot = allocators[slotIndex];
+		slot.encoding = false;
+		if (submitted) {
+			slot.inFlightCount++;
+			submittedCount.fetch_add(1, memory_order_relaxed);
+			return;
+		}
+		if (slot.inFlightCount == 0 && slot.resetPending) {
+			[slot.allocator reset];
+			slot.resetPending = false;
+		}
+	}
+
+	void completeSubmission(size_t slotIndex, NSError* error) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex < allocators.size()) {
+			auto& slot = allocators[slotIndex];
+			if (slot.inFlightCount > 0) { slot.inFlightCount--; }
+			if (slot.inFlightCount == 0) {
+				if (slot.encoding) {
+					slot.resetPending = true;
+				} else {
+					[slot.allocator reset];
+					slot.resetPending = false;
+				}
+			}
+		}
+
+		completedCount.fetch_add(1, memory_order_relaxed);
+		probeCompleted.store(true, memory_order_release);
+		bool succeeded = error == nil;
+		probeSucceeded.store(succeeded, memory_order_release);
+		if (!succeeded) {
+			failureCount.fetch_add(1, memory_order_relaxed);
+			lastError = error.localizedDescription.UTF8String ?: "unknown Metal 4 commit error";
+		}
+	}
+
+	void cancelSubmittedEncoding(size_t slotIndex, NSString* reason) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex < allocators.size()) {
+			auto& slot = allocators[slotIndex];
+			if (slot.inFlightCount > 0) { slot.inFlightCount--; }
+			if (slot.inFlightCount == 0 && !slot.encoding) {
+				[slot.allocator reset];
+				slot.resetPending = false;
+			}
+		}
+		failureCount.fetch_add(1, memory_order_relaxed);
+		probeCompleted.store(true, memory_order_release);
+		probeSucceeded.store(false, memory_order_release);
+		lastError = reason.UTF8String ?: "Metal 4 commit threw an exception";
+	}
+
+	void shutdown() { shuttingDown.store(true, memory_order_release); }
+};
+#endif
 
 
 #pragma mark -
@@ -187,6 +321,16 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 
 	if ( !mtlCmdBuff ) { reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "%s could not be acquired.", mtlCmdBuffLabel.UTF8String); }
 	return mtlCmdBuff;
+}
+
+bool MVKQueue::isMetal4CommandSubmissionReady() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	return state && state->probeCompleted.load(memory_order_acquire) &&
+		state->probeSucceeded.load(memory_order_acquire);
+#else
+	return false;
+#endif
 }
 
 NSString* MVKQueue::getMTLCommandBufferLabel(MVKCommandUse cmdUse) {
@@ -365,9 +509,72 @@ bool MVKQueue::validateMTL4CommandObjects() {
 	return false;
 }
 
-// Creates the independent Metal 4 queue and validates allocator/command-buffer lifecycle.
+bool MVKQueue::startMTL4CommandSubmissionProbe() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (!_mtl4Queue || !_metal4CommandState) { return false; }
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		auto state = _metal4CommandState;
+		size_t slotIndex = 0;
+		id<MTL4CommandAllocator> allocator = nil;
+		if (!state->acquireAllocator(&slotIndex, &allocator)) { return false; }
+
+		id<MTL4CommandBuffer> commandBuffer = [getMTLDevice() newCommandBuffer];
+		if (!commandBuffer) {
+			state->finishEncoding(slotIndex, false);
+			[allocator release];
+			return false;
+		}
+
+		@try {
+			commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 empty submission probe", getName().c_str()];
+			[commandBuffer beginCommandBufferWithAllocator:allocator];
+			[commandBuffer endCommandBuffer];
+		} @catch (NSException* exception) {
+			state->finishEncoding(slotIndex, false);
+			state->cancelSubmittedEncoding(slotIndex, exception.reason);
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		state->finishEncoding(slotIndex, true);
+		state->probeSubmitted.store(true, memory_order_release);
+
+		MTL4CommitOptions* options = [MTL4CommitOptions new];
+		if (!options) {
+			state->cancelSubmittedEncoding(slotIndex, @"Could not create MTL4CommitOptions");
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		[options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+			state->completeSubmission(slotIndex, feedback.error);
+		}];
+
+		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
+		@try {
+			[_mtl4Queue commit:commandBuffers count:1 options:options];
+		} @catch (NSException* exception) {
+			state->cancelSubmittedEncoding(slotIndex, exception.reason);
+			[options release];
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		[options release];
+		[commandBuffer release];
+		[allocator release];
+		return true;
+	}
+#endif
+	return false;
+}
+
+// Creates the independent Metal 4 queue, allocator arena, and bounded empty commit probe.
 // Phase 1 deliberately leaves Vulkan submission, semaphore, present, and completion handling
-// on the existing legacy queue until the full submission context is available.
+// on the existing legacy queue until the full Vulkan submission context is available.
 void MVKQueue::initMTL4CommandQueue() {
 	_metal4CommandBackendRequested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_BACKEND", 0.0) != 0.0;
 	if (!_metal4CommandBackendRequested) { return; }
@@ -390,9 +597,9 @@ void MVKQueue::initMTL4CommandQueue() {
 						  "Metal 4 command backend probe requested but unavailable on this OS or GPU.");
 		return;
 	}
-	if (!getMetalFeatures().residencySets) {
+	if (!_device->hasResidencySet()) {
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 command backend probe requested but residency sets are unavailable.");
+						  "Metal 4 command backend probe requested but the device has no committed primary residency set.");
 		return;
 	}
 
@@ -424,10 +631,32 @@ void MVKQueue::initMTL4CommandQueue() {
 			return;
 		}
 
+		double configuredAllocatorCount = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_COMMAND_ALLOCATOR_COUNT",
+			(double)kMetal4CommandAllocatorDefaultCount);
+		uint32_t allocatorCount = kMetal4CommandAllocatorDefaultCount;
+		if (isfinite(configuredAllocatorCount) && configuredAllocatorCount >= 1.0 &&
+			configuredAllocatorCount <= (double)kMetal4CommandAllocatorMaxCount) {
+			allocatorCount = (uint32_t)configuredAllocatorCount;
+		}
+
+		_metal4CommandState = make_shared<MVKMetal4CommandQueueState>();
+		if (!_metal4CommandState->initialize(mtlDevice, allocatorCount)) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Could not create the Metal 4 allocator arena for Vulkan queue %u-%u; retaining the legacy backend.",
+							  _queueFamily->getIndex(), _index);
+			_metal4CommandState.reset();
+			[_mtl4Queue release];
+			_mtl4Queue = nil;
+			return;
+		}
+
 		_metal4CommandBackendReady = true;
+		bool probeSubmitted = startMTL4CommandSubmissionProbe();
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 command objects ready for Vulkan queue %u-%u; Phase 1 keeps all Vulkan submissions on the legacy Metal queue.",
-						  _queueFamily->getIndex(), _index);
+						  "Metal 4 command objects ready for Vulkan queue %u-%u with %u allocators; empty commit probe %s. Phase 1 keeps all Vulkan submissions on the legacy Metal queue.",
+						  _queueFamily->getIndex(), _index, allocatorCount,
+						  probeSubmitted ? "submitted" : "not submitted");
 		return;
 	}
 #endif
@@ -441,7 +670,9 @@ MVKQueue::~MVKQueue() {
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (_metal4CommandState) { _metal4CommandState->shutdown(); }
 	[_mtl4Queue release];
+	_metal4CommandState.reset();
 #endif
 
 	[_mtlCmdBuffLabelBeginCommandBuffer release];
@@ -950,4 +1181,3 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 		setConfigurationResult(scRslt);
 	}
 }
-

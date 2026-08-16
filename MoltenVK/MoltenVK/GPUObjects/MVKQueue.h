@@ -23,6 +23,7 @@
 #include "MVKImage.h"
 #include "MVKSync.h"
 #include "MVKSmallVector.h"
+#include <memory>
 #include <mutex>
 #include <condition_variable>
 
@@ -32,6 +33,7 @@ class MVKQueue;
 class MVKQueueSubmission;
 class MVKPhysicalDevice;
 class MVKGPUCaptureScope;
+struct MVKMetal4CommandQueueState;
 
 
 #pragma mark -
@@ -113,8 +115,11 @@ public:
 	/** Returns whether the experimental Metal 4 command object boundary was requested. */
 	bool wasMetal4CommandBackendRequested() const { return _metal4CommandBackendRequested; }
 
-	/** Returns whether Metal 4 queue, allocator, and command buffer object creation passed. */
+	/** Returns whether Metal 4 queue, allocator arena, and command buffer object creation passed. */
 	bool isMetal4CommandBackendReady() const { return _metal4CommandBackendReady; }
+
+	/** Returns whether the bounded internal Metal 4 commit probe completed without an error. */
+	bool isMetal4CommandSubmissionReady() const;
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	/**
@@ -156,6 +161,7 @@ protected:
 	void initMTLCommandQueue();
 	void initMTL4CommandQueue();
 	bool validateMTL4CommandObjects();
+	bool startMTL4CommandSubmissionProbe();
 	void destroyExecQueue();
 	VkResult submit(MVKQueueSubmission* qSubmit);
 	NSString* getMTLCommandBufferLabel(MVKCommandUse cmdUse);
@@ -170,6 +176,7 @@ protected:
 	id<MTLCommandQueue> _mtlQueue = nil;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	id<MTL4CommandQueue> _mtl4Queue = nil;
+	std::shared_ptr<MVKMetal4CommandQueueState> _metal4CommandState;
 #endif
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;

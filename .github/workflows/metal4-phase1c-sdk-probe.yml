@@ -1,0 +1,92 @@
+name: Metal 4 Phase 1C SDK Probe
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/metal4-phase1c-sdk-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-26
+    steps:
+      - name: Print Phase 1C Metal 4 API surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          H="$SDK/System/Library/Frameworks/Metal.framework/Headers"
+          xcodebuild -version
+          echo "SDK=$SDK"
+
+          dump_matches() {
+            local file="$1"
+            shift
+            echo "===== $file ====="
+            for pattern in "$@"; do
+              echo "--- $pattern ---"
+              grep -n -B 8 -A 18 -- "$pattern" "$H/$file" || true
+            done
+          }
+
+          dump_matches MTL4ComputeCommandEncoder.h \
+            'setComputePipelineState' \
+            'setArgumentTable' \
+            'dispatchThreadgroups:' \
+            'dispatchThreads:' \
+            'setStageInRegion:' \
+            'copyFromTexture:' \
+            'copyFromBuffer:' \
+            'fillBuffer:' \
+            'endEncoding'
+
+          dump_matches MTL4RenderCommandEncoder.h \
+            'setRenderPipelineState' \
+            'setArgumentTable' \
+            'setViewport' \
+            'setScissorRect' \
+            'setCullMode' \
+            'setFrontFacingWinding' \
+            'setDepthStencilState' \
+            'drawPrimitives:' \
+            'drawIndexedPrimitives:' \
+            'setVertexBuffer' \
+            'setFragmentBuffer' \
+            'endEncoding'
+
+          dump_matches MTL4RenderPass.h \
+            '@interface MTL4RenderPassDescriptor' \
+            'colorAttachments' \
+            'depthAttachment' \
+            'stencilAttachment' \
+            'renderTargetWidth' \
+            'renderTargetHeight' \
+            'loadAction' \
+            'storeAction' \
+            'texture'
+
+          dump_matches MTL4ArgumentTable.h \
+            '@interface MTL4ArgumentTableDescriptor' \
+            'setAddress:' \
+            'setResource:' \
+            'setTexture:' \
+            'setSamplerState:'
+
+          dump_matches MTLDevice.h \
+            'newArgumentTableWithDescriptor' \
+            'newMTL4CommandQueueWithDescriptor' \
+            'newCommandAllocatorWithDescriptor'
+
+          dump_matches MTLResource.h \
+            'gpuAddress' \
+            'gpuResourceID'
+
+          dump_matches MTLTexture.h 'gpuResourceID'
+          dump_matches MTLSamplerState.h 'gpuResourceID'
+          dump_matches MTLTypes.h 'typedef struct MTL4BufferRange' 'MTL4BufferRange'
+          dump_matches MTLStage.h 'MTLStageDispatch' 'MTLStageBlit' 'MTLStageVertex' 'MTLStageFragment'

@@ -35,6 +35,7 @@ using namespace std;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 static constexpr uint32_t kMetal4CommandAllocatorDefaultCount = 4;
 static constexpr uint32_t kMetal4CommandAllocatorMaxCount = 16;
+static constexpr NSUInteger kMetal4CommandResidencyInitialCapacity = 256;
 
 /**
  * Queue-independent ownership for the first Metal 4 command submission slice.
@@ -51,6 +52,7 @@ struct MVKMetal4CommandQueueState {
 
 	mutex lock;
 	vector<AllocatorSlot> allocators;
+	id<MTLResidencySet> residencySet = nil;
 	atomic<bool> shuttingDown = false;
 	atomic<bool> probeSubmitted = false;
 	atomic<bool> probeCompleted = false;
@@ -62,10 +64,26 @@ struct MVKMetal4CommandQueueState {
 
 	~MVKMetal4CommandQueueState() {
 		for (auto& slot : allocators) { [slot.allocator release]; }
+		[residencySet release];
 	}
 
-	bool initialize(id<MTLDevice> mtlDevice, uint32_t allocatorCount) {
+	bool initialize(id<MTLDevice> mtlDevice, uint32_t allocatorCount, NSString* label) {
 		lock_guard<mutex> guard(lock);
+
+		MTLResidencySetDescriptor* residencyDescriptor = [MTLResidencySetDescriptor new];
+		residencyDescriptor.label = [label stringByAppendingString:@" Residency"];
+		residencyDescriptor.initialCapacity = kMetal4CommandResidencyInitialCapacity;
+		NSError* residencyError = nil;
+		residencySet = [mtlDevice newResidencySetWithDescriptor:residencyDescriptor
+														 error:&residencyError];
+		[residencyDescriptor release];
+		if (!residencySet) {
+			lastError = residencyError.localizedDescription.UTF8String ?:
+				"could not create Metal 4 command residency set";
+			return false;
+		}
+		[residencySet commit];
+
 		allocators.resize(allocatorCount);
 		for (auto& slot : allocators) {
 			slot.allocator = [mtlDevice newCommandAllocator];
@@ -79,6 +97,11 @@ struct MVKMetal4CommandQueueState {
 			}
 		}
 		return true;
+	}
+
+	id<MTLResidencySet> copyResidencySet() {
+		lock_guard<mutex> guard(lock);
+		return [residencySet retain];
 	}
 
 	bool acquireAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator) {
@@ -572,9 +595,10 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 	return false;
 }
 
-// Creates the independent Metal 4 queue, allocator arena, and bounded empty commit probe.
-// Phase 1 deliberately leaves Vulkan submission, semaphore, present, and completion handling
-// on the existing legacy queue until the full Vulkan submission context is available.
+// Creates the independent Metal 4 queue, command-backend residency set, allocator arena,
+// and bounded empty commit probe. Phase 1 deliberately leaves Vulkan submission, semaphore,
+// present, and completion handling on the existing legacy queue until the full Vulkan
+// submission context is available.
 void MVKQueue::initMTL4CommandQueue() {
 	_metal4CommandBackendRequested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_BACKEND", 0.0) != 0.0;
 	if (!_metal4CommandBackendRequested) { return; }
@@ -597,9 +621,9 @@ void MVKQueue::initMTL4CommandQueue() {
 						  "Metal 4 command backend probe requested but unavailable on this OS or GPU.");
 		return;
 	}
-	if (!_device->hasResidencySet()) {
+	if (!getMetalFeatures().residencySets) {
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 command backend probe requested but the device has no committed primary residency set.");
+						  "Metal 4 command backend probe requested but residency sets are unavailable.");
 		return;
 	}
 
@@ -607,9 +631,10 @@ void MVKQueue::initMTL4CommandQueue() {
 		id<MTLDevice> mtlDevice = getMTLDevice();
 		if (![mtlDevice respondsToSelector:@selector(newMTL4CommandQueue)] ||
 			![mtlDevice respondsToSelector:@selector(newCommandAllocator)] ||
-			![mtlDevice respondsToSelector:@selector(newCommandBuffer)]) {
+			![mtlDevice respondsToSelector:@selector(newCommandBuffer)] ||
+			![mtlDevice respondsToSelector:@selector(newResidencySetWithDescriptor:error:)]) {
 			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-							  "Metal 4 command backend probe requested but command object creation selectors are unavailable.");
+							  "Metal 4 command backend probe requested but required command or residency selectors are unavailable.");
 			return;
 		}
 
@@ -641,9 +666,9 @@ void MVKQueue::initMTL4CommandQueue() {
 		}
 
 		_metal4CommandState = make_shared<MVKMetal4CommandQueueState>();
-		if (!_metal4CommandState->initialize(mtlDevice, allocatorCount)) {
+		if (!_metal4CommandState->initialize(mtlDevice, allocatorCount, _mtl4Queue.label)) {
 			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-							  "Could not create the Metal 4 allocator arena for Vulkan queue %u-%u; retaining the legacy backend.",
+							  "Could not create the Metal 4 residency/allocator state for Vulkan queue %u-%u; retaining the legacy backend.",
 							  _queueFamily->getIndex(), _index);
 			_metal4CommandState.reset();
 			[_mtl4Queue release];
@@ -651,10 +676,14 @@ void MVKQueue::initMTL4CommandQueue() {
 			return;
 		}
 
+		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
+		[_mtl4Queue addResidencySet:residencySet];
+		[residencySet release];
+
 		_metal4CommandBackendReady = true;
 		bool probeSubmitted = startMTL4CommandSubmissionProbe();
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 command objects ready for Vulkan queue %u-%u with %u allocators; empty commit probe %s. Phase 1 keeps all Vulkan submissions on the legacy Metal queue.",
+						  "Metal 4 command objects ready for Vulkan queue %u-%u with %u allocators and an independent residency set; empty commit probe %s. Phase 1 keeps all Vulkan submissions on the legacy Metal queue.",
 						  _queueFamily->getIndex(), _index, allocatorCount,
 						  probeSubmitted ? "submitted" : "not submitted");
 		return;
@@ -670,7 +699,12 @@ MVKQueue::~MVKQueue() {
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	if (_metal4CommandState) { _metal4CommandState->shutdown(); }
+	if (_metal4CommandState) {
+		_metal4CommandState->shutdown();
+		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
+		if (_mtl4Queue && residencySet) { [_mtl4Queue removeResidencySet:residencySet]; }
+		[residencySet release];
+	}
 	[_mtl4Queue release];
 	_metal4CommandState.reset();
 #endif

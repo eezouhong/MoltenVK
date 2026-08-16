@@ -18,19 +18,16 @@ jobs:
           echo "SDK=$SDK"
           xcodebuild -version
 
-          print_range() {
+          dump_file() {
             local file="$1"
-            local range="$2"
-            echo "===== $file $range ====="
-            sed -n "$range" "$H/$file"
+            echo "===== $file ====="
+            cat "$H/$file"
           }
 
-          print_range MTL4CommandAllocator.h '1,220p'
-          print_range MTL4CommandQueue.h '45,365p'
-          print_range MTL4CommitFeedback.h '1,220p'
-          print_range MTL4CommandBuffer.h '25,225p'
-          print_range MTL4CommandEncoder.h '1,145p'
-          print_range MTL4ComputeCommandEncoder.h '300,485p'
-          print_range MTL4ComputeCommandEncoder.h '550,590p'
-          print_range MTL4ArgumentTable.h '1,155p'
-          print_range MTLDevice.h '1420,1580p'
+          dump_file MTL4RenderPass.h
+          dump_file MTL4RenderCommandEncoder.h
+          dump_file MTL4ArgumentTable.h
+          dump_file MTL4CommandBuffer.h
+
+          echo '===== MTLDevice factories ====='
+          grep -n -B 8 -A 20 -E 'newArgumentTableWithDescriptor|newMTL4CommandQueueWithDescriptor|newCommandAllocatorWithDescriptor' "$H/MTLDevice.h"

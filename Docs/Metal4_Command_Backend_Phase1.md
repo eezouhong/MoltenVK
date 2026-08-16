@@ -28,9 +28,21 @@ This document divides Phase 1 into checkpoints that can be reviewed and
 validated independently. A checkpoint must not claim performance improvements
 until real Vulkan commands execute on the Metal 4 queue.
 
+## Current checkpoint status
+
+| Checkpoint | Status | What is real |
+|---|---|---|
+| Phase 1A | Implemented; build/device validation pending | MTL4 queue, allocator, and command-buffer creation plus begin/end lifecycle |
+| Phase 1B.1 | Implemented; build/device validation pending | Bounded allocator arena, one internal empty MTL4 commit, feedback completion, allocator reset, teardown-safe late callback |
+| Phase 1B.2 | Not implemented | Vulkan fence/semaphore/event submission ownership and queue-to-queue ordering |
+| Phase 1C | Not implemented | Real Vulkan transfer, compute, render, descriptor, barrier, and present commands on MTL4 |
+
+All ordinary Vulkan submissions and presentation remain on the legacy Metal
+queue at the current checkpoint.
+
 ## Phase 1A: command-object boundary
 
-Status in this pull request:
+Implemented in this pull request:
 
 - Add a private, default-off `MVK_CONFIG_METAL4_COMMAND_BACKEND` experiment.
 - Create one `MTL4CommandQueue` sidecar for each eligible `MVKQueue`.
@@ -42,36 +54,63 @@ Status in this pull request:
 - Fall back to legacy when any eligibility or object-creation check fails.
 - Keep the experiment out of the public `MVKConfiguration` ABI.
 
-Eligibility requires all of the following:
+Eligibility currently requires all of the following:
 
 - Xcode 26 SDK build support;
 - macOS 26 or iOS 26 runtime;
 - a Metal 4-capable GPU;
-- residency-set support;
+- an existing committed primary residency set;
 - no Metal private-API build or runtime mode;
 - a real device target, not Simulator, tvOS, or visionOS;
 - explicit opt-in through the environment variable.
 
-Phase 1A deliberately performs no MTL4 queue commit. It is an object and
-lifetime checkpoint, not a command execution or performance checkpoint.
+The current existing-residency-set requirement is intentionally conservative.
+MoltenVK presently creates the primary set only when its legacy argument-buffer
+path is active. Before Phase 1C, the command backend must own or request a
+residency set independently so disabling legacy argument buffers does not make
+Metal 4 command execution unavailable.
 
-## Phase 1B: submission ownership and allocator arena
+## Phase 1B.1: allocator arena and internal commit probe
 
-Phase 1B may begin only after Phase 1A builds and runs cleanly. It introduces:
+Implemented in this pull request:
+
+- A bounded allocator arena, defaulting to four allocators and hard-limited to
+  sixteen.
+- A private `MVK_CONFIG_METAL4_COMMAND_ALLOCATOR_COUNT` override.
+- Explicit separation of allocator `encoding`, `inFlightCount`, and
+  `resetPending` state.
+- An allocator is never reset while any command buffer encoded from it remains
+  in flight.
+- One empty, internal-only `MTL4CommandBuffer` is committed to each eligible
+  Metal 4 queue.
+- `MTL4CommitOptions` and `MTL4CommitFeedback` verify actual GPU completion.
+- The feedback block captures only a shared queue-independent state object and a
+  slot index. It does not capture or dereference `MVKQueue`, `MVKDevice`, or the
+  legacy submission object.
+- Queue destruction marks shared state as shutting down before releasing the
+  Metal 4 queue. A late feedback block may finish against the retained shared
+  state without touching destroyed Vulkan objects.
+- Objective-C exceptions during command-buffer setup or commit fail the probe
+  and retain the legacy Vulkan path.
+
+This empty commit is the first real use of `MTL4CommandQueue`, but it is not a
+Vulkan workload and is not a performance result.
+
+## Phase 1B.2: Vulkan submission ownership
+
+The next submission checkpoint introduces:
 
 - `MVKMetal4SubmissionContext`, with no raw callback capture of `MVKDevice` or
   queue-owned state;
-- an allocator arena under each Vulkan command pool or queue, because one
-  allocator cannot encode multiple command buffers concurrently;
-- one materialized `MTL4CommandBuffer` per in-flight Vulkan command-buffer
+- a materialized `MTL4CommandBuffer` per in-flight Vulkan command-buffer
   execution;
-- conservative residency attachment;
-- empty and fence-only submission support;
+- command-backend-owned conservative residency attachment;
+- empty and fence-only Vulkan submission support;
 - MTLEvent/MTLSharedEvent ordering for queue waits and signals;
 - completion tokens that retain every object needed until GPU completion;
 - whole-submission fallback selected before any Metal 4 encoding starts.
 
-Phase 1B must not replay a Vulkan submission on legacy after an MTL4 command
+Phase 1B.2 must not replay a Vulkan submission on legacy after an MTL4 command
 buffer has been committed. Post-commit failure is a submission/device error, not
 a fallback opportunity.
 
@@ -126,33 +165,38 @@ Every checkpoint must preserve these invariants:
 
 1. Backend selection occurs before encoding a Vulkan submission.
 2. A command buffer is never encoded simultaneously with the same allocator.
-3. Completion callbacks own only self-contained retained state.
-4. Device or queue destruction cannot race a callback that dereferences either.
-5. Residency removal is deferred until every referencing submission completes.
-6. Descriptor and argument-table versions remain immutable while in flight.
-7. Legacy and MTL4 queues synchronize through monotonically increasing events.
-8. Debug or telemetry callbacks run outside internal queue, residency, allocator,
+3. An allocator is reset only after all command buffers encoded from it finish.
+4. Completion callbacks own only self-contained retained state.
+5. Device or queue destruction cannot race a callback that dereferences either.
+6. Residency removal is deferred until every referencing submission completes.
+7. Descriptor and argument-table versions remain immutable while in flight.
+8. Legacy and MTL4 queues synchronize through monotonically increasing events.
+9. Debug or telemetry callbacks run outside internal queue, residency, allocator,
    and descriptor locks.
-9. No MTL4 failure causes duplicate Vulkan side effects.
-10. Toggle-off and unsupported targets remain byte-for-byte on the legacy
-    execution path except for compiled dead code.
+10. No MTL4 failure causes duplicate Vulkan side effects.
+11. Toggle-off and unsupported targets remain on the legacy execution path.
 
 ## Validation gates
 
-### Phase 1A
+### Phase 1A / 1B.1
 
 - `python3 Scripts/test-metal4-command-backend-phase1.py`
 - Xcode 26 macOS Release build.
 - Xcode 26 iOS device Release build.
+- Private-API builds compile while excluding Metal 4 command execution.
+- CMake Debug and Release builds.
 - Older deployment targets continue compiling through availability guards.
-- Toggle off: no Metal 4 command object creation log.
-- Toggle on, eligible device: one ready log per Vulkan queue.
+- Toggle off: no Metal 4 command object or commit-probe log.
+- Toggle on, eligible device: queue/allocator readiness and one completed empty
+  commit probe per Vulkan queue.
 - Toggle on, ineligible target: one diagnostic and unchanged Vulkan behavior.
 - Repeated `VkDevice` create/destroy loop under Metal API Validation.
+- Destroy the queue/device immediately after the empty commit and verify late
+  feedback does not dereference queue/device state.
 
-### Phase 1B
+### Phase 1B.2
 
-- Empty submit and fence-only submit tests.
+- Empty and fence-only Vulkan submit tests.
 - Binary and timeline semaphore ordering tests.
 - Multiple in-flight command buffers from distinct threads.
 - Allocator lease/release and teardown race tests.

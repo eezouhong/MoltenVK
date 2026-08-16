@@ -532,7 +532,7 @@ public:
 	 */
 	bool supportsMetal4DescriptorlessExecution() const {
 		return _mtlPipelineState &&
-			_stageResources.resources.allBits.areAllBitsClear() &&
+			_stageResources.resources.allBits.empty() &&
 			_stageResources.implicitBuffers.needed.empty();
 	}
 

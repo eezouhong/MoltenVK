@@ -176,7 +176,7 @@ def main() -> int:
         require(implementation, re.escape(token), f"descriptorless compute path is missing: {token}")
     require(
         pipeline_h,
-        r"supportsMetal4DescriptorlessExecution[\s\S]*?resources\.allBits\.areAllBitsClear[\s\S]*?implicitBuffers\.needed\.empty",
+        r"supportsMetal4DescriptorlessExecution[\s\S]*?resources\.allBits\.empty[\s\S]*?implicitBuffers\.needed\.empty",
         "compute pipeline eligibility does not reject descriptor or implicit-buffer use",
     )
     require(

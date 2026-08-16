@@ -47,10 +47,6 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
-	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
-	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
-	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
-
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
@@ -88,6 +84,10 @@ public:
 						const VkImageMemoryBarrier* pImageMemoryBarriers);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

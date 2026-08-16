@@ -9,25 +9,43 @@ jobs:
   probe:
     runs-on: macos-26
     steps:
-      - name: Print exact SDK command signatures
+      - name: Print focused Metal 4 render signatures
         shell: bash
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           H="$SDK/System/Library/Frameworks/Metal.framework/Headers"
-          echo "SDK=$SDK"
           xcodebuild -version
+          echo "SDK=$SDK"
 
-          dump_file() {
-            local file="$1"
-            echo "===== $file ====="
-            cat "$H/$file"
-          }
+          for pattern in \
+            'drawPrimitives:' \
+            'drawIndexedPrimitives:' \
+            'setRenderPipelineState:' \
+            'setArgumentTable:' \
+            'setViewport:' \
+            'setScissorRect:' \
+            'setCullMode:' \
+            'setFrontFacingWinding:' \
+            'setTriangleFillMode:' \
+            'endEncoding'; do
+            echo "===== MTL4RenderCommandEncoder $pattern ====="
+            grep -n -B 6 -A 18 -- "$pattern" "$H/MTL4RenderCommandEncoder.h" || true
+          done
 
-          dump_file MTL4RenderPass.h
-          dump_file MTL4RenderCommandEncoder.h
-          dump_file MTL4ArgumentTable.h
-          dump_file MTL4CommandBuffer.h
-
-          echo '===== MTLDevice factories ====='
-          grep -n -B 8 -A 20 -E 'newArgumentTableWithDescriptor|newMTL4CommandQueueWithDescriptor|newCommandAllocatorWithDescriptor' "$H/MTLDevice.h"
+          for pattern in \
+            '@interface MTL4RenderPassDescriptor' \
+            '@interface MTL4RenderPassColorAttachmentDescriptor' \
+            'colorAttachments' \
+            'renderTargetWidth' \
+            'renderTargetHeight' \
+            'renderTargetArrayLength' \
+            '@property.*texture' \
+            '@property.*level' \
+            '@property.*slice' \
+            '@property.*loadAction' \
+            '@property.*storeAction' \
+            '@property.*clearColor'; do
+            echo "===== MTL4RenderPass $pattern ====="
+            grep -n -B 6 -A 18 -E -- "$pattern" "$H/MTL4RenderPass.h" || true
+          done

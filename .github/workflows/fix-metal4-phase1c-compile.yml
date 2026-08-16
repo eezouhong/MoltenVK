@@ -1,0 +1,94 @@
+name: Fix Metal 4 Phase 1C compile blockers
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/fix-metal4-phase1c-compile.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          persist-credentials: true
+
+      - name: Apply compile fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h")
+          source = path.read_text()
+          wrong = """
+          \tbool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+          \tbool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+          \tbool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
+          protected:
+          \tMVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
+
+          \tMVKSmallVector<MVKCommandBuffer*, N> _secondaryCommandBuffers;
+          """
+          corrected = """
+          protected:
+          \tMVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
+
+          \tMVKSmallVector<MVKCommandBuffer*, N> _secondaryCommandBuffers;
+          """
+          if wrong not in source:
+              raise SystemExit("execute-commands misplaced Metal 4 declarations not found")
+          source = source.replace(wrong, corrected, 1)
+
+          barrier_old = """
+          \tvoid encode(MVKCommandEncoder* cmdEncoder) override;
+
+          protected:
+          \tMVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
+          \tbool coversTextures();
+          """
+          barrier_new = """
+          \tvoid encode(MVKCommandEncoder* cmdEncoder) override;
+
+          \tbool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+          \tbool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+          \tbool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
+          protected:
+          \tMVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
+          \tbool coversTextures();
+          """
+          if barrier_old not in source:
+              raise SystemExit("pipeline barrier declaration point not found")
+          path.write_text(source.replace(barrier_old, barrier_new, 1))
+
+          path = Path("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
+          source = path.read_text()
+          old = "_stageResources.resources.allBits.areAllBitsClear()"
+          if old not in source:
+              raise SystemExit("descriptorless bitset expression not found")
+          path.write_text(source.replace(old, "_stageResources.resources.allBits.empty()", 1))
+          PY
+
+      - name: Validate fixes
+        run: |
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          git diff --check
+
+      - name: Commit fixes
+        run: |
+          rm .github/workflows/fix-metal4-phase1c-compile.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(metal4): repair Phase 1C command declarations"
+          git push origin HEAD:metal4/phase1-command-backend-poc

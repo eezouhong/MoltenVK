@@ -110,6 +110,20 @@ public:
 	/** Returns a Metal command buffer from the Metal queue. */
 	id<MTLCommandBuffer> getMTLCommandBuffer(MVKCommandUse cmdUse, bool retainRefs = false);
 
+	/** Returns whether the experimental Metal 4 command object boundary was requested. */
+	bool wasMetal4CommandBackendRequested() const { return _metal4CommandBackendRequested; }
+
+	/** Returns whether Metal 4 queue, allocator, and command buffer object creation passed. */
+	bool isMetal4CommandBackendReady() const { return _metal4CommandBackendReady; }
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	/**
+	 * Returns the optional Metal 4 queue owned by this Vulkan queue.
+	 * Phase 1 does not submit Vulkan work to this queue yet.
+	 */
+	id<MTL4CommandQueue> getMTL4CommandQueue() { return _mtl4Queue; }
+#endif
+
 #pragma mark Construction
 	
 	/** Constructs an instance for the device and queue family. */
@@ -140,6 +154,8 @@ protected:
 	void initName();
 	void initExecQueue();
 	void initMTLCommandQueue();
+	void initMTL4CommandQueue();
+	bool validateMTL4CommandObjects();
 	void destroyExecQueue();
 	VkResult submit(MVKQueueSubmission* qSubmit);
 	NSString* getMTLCommandBufferLabel(MVKCommandUse cmdUse);
@@ -152,6 +168,9 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	id<MTL4CommandQueue> _mtl4Queue = nil;
+#endif
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;
@@ -164,6 +183,8 @@ protected:
 	float _priority;
 	VkQueueGlobalPriority _globalPriority;
 	uint32_t _index;
+	bool _metal4CommandBackendRequested = false;
+	bool _metal4CommandBackendReady = false;
 };
 
 

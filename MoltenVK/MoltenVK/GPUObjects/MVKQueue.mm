@@ -894,7 +894,7 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 				pPresentModeInfo = (const VkSwapchainPresentModeInfoKHR*) next;
 				break;
 			case VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE:
-				pPresentTimesInfo = (VkPresentTimesInfoGOOGLE*) next;
+				pPresentTimesInfo = (const VkPresentTimesInfoGOOGLE*) next;
 				break;
 			default:
 				break;

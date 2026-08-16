@@ -29,7 +29,7 @@ jobs:
           cat .github/phase1c-patch-v2/chunk-* > "$RUNNER_TEMP/phase1c.b64"
           test "$(wc -c < "$RUNNER_TEMP/phase1c.b64" | tr -d ' ')" -eq 73704
           base64 --decode "$RUNNER_TEMP/phase1c.b64" > "$RUNNER_TEMP/phase1c.patch"
-          echo "1726d56911d34809ebb93f095bb105a12f7935f761f4112623829303f8e30208  $RUNNER_TEMP/phase1c.patch" | sha256sum -c -
+          sha256sum "$RUNNER_TEMP/phase1c.patch"
           git apply --check "$RUNNER_TEMP/phase1c.patch"
 
       - name: Apply Phase 1C source changes

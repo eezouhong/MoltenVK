@@ -75,6 +75,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<bool> probeSubmitted = false;
 	atomic<bool> probeCompleted = false;
 	atomic<bool> probeSucceeded = false;
+	atomic<bool> probeAllocatorCompleted = false;
 	atomic<uint64_t> nextSequence = 1;
 	atomic<uint64_t> submittedCount = 0;
 	atomic<uint64_t> completedCount = 0;

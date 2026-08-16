@@ -183,8 +183,8 @@ def main() -> int:
     )
     require(
         queue_mm,
-        r"probeAllocatorCompleted\.exchange[\s\S]*?completeAllocator",
-        "late probe feedback cannot idempotently release its allocator",
+        r"atomic<bool>\s+probeAllocatorCompleted\s*=\s*false[\s\S]*?probeAllocatorCompleted\.exchange[\s\S]*?completeAllocator",
+        "late probe feedback lacks a declared idempotent allocator release guard",
     )
     require(
         execute_metal4,

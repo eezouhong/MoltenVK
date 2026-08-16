@@ -89,6 +89,7 @@ def main() -> int:
     reject(queue_mm, r"\[mtlDevice\s+newMTL4CommandQueue\]", "obsolete queue factory is still used")
     reject(queue_mm, r"\[mtlDevice\s+newCommandAllocator\]", "obsolete allocator factory is still used")
     reject(queue_mm, r"_mtl4Queue\.label\s*=", "read-only MTL4 queue label is assigned after creation")
+    reject(queue_mm, r"_computeEncoder\.label\s*=", "unverified writable MTL4 encoder label is assigned")
 
     # Whole-command-stream preflight, resource resolution, and rollback precede commit.
     require(command_h, r"virtual\s+bool\s+supportsMetal4Encoding\(\)\s+const\s*\{\s*return\s+false", "unsupported commands do not fail closed")
@@ -136,8 +137,8 @@ def main() -> int:
         require(transfer_h, rf"{command}[\s\S]*?encodeMetal4", f"{command} does not materialize")
     require(
         transfer_mm,
-        r"supportsMetal4CopyBuffer[\s\S]*?mtlCopyBufferAlignment[\s\S]*?srcOffset\s*%\s*alignment[\s\S]*?dstOffset\s*%\s*alignment[\s\S]*?size\s*%\s*alignment",
-        "copy eligibility does not preserve Metal alignment rules",
+        r"supportsMetal4CopyBuffer[\s\S]*?regions\.empty\(\)[\s\S]*?mtlCopyBufferAlignment[\s\S]*?srcOffset\s*%\s*alignment[\s\S]*?dstOffset\s*%\s*alignment[\s\S]*?size\s*%\s*alignment",
+        "copy eligibility does not reject empty work or preserve Metal alignment rules",
     )
     require(transfer_mm, r"0x01010101u", "fill eligibility does not require a repeated byte")
     require(queue_mm, r"MTL4ComputeCommandEncoder", "real MTL4 compute/transfer encoder is missing")
@@ -164,6 +165,41 @@ def main() -> int:
         queue_mm,
         r"schedulingComplete[\s\S]*?completionRequested",
         "an early MTL4 callback can destroy a submission while queue scheduling is still running",
+    )
+    require(
+        queue_mm,
+        r"receiveFeedback[\s\S]*?hostSignalOrdering\(sequence\)[\s\S]*?complete\(\)",
+        "workload-completion feedback is not the authoritative release boundary",
+    )
+    probe_wait = function_body(
+        queue_mm,
+        "bool waitForProbe(uint64_t timeoutNs)",
+        "void recordRealSubmission",
+    )
+    reject(
+        probe_wait,
+        r"completeAllocator",
+        "a probe timeout can reset an allocator whose workload may still be in flight",
+    )
+    require(
+        queue_mm,
+        r"probeAllocatorCompleted\.exchange[\s\S]*?completeAllocator",
+        "late probe feedback cannot idempotently release its allocator",
+    )
+    require(
+        execute_metal4,
+        r"commitAttempted\s*=\s*true[\s\S]*?commit:[\s\S]*?@catch[\s\S]*?if\s*\(!commitAttempted\)[\s\S]*?endMetal4CommandBuffers\(false\)",
+        "pre-commit exceptions are not separated from ambiguous post-commit failures",
+    )
+    ambiguous_start = execute_metal4.find("Metal 4 Vulkan queue commit became ambiguous")
+    ambiguous_end = execute_metal4.find("[orderingEvent release]", ambiguous_start)
+    if ambiguous_start < 0 or ambiguous_end < 0:
+        raise AssertionError("ambiguous post-commit boundary is missing")
+    ambiguous_catch = execute_metal4[ambiguous_start:ambiguous_end]
+    reject(
+        ambiguous_catch,
+        r"hostSignalOrdering\(_submissionSequence\)|completion->complete\(\)|completeAllocator\(allocatorIndex\)|releaseResidency\(allocations\)",
+        "ambiguous post-commit failure releases or advances work before real Metal feedback",
     )
 
     # Hybrid backends are totally ordered, including fallback, present, and wait-idle.

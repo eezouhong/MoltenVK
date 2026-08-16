@@ -257,7 +257,7 @@ struct MVKMetal4CommandQueueState {
 		if (changed) { [residencySet commit]; }
 	}
 
-	bool markProbeComplete(size_t slotIndex, NSError* error, NSString* fallbackReason) {
+	bool markProbeStatus(NSError* error, NSString* fallbackReason) {
 		{
 			lock_guard<mutex> guard(lock);
 			if (probeCompleted.load(memory_order_acquire)) { return false; }
@@ -273,20 +273,34 @@ struct MVKMetal4CommandQueueState {
 				}
 			}
 		}
-		completeAllocator(slotIndex);
 		probeReady.notify_all();
 		return true;
 	}
 
+	void completeProbeAllocator(size_t slotIndex) {
+		if (!probeAllocatorCompleted.exchange(true, memory_order_acq_rel)) {
+			completeAllocator(slotIndex);
+		}
+	}
+
 	void completeProbe(size_t slotIndex, NSError* error) {
-		markProbeComplete(slotIndex, error, nil);
+		markProbeStatus(error, nil);
+		completeProbeAllocator(slotIndex);
 	}
 
-	void failProbe(size_t slotIndex, NSString* reason) {
-		markProbeComplete(slotIndex, nil, reason);
+	void failProbeBeforeCommit(size_t slotIndex, NSString* reason) {
+		markProbeStatus(nil, reason);
+		completeProbeAllocator(slotIndex);
 	}
 
-	bool waitForProbe(uint64_t timeoutNs, size_t slotIndex) {
+	void failProbeInFlight(NSString* reason) {
+		// The queue may have accepted the command buffer. Keep its allocator alive
+		// until real Metal feedback arrives; a bounded leak after device loss is
+		// safer than resetting memory that the GPU may still be reading.
+		markProbeStatus(nil, reason);
+	}
+
+	bool waitForProbe(uint64_t timeoutNs) {
 		unique_lock<mutex> guard(lock);
 		bool completed = probeReady.wait_for(
 			guard,
@@ -294,7 +308,7 @@ struct MVKMetal4CommandQueueState {
 			[this] { return probeCompleted.load(memory_order_acquire); });
 		guard.unlock();
 		if (!completed) {
-			failProbe(slotIndex, @"Metal 4 empty submission probe timed out");
+			failProbeInFlight(@"Metal 4 empty submission probe timed out");
 		}
 		return probeSucceeded.load(memory_order_acquire);
 	}
@@ -352,7 +366,6 @@ public:
 		if (_needsComputeEncoder) {
 			_computeEncoder = [[commandBuffer computeCommandEncoder] retain];
 			if (!_computeEncoder) { return false; }
-			_computeEncoder.label = @"MoltenVK Metal 4 transfer encoder";
 		}
 		return true;
 	}
@@ -442,22 +455,26 @@ struct MVKMetal4SubmissionCompletion {
 
 	void receiveFeedback(id<MTL4CommitFeedback> feedback) {
 		NSError* error = [feedback.error retain];
-		bool shouldFail = error != nil;
 		{
 			lock_guard<mutex> guard(lock);
 			[feedbackError release];
 			feedbackError = error;
 		}
-		if (shouldFail) {
+		if (error) {
 			state->recordFailure(error.localizedDescription);
 			queue->reportResult(VK_ERROR_DEVICE_LOST,
 							MVK_CONFIG_LOG_LEVEL_ERROR,
 							"Metal 4 Vulkan submission failed: %s",
 							error.localizedDescription.UTF8String ?: "unknown error");
 			queue->getDevice()->markLost(false);
-			state->hostSignalOrdering(sequence);
-			complete();
 		}
+
+		// Apple invokes commit feedback after the workload completes. It is the
+		// authoritative lifetime boundary for allocators, residency, and Vulkan
+		// fence/semaphore completion. Host-signaling here also repairs ordering if
+		// an exception occurred after commit but before queue signalEvent().
+		state->hostSignalOrdering(sequence);
+		complete();
 	}
 
 	void finalize(MVKQueueCommandBufferSubmission* completedSubmission) {
@@ -907,7 +924,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 		id<MTL4CommandBuffer> commandBuffer = [getMTLDevice() newCommandBuffer];
 		if (!commandBuffer) {
 			state->finishEncoding(slotIndex, false);
-			state->failProbe(slotIndex, @"MTL4CommandBuffer creation returned nil");
+			state->failProbeBeforeCommit(slotIndex, @"MTL4CommandBuffer creation returned nil");
 			[allocator release];
 			return false;
 		}
@@ -918,7 +935,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 			[commandBuffer endCommandBuffer];
 		} @catch (NSException* exception) {
 			state->finishEncoding(slotIndex, false);
-			state->failProbe(slotIndex, exception.reason);
+			state->failProbeBeforeCommit(slotIndex, exception.reason);
 			[commandBuffer release];
 			[allocator release];
 			return false;
@@ -929,7 +946,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 
 		MTL4CommitOptions* options = [MTL4CommitOptions new];
 		if (!options) {
-			state->failProbe(slotIndex, @"Could not create MTL4CommitOptions");
+			state->failProbeBeforeCommit(slotIndex, @"Could not create MTL4CommitOptions");
 			[commandBuffer release];
 			[allocator release];
 			return false;
@@ -943,7 +960,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 		@try {
 			[_mtl4Queue commit:commandBuffers count:1 options:options];
 		} @catch (NSException* exception) {
-			state->failProbe(slotIndex, exception.reason);
+			state->failProbeInFlight(exception.reason);
 			[options release];
 			[commandBuffer release];
 			[allocator release];
@@ -956,7 +973,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 		if (!isfinite(timeoutMs)) { timeoutMs = kMetal4CommandValidationDefaultTimeoutMs; }
 		timeoutMs = max(kMetal4CommandValidationMinimumTimeoutMs,
 						min(kMetal4CommandValidationMaximumTimeoutMs, timeoutMs));
-		bool succeeded = state->waitForProbe((uint64_t)(timeoutMs * 1000000.0), slotIndex);
+		bool succeeded = state->waitForProbe((uint64_t)(timeoutMs * 1000000.0));
 
 		[options release];
 		[commandBuffer release];
@@ -1392,14 +1409,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	}];
 
 	id<MTLSharedEvent> orderingEvent = state->copyOrderingEvent();
-	MTLSharedEventListener* orderingListener = state->copyOrderingListener();
-	[orderingEvent notifyListener:orderingListener
-					  atValue:_submissionSequence
-						block:^(id<MTLSharedEvent>, uint64_t) {
-		completion->complete();
-	}];
-
-	state->finishEncoding(allocatorIndex, true);
+	bool allocatorInFlight = false;
 	bool commitAttempted = false;
 	VkResult result = getConfigurationResult();
 	@try {
@@ -1409,6 +1419,8 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		for (auto& wait : _waitSemaphores) { wait.encodeMetal4Wait(commandQueue); }
 
 		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
+		state->finishEncoding(allocatorIndex, true);
+		allocatorInFlight = true;
 		commitAttempted = true;
 		[commandQueue commit:commandBuffers count:1 options:options];
 		endMetal4CommandBuffers(true);
@@ -1425,8 +1437,29 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 							  (unsigned long long)_submissionSequence);
 		}
 	} @catch (NSException* exception) {
+		if (!commitAttempted) {
+			if (claimedCommandBuffers) {
+				endMetal4CommandBuffers(false);
+				claimedCommandBuffers = false;
+			}
+			if (allocatorInFlight) {
+				state->completeAllocator(allocatorIndex);
+			} else {
+				state->finishEncoding(allocatorIndex, false);
+			}
+			state->releaseResidency(allocations);
+			state->recordFallback();
+			[orderingEvent release];
+			[options release];
+			[residencySet release];
+			[commandBuffer release];
+			[allocator release];
+			*handled = false;
+			return VK_SUCCESS;
+		}
+
 		if (claimedCommandBuffers) {
-			endMetal4CommandBuffers(commitAttempted);
+			endMetal4CommandBuffers(true);
 			claimedCommandBuffers = false;
 		}
 		state->recordFailure(exception.reason);
@@ -1434,14 +1467,14 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		result = VK_ERROR_DEVICE_LOST;
 		_queue->reportResult(VK_ERROR_DEVICE_LOST,
 							 MVK_CONFIG_LOG_LEVEL_ERROR,
-							 "Metal 4 Vulkan queue operation threw an exception after backend selection: %s",
+							 "Metal 4 Vulkan queue commit became ambiguous: %s",
 							 exception.reason.UTF8String ?: "unknown exception");
 		_queue->getDevice()->markLost(false);
-		state->hostSignalOrdering(_submissionSequence);
-		completion->complete();
+		// Do not host-signal ordering or release allocator/residency here. The
+		// command queue may have accepted the workload before throwing. Real
+		// commit feedback is the only safe release boundary.
 	}
 
-	[orderingListener release];
 	[orderingEvent release];
 	[options release];
 	[residencySet release];

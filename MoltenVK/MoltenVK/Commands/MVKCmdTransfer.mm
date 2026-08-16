@@ -969,6 +969,7 @@ template class MVKCmdResolveImage<4>;
 template <typename Regions>
 static bool supportsMetal4CopyBuffer(MVKCommandBuffer* cmdBuff,
 										 const Regions& regions) {
+	if (regions.empty()) { return false; }
 	VkDeviceSize alignment = std::max<VkDeviceSize>(
 		cmdBuff->getMetalFeatures().mtlCopyBufferAlignment,
 		1);

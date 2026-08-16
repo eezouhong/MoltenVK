@@ -471,7 +471,7 @@ public:
 		bool src3D = srcImage->getMTLTextureType() == MTLTextureType3D;
 		bool dst3D = dstImage->getMTLTextureType() == MTLTextureType3D;
 		if (mvkVkExtent3DsAreEqual(srcExtent, region.extent) &&
-			mvKVkExtent3DsAreEqual(dstExtent, region.extent) && src3D == dst3D) {
+			mvkVkExtent3DsAreEqual(dstExtent, region.extent) && src3D == dst3D) {
 			[_computeEncoder copyFromTexture:srcTexture
 							 sourceSlice:srcBaseLayer
 							 sourceLevel:srcLevel
@@ -485,7 +485,7 @@ public:
 		}
 
 		MTLOrigin srcOrigin = mvkMTLOriginFromVkOffset3D(region.srcOffset);
-		MTLOrigin dstOrigin = mvKMTLOriginFromVkOffset3D(region.dstOffset);
+		MTLOrigin dstOrigin = mvkMTLOriginFromVkOffset3D(region.dstOffset);
 		MTLSize copySize = mvkMTLSizeFromVkExtent3D(region.extent);
 		uint32_t iterationCount = layerCount;
 		if (src3D != dst3D) {
@@ -543,7 +543,7 @@ public:
 						 VkAccessFlags2 dstAccess) override {
 		if (!_computeEncoder) { return false; }
 		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
-		MTLStages before = mvKMetal4StagesFromVkPipelineStages(dstStages);
+		MTLStages before = mvkMetal4StagesFromVkPipelineStages(dstStages);
 		if (!after) { after = MTLStageDispatch | MTLStageBlit; }
 		if (!before) { before = MTLStageDispatch | MTLStageBlit; }
 		MTL4VisibilityOptions visibility = MTL4VisibilityOptionNone;
@@ -677,7 +677,7 @@ struct MVKMetal4SubmissionCompletion {
 	void finalize(MVKQueueCommandBufferSubmission* completedSubmission) {
 		state->completeAllocator(allocatorIndex);
 		state->releaseResidency(allocations);
-		addPerformanceInterval(queue->getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
+		queue->addPerformanceInterval(queue->getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
 		completedSubmission->finish();
 	}
 

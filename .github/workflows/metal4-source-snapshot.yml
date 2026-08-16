@@ -21,10 +21,10 @@ jobs:
       - name: Package exact checkout
         run: |
           git rev-parse HEAD > EXACT_SHA
-          tar --exclude=.git -czf moltenvk-source.tar.gz .
+          tar --exclude=.git -C "$GITHUB_WORKSPACE" -czf "$RUNNER_TEMP/moltenvk-source.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
           name: moltenvk-source-${{ github.sha }}
-          path: moltenvk-source.tar.gz
+          path: ${{ runner.temp }}/moltenvk-source.tar.gz
           if-no-files-found: error
           retention-days: 1

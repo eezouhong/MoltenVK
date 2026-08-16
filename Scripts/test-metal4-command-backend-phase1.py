@@ -2,9 +2,10 @@
 """Lock the safe Phase 1 Metal 4 command-backend boundary.
 
 Phase 1A validates queue/allocator/command-buffer object creation. Phase 1B adds
-one bounded internal empty commit and allocator-lifetime tracking. Vulkan
-submissions must remain on the legacy Metal path until synchronization,
-residency, command encoding, and completion ownership are implemented together.
+an independent command-backend residency set, one bounded internal empty commit,
+and allocator/feedback lifetime tracking. Vulkan submissions remain on legacy
+Metal until synchronization, command encoding, and resource collection land as
+one whole-submission checkpoint.
 """
 
 from __future__ import annotations
@@ -86,21 +87,33 @@ def main() -> int:
         r"mvkOSVersionIsAtLeast\(\s*26\.0\s*\)",
         "OS 26 runtime gate is missing",
     )
-    require(
+
+    init_backend = function_body(
         queue_mm,
+        "void MVKQueue::initMTL4CommandQueue()",
+        "MVKQueue::~MVKQueue()",
+    )
+    require(
+        init_backend,
+        r"getMetalFeatures\(\)\.residencySets",
+        "residency-set capability gate is missing",
+    )
+    reject(
+        init_backend,
         r"_device->hasResidencySet\(\)",
-        "actual committed primary residency-set gate is missing",
+        "Metal 4 command readiness still depends on legacy argument-buffer residency",
     )
 
-    # Prove all three foundational Metal 4 command objects exist and can encode.
+    # Prove foundational Metal 4 command and residency objects exist.
     for selector in (
         "newMTL4CommandQueue",
         "newCommandAllocator",
         "newCommandBuffer",
+        "newResidencySetWithDescriptor:error:",
     ):
         require(
             queue_mm,
-            rf"@selector\({selector}\)",
+            rf"@selector\({re.escape(selector)}\)",
             f"runtime selector check is missing: {selector}",
         )
     require(
@@ -129,6 +142,52 @@ def main() -> int:
         "MTL4CommandBuffer finalization is missing",
     )
     require(queue_mm, r"\[_mtl4Queue\s+release\]", "MTL4 queue teardown is missing")
+
+    # The MTL4 backend owns residency independently from legacy argument buffers.
+    for token in (
+        "kMetal4CommandResidencyInitialCapacity",
+        "MTLResidencySetDescriptor",
+        "newResidencySetWithDescriptor",
+        "copyResidencySet",
+        "addResidencySet",
+        "removeResidencySet",
+    ):
+        require(implementation, re.escape(token), f"independent residency is missing: {token}")
+    require(
+        queue_mm,
+        r"id<MTLResidencySet>\s+residencySet\s*=\s*nil",
+        "shared command state does not own its residency set",
+    )
+    require(
+        queue_mm,
+        r"residencyDescriptor\.initialCapacity\s*=\s*kMetal4CommandResidencyInitialCapacity",
+        "bounded residency initial capacity is missing",
+    )
+    require(
+        queue_mm,
+        r"\[residencySet\s+commit\]",
+        "new command-backend residency set is not committed",
+    )
+    require(
+        init_backend,
+        r"\[_mtl4Queue\s+addResidencySet\s*:\s*residencySet\]",
+        "command-backend residency set is not attached to the MTL4 queue",
+    )
+    destructor = function_body(
+        queue_mm,
+        "MVKQueue::~MVKQueue()",
+        "// Destroys the execution dispatch queue.",
+    )
+    require(
+        destructor,
+        r"shutdown\(\)[\s\S]*?removeResidencySet[\s\S]*?\[_mtl4Queue\s+release\][\s\S]*?_metal4CommandState\.reset\(\)",
+        "teardown does not shut down, detach residency, release queue, then release state",
+    )
+    require(
+        queue_mm,
+        r"~MVKMetal4CommandQueueState\(\)[\s\S]*?\[residencySet\s+release\]",
+        "shared state does not retain residency through late feedback lifetime",
+    )
 
     # Bound the allocator arena and separate encoding from GPU completion.
     require(
@@ -167,18 +226,9 @@ def main() -> int:
         r"if\s*\(slot\.inFlightCount\s*==\s*0\)[\s\S]*?\[slot\.allocator\s+reset\]",
         "allocator reset is not gated on zero in-flight command buffers",
     )
-    reject(
-        function_body(
-            queue_mm,
-            "void MVKMetal4CommandQueueState::shutdown()",
-            "#endif",
-        ) if "void MVKMetal4CommandQueueState::shutdown()" in queue_mm else "",
-        r"wait|join",
-        "queue teardown must not block indefinitely for late feedback",
-    )
 
     # Phase 1B may submit only its internal empty probe. The feedback callback
-    # must retain shared state and must never dereference queue/device objects.
+    # retains shared state and must never dereference queue/device objects.
     probe = function_body(
         queue_mm,
         "bool MVKQueue::startMTL4CommandSubmissionProbe()",
@@ -224,13 +274,8 @@ def main() -> int:
     )
     if queue_mm.count("[_mtl4Queue commit:") != 1:
         raise AssertionError("only the bounded internal probe may commit to MTL4 in Phase 1B")
-    require(
-        queue_mm,
-        r"_metal4CommandState->shutdown\(\)[\s\S]*?\[_mtl4Queue\s+release\]",
-        "teardown does not close state before releasing the queue",
-    )
 
-    # Expose readiness without changing the Vulkan API or selecting per command.
+    # Expose readiness without changing Vulkan API behavior.
     for token in (
         "wasMetal4CommandBackendRequested",
         "isMetal4CommandBackendReady",
@@ -243,7 +288,7 @@ def main() -> int:
         require(implementation, re.escape(token), f"missing Phase 1 boundary: {token}")
 
     # No Vulkan submit/present work may reach MTL4 until real command ownership,
-    # barriers, descriptor tables, and residency are complete.
+    # barriers, descriptor tables, and resource collection are complete.
     submit_execute = function_body(
         queue_mm,
         "VkResult MVKQueueCommandBufferSubmission::execute()",
@@ -283,7 +328,10 @@ def main() -> int:
         "Phase 1B must not partially introduce encoder or argument-table execution",
     )
 
-    print("PASS: Metal 4 Phase 1A/1B object, allocator, and empty-commit boundary is safe")
+    print(
+        "PASS: Metal 4 Phase 1A/1B queue, independent residency, allocator, "
+        "and empty-commit boundary is safe"
+    )
     return 0
 
 

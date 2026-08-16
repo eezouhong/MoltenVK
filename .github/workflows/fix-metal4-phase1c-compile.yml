@@ -20,7 +20,7 @@ jobs:
           ref: metal4/phase1-command-backend-poc
           persist-credentials: true
 
-      - name: Apply compile fixes
+      - name: Apply compile and contract fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -77,6 +77,14 @@ jobs:
           if old not in source:
               raise SystemExit("descriptorless bitset expression not found")
           path.write_text(source.replace(old, "_stageResources.resources.allBits.empty()", 1))
+
+          path = Path("Scripts/test-metal4-command-backend-phase1.py")
+          source = path.read_text()
+          old = r"resources\\.allBits\\.areAllBitsClear[\\s\\S]*?implicitBuffers\\.needed\\.empty"
+          new = r"resources\\.allBits\\.empty[\\s\\S]*?implicitBuffers\\.needed\\.empty"
+          if old not in source:
+              raise SystemExit("stale descriptorless bitset source-contract pattern not found")
+          path.write_text(source.replace(old, new, 1))
           PY
 
       - name: Validate fixes

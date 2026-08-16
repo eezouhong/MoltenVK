@@ -55,6 +55,10 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse commandUse);
 
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
     VkResult validate(MVKCommandBuffer* cmdBuff, const VkImageCopy2* region);
@@ -64,6 +68,7 @@ protected:
 	MVKImage* _dstImage;
 	VkImageLayout _srcLayout;
 	VkImageLayout _dstLayout;
+	bool _supportsMetal4Encoding = false;
 };
 
 // Concrete template class implementations.

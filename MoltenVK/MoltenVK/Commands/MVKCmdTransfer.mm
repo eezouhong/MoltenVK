@@ -45,6 +45,44 @@ static inline MTLSize mvkClampMTLSize(MTLSize size, MTLOrigin origin, MTLSize ma
 #pragma mark -
 #pragma mark MVKCmdCopyImage
 
+static bool mvkMetal4CopyImageLayoutSupported(VkImageLayout layout) {
+	return layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+		layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+		layout == VK_IMAGE_LAYOUT_GENERAL;
+}
+
+template <typename Regions>
+static bool supportsMetal4CopyImage(MVKImage* srcImage,
+									VkImageLayout srcLayout,
+									MVKImage* dstImage,
+									VkImageLayout dstLayout,
+									const Regions& regions) {
+	if (!srcImage || !dstImage || regions.empty() ||
+		!mvkMetal4CopyImageLayoutSupported(srcLayout) ||
+		!mvkMetal4CopyImageLayoutSupported(dstLayout) ||
+		srcImage->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		dstImage->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		srcImage->getIsCompressed() || dstImage->getIsCompressed() ||
+		srcImage->needsSwizzle() || dstImage->needsSwizzle()) {
+		return false;
+	}
+
+	for (const auto& region : regions) {
+		if (region.srcSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+			region.dstSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+			region.srcSubresource.layerCount != region.dstSubresource.layerCount) {
+			return false;
+		}
+		uint8_t srcPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.srcSubresource.aspectMask);
+		uint8_t dstPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.dstSubresource.aspectMask);
+		if (srcImage->getMTLPixelFormat(srcPlane) != dstImage->getMTLPixelFormat(dstPlane) ||
+			!srcImage->getMTLTexture(srcPlane) || !dstImage->getMTLTexture(dstPlane)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 template <size_t N>
 VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
 										VkImage srcImage,
@@ -74,6 +112,8 @@ VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
         
         _vkImageCopies.emplace_back(std::move(vkIR2));
 	}
+	_supportsMetal4Encoding = supportsMetal4CopyImage(
+		_srcImage, _srcLayout, _dstImage, _dstLayout, _vkImageCopies);
     
 	return VK_SUCCESS;
 }
@@ -97,8 +137,29 @@ VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
         
         _vkImageCopies.push_back(vkIR);
     }
+	_supportsMetal4Encoding = supportsMetal4CopyImage(
+		_srcImage, _srcLayout, _dstImage, _dstLayout, _vkImageCopies);
     
     return VK_SUCCESS;
+}
+
+template <size_t N>
+bool MVKCmdCopyImage<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useImage(_srcImage) && cmdEncoder->useImage(_dstImage);
+}
+
+template <size_t N>
+bool MVKCmdCopyImage<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	for (const auto& region : _vkImageCopies) {
+		uint8_t srcPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.srcSubresource.aspectMask);
+		uint8_t dstPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.dstSubresource.aspectMask);
+		if (!cmdEncoder->copyImage(_srcImage, srcPlane, region, _dstImage, dstPlane)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static inline MTLPixelFormat getDepthStencilAspectFormat(const MTLPixelFormat format, const VkImageAspectFlags aspectMask) {

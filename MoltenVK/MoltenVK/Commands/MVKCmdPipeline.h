@@ -47,6 +47,10 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
@@ -91,6 +95,7 @@ protected:
 
 	MVKSmallVector<MVKPipelineBarrier, N> _barriers;
 	VkDependencyFlags _dependencyFlags;
+	bool _supportsMetal4Encoding = false;
 };
 
 // Concrete template class implementations.
@@ -139,6 +144,10 @@ class MVKCmdBindComputePipeline : public MVKCmdBindPipeline {
 
 public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+
+	bool supportsMetal4Encoding() const override;
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

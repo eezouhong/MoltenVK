@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract for the usable Phase 1 Metal 4 transfer backend."""
+"""Source contract for the usable Phase 1C Metal 4 compute/transfer backend."""
 
 from __future__ import annotations
 
@@ -43,6 +43,11 @@ def main() -> int:
     command_buffer_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm")
     transfer_h = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.h")
     transfer_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm")
+    dispatch_h = read("MoltenVK/MoltenVK/Commands/MVKCmdDispatch.h")
+    dispatch_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdDispatch.mm")
+    pipeline_cmd_h = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h")
+    pipeline_cmd_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm")
+    pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
     queue_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.h")
     queue_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm")
     sync_h = read("MoltenVK/MoltenVK/GPUObjects/MVKSync.h")
@@ -52,6 +57,7 @@ def main() -> int:
     runner = read("Tests/Metal4CommandBackend/run-macos.sh")
     implementation = "\n".join(
         (command_h, command_buffer_h, command_buffer_mm, transfer_h, transfer_mm,
+         dispatch_h, dispatch_mm, pipeline_cmd_h, pipeline_cmd_mm, pipeline_h,
          queue_h, queue_mm, sync_h, sync_mm)
     )
 
@@ -130,7 +136,7 @@ def main() -> int:
         "pre-commit materialization failure cannot select legacy fallback",
     )
 
-    # First real execution slice: aligned copy and repeated-byte fill only.
+    # First real execution slice: buffer/image transfer, barriers, and descriptorless compute.
     for command in ("MVKCmdCopyBuffer", "MVKCmdFillBuffer"):
         require(transfer_h, rf"{command}[\s\S]*?supportsMetal4Encoding", f"{command} is not opted in")
         require(transfer_h, rf"{command}[\s\S]*?prepareMetal4Encoding", f"{command} does not resolve resources")
@@ -144,6 +150,52 @@ def main() -> int:
     require(queue_mm, r"MTL4ComputeCommandEncoder", "real MTL4 compute/transfer encoder is missing")
     require(queue_mm, r"copyFromBuffer:[\s\S]*?destinationOffset:[\s\S]*?size:", "MTL4 buffer copy is missing")
     require(queue_mm, r"fillBuffer:[\s\S]*?range:[\s\S]*?value:", "MTL4 buffer fill is missing")
+    for token in (
+        "MVKCmdCopyImage",
+        "supportsMetal4CopyImage",
+        "useImage",
+        "copyImage",
+        "copyFromTexture",
+    ):
+        require(transfer_h + transfer_mm + queue_mm, re.escape(token), f"MTL4 image copy is missing: {token}")
+    require(
+        transfer_mm,
+        r"supportsMetal4CopyImage[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT",
+        "image-copy preflight does not fail closed on unsupported formats/aspects",
+    )
+
+    for token in (
+        "supportsMetal4DescriptorlessExecution",
+        "MVKCmdBindComputePipeline",
+        "useComputePipeline",
+        "bindComputePipeline",
+        "MVKCmdDispatch",
+        "dispatchThreadgroups",
+        "setComputePipelineState",
+    ):
+        require(implementation, re.escape(token), f"descriptorless compute path is missing: {token}")
+    require(
+        pipeline_h,
+        r"supportsMetal4DescriptorlessExecution[\s\S]*?resources\.allBits\.areAllBitsClear[\s\S]*?implicitBuffers\.needed\.empty",
+        "compute pipeline eligibility does not reject descriptor or implicit-buffer use",
+    )
+    require(
+        dispatch_h + dispatch_mm,
+        r"_baseGroupX\s*==\s*0[\s\S]*?_baseGroupY\s*==\s*0[\s\S]*?_baseGroupZ\s*==\s*0",
+        "MTL4 dispatch accepts unsupported non-zero dispatch bases",
+    )
+
+    require(
+        pipeline_cmd_h + pipeline_cmd_mm,
+        r"MVKCmdPipelineBarrier[\s\S]*?supportsMetal4PipelineBarriers[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
+        "buffer/memory pipeline barriers are not materialized",
+    )
+    require(queue_mm, r"barrierAfterEncoderStages:[\s\S]*?beforeEncoderStages:[\s\S]*?visibilityOptions:", "MTL4 encoder barrier is missing")
+    require(
+        pipeline_cmd_mm,
+        r"barrier\.type\s*==\s*MVKPipelineBarrier::Image[\s\S]*?return\s+false",
+        "image layout barriers do not fail closed before layout handling exists",
+    )
 
     # Independent residency remains live until the definitive completion callback.
     for token in (
@@ -232,22 +284,32 @@ def main() -> int:
         "implicit single-queue semaphore was incorrectly accepted across two Metal queues",
     )
 
-    # Independent Vulkan e2e validates MTL4 -> legacy fallback -> MTL4, readback, and semaphore ordering.
+    # Independent Vulkan e2e validates hybrid order, binary/timeline semaphores,
+    # descriptorless compute, image data, barriers, and exact path telemetry.
     for token in (
         "vkCmdFillBuffer",
         "vkCmdPipelineBarrier",
         "vkCmdCopyBuffer",
+        "vkCmdCopyImage",
+        "vkCmdDispatch",
+        "vkCreateComputePipelines",
         "vkCreateSemaphore",
+        "VK_SEMAPHORE_TYPE_TIMELINE",
         "vkWaitForFences",
         "vkInvalidateMappedMemoryRanges",
-        "METAL4_TRANSFER_E2E_PASS",
+        "TIMELINE_OK",
+        "COMPUTE_OK",
+        "IMAGE_DATA_OK",
+        "METAL4_PHASE1C_E2E_PASS",
     ):
         require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=0", "legacy control run is missing")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=1", "Metal 4 run is missing")
     require(runner, r"Executed first Vulkan submission on the Metal 4 transfer backend", "runtime path proof is missing")
+    for counter in ("image_copies", "compute_dispatches", "barriers"):
+        require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
 
-    print("PASS: usable Metal 4 transfer backend source contract")
+    print("PASS: usable Metal 4 Phase 1C compute/transfer backend source contract")
     return 0
 
 

@@ -25,6 +25,9 @@
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
 #include "MVKBuffer.h"
+#include "MVKImage.h"
+#include "MVKPipeline.h"
+#include "mvk_datatypes.hpp"
 #include <atomic>
 #include <cmath>
 #include <string>
@@ -82,6 +85,11 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> realSubmissionCount = 0;
 	atomic<uint64_t> fallbackCount = 0;
 	atomic<uint64_t> failureCount = 0;
+	atomic<uint64_t> bufferCopyCount = 0;
+	atomic<uint64_t> bufferFillCount = 0;
+	atomic<uint64_t> imageCopyCount = 0;
+	atomic<uint64_t> computeDispatchCount = 0;
+	atomic<uint64_t> barrierCount = 0;
 	string lastError;
 
 	~MVKMetal4CommandQueueState() {
@@ -316,6 +324,11 @@ struct MVKMetal4CommandQueueState {
 
 	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
 	void recordFallback() { fallbackCount.fetch_add(1, memory_order_relaxed); }
+	void recordBufferCopy() { bufferCopyCount.fetch_add(1, memory_order_relaxed); }
+	void recordBufferFill() { bufferFillCount.fetch_add(1, memory_order_relaxed); }
+	void recordImageCopy() { imageCopyCount.fetch_add(1, memory_order_relaxed); }
+	void recordComputeDispatch() { computeDispatchCount.fetch_add(1, memory_order_relaxed); }
+	void recordBarrier() { barrierCount.fetch_add(1, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
 		lock_guard<mutex> guard(lock);
@@ -335,18 +348,49 @@ struct MVKMetal4CommandQueueState {
 	}
 };
 
-/** Concrete transfer-only command materializer for the first usable backend slice. */
+static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stages) {
+	MTLStages mtlStages = 0;
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+						  VK_PIPELINE_STAGE_2_COPY_BIT |
+						  VK_PIPELINE_STAGE_2_BLIT_BIT |
+						  VK_PIPELINE_STAGE_2_CLEAR_BIT |
+						  VK_PIPELINE_STAGE_2_RESOLVE_BIT)) {
+		mtlStages |= MTLStageBlit;
+	}
+	if (mvkIsAnyFlagEnabled(stages, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)) {
+		mtlStages |= MTLStageDispatch;
+	}
+	if (!mtlStages && stages) {
+		// The first MTL4 backend slice only contains dispatch and blit work. Treat
+		// broader Vulkan stages conservatively as both rather than dropping order.
+		mtlStages = MTLStageDispatch | MTLStageBlit;
+	}
+	return mtlStages;
+}
+
+/** Concrete compute/transfer command materializer for the first usable backend slice. */
 class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
 
 public:
+	explicit MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state) :
+		_state(std::move(state)) {}
+
 	struct BufferBinding {
 		id<MTLBuffer> buffer = nil;
 		NSUInteger offset = 0;
+	};
+	struct ImageBinding {
+		vector<id<MTLTexture>> textures;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
 		for (auto& item : _buffers) { [item.second.buffer release]; }
+		for (auto& item : _images) {
+			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
+		}
+		for (auto& item : _computePipelines) { [item.second release]; }
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -360,6 +404,36 @@ public:
 		return true;
 	}
 
+	bool useImage(MVKImage* image) override {
+		if (!image) { return false; }
+		if (_images.count(image)) { return true; }
+		ImageBinding binding;
+		binding.textures.reserve(image->getPlaneCount());
+		for (uint8_t plane = 0; plane < image->getPlaneCount(); plane++) {
+			id<MTLTexture> texture = image->getMTLTexture(plane);
+			if (!texture) {
+				for (id<MTLTexture> retained : binding.textures) { [retained release]; }
+				return false;
+			}
+			binding.textures.push_back([texture retain]);
+			_allocations.push_back((id<MTLAllocation>)texture);
+		}
+		_images.emplace(image, std::move(binding));
+		_needsComputeEncoder = true;
+		return true;
+	}
+
+	bool useComputePipeline(MVKComputePipeline* pipeline) override {
+		if (!pipeline || !pipeline->supportsMetal4DescriptorlessExecution()) { return false; }
+		if (_computePipelines.count(pipeline)) { return true; }
+		id<MTLComputePipelineState> pipelineState = pipeline->getPipelineState();
+		if (!pipelineState) { return false; }
+		_computePipelines.emplace(pipeline, [pipelineState retain]);
+		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		_needsComputeEncoder = true;
+		return true;
+	}
+
 	bool beginEncoding(id<MTL4CommandBuffer> commandBuffer, id<MTLResidencySet> residencySet) {
 		if (!commandBuffer || _commandBuffer) { return false; }
 		_commandBuffer = commandBuffer;
@@ -368,6 +442,122 @@ public:
 			_computeEncoder = [[commandBuffer computeCommandEncoder] retain];
 			if (!_computeEncoder) { return false; }
 		}
+		return true;
+	}
+
+	bool copyImage(MVKImage* srcImage,
+				   uint8_t srcPlane,
+				   const VkImageCopy2& region,
+				   MVKImage* dstImage,
+				   uint8_t dstPlane) override {
+		auto src = _images.find(srcImage);
+		auto dst = _images.find(dstImage);
+		if (!_computeEncoder || src == _images.end() || dst == _images.end() ||
+			srcPlane >= src->second.textures.size() || dstPlane >= dst->second.textures.size()) {
+			return false;
+		}
+
+		id<MTLTexture> srcTexture = src->second.textures[srcPlane];
+		id<MTLTexture> dstTexture = dst->second.textures[dstPlane];
+		uint32_t srcLevel = region.srcSubresource.mipLevel;
+		uint32_t dstLevel = region.dstSubresource.mipLevel;
+		uint32_t srcBaseLayer = region.srcSubresource.baseArrayLayer;
+		uint32_t dstBaseLayer = region.dstSubresource.baseArrayLayer;
+		uint32_t layerCount = region.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS ?
+			srcImage->getLayerCount() - srcBaseLayer : region.srcSubresource.layerCount;
+
+		VkExtent3D srcExtent = srcImage->getExtent3D(srcPlane, srcLevel);
+		VkExtent3D dstExtent = dstImage->getExtent3D(dstPlane, dstLevel);
+		bool src3D = srcImage->getMTLTextureType() == MTLTextureType3D;
+		bool dst3D = dstImage->getMTLTextureType() == MTLTextureType3D;
+		if (mvkVkExtent3DsAreEqual(srcExtent, region.extent) &&
+			mvKVkExtent3DsAreEqual(dstExtent, region.extent) && src3D == dst3D) {
+			[_computeEncoder copyFromTexture:srcTexture
+							 sourceSlice:srcBaseLayer
+							 sourceLevel:srcLevel
+							   toTexture:dstTexture
+					  destinationSlice:dstBaseLayer
+					  destinationLevel:dstLevel
+							 sliceCount:layerCount
+							 levelCount:1];
+			_state->recordImageCopy();
+			return true;
+		}
+
+		MTLOrigin srcOrigin = mvkMTLOriginFromVkOffset3D(region.srcOffset);
+		MTLOrigin dstOrigin = mvKMTLOriginFromVkOffset3D(region.dstOffset);
+		MTLSize copySize = mvkMTLSizeFromVkExtent3D(region.extent);
+		uint32_t iterationCount = layerCount;
+		if (src3D != dst3D) {
+			iterationCount = region.extent.depth;
+			copySize.depth = 1;
+		}
+
+		for (uint32_t layer = 0; layer < iterationCount; layer++) {
+			MTLOrigin layerSrcOrigin = srcOrigin;
+			MTLOrigin layerDstOrigin = dstOrigin;
+			NSUInteger srcSlice = srcBaseLayer + layer;
+			NSUInteger dstSlice = dstBaseLayer + layer;
+			if (src3D && !dst3D) {
+				layerSrcOrigin.z += layer;
+				srcSlice = srcBaseLayer;
+			} else if (!src3D && dst3D) {
+				layerDstOrigin.z += layer;
+				dstSlice = dstBaseLayer;
+			}
+			[_computeEncoder copyFromTexture:srcTexture
+							 sourceSlice:srcSlice
+							 sourceLevel:srcLevel
+							sourceOrigin:layerSrcOrigin
+							  sourceSize:copySize
+							   toTexture:dstTexture
+					  destinationSlice:dstSlice
+					  destinationLevel:dstLevel
+					 destinationOrigin:layerDstOrigin];
+			_state->recordImageCopy();
+		}
+		return true;
+	}
+
+	bool bindComputePipeline(MVKComputePipeline* pipeline) override {
+		auto it = _computePipelines.find(pipeline);
+		if (!_computeEncoder || it == _computePipelines.end()) { return false; }
+		[_computeEncoder setComputePipelineState:it->second];
+		_boundComputePipeline = pipeline;
+		return true;
+	}
+
+	bool dispatchThreadgroups(uint32_t groupCountX,
+							 uint32_t groupCountY,
+							 uint32_t groupCountZ) override {
+		if (!_computeEncoder || !_boundComputePipeline) { return false; }
+		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
+					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
+		_state->recordComputeDispatch();
+		return true;
+	}
+
+	bool pipelineBarrier(VkPipelineStageFlags2 srcStages,
+						 VkAccessFlags2 srcAccess,
+						 VkPipelineStageFlags2 dstStages,
+						 VkAccessFlags2 dstAccess) override {
+		if (!_computeEncoder) { return false; }
+		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
+		MTLStages before = mvKMetal4StagesFromVkPipelineStages(dstStages);
+		if (!after) { after = MTLStageDispatch | MTLStageBlit; }
+		if (!before) { before = MTLStageDispatch | MTLStageBlit; }
+		MTL4VisibilityOptions visibility = MTL4VisibilityOptionNone;
+		VkAccessFlags2 writes = VK_ACCESS_2_MEMORY_WRITE_BIT |
+			VK_ACCESS_2_SHADER_WRITE_BIT |
+			VK_ACCESS_2_TRANSFER_WRITE_BIT |
+			VK_ACCESS_2_HOST_WRITE_BIT;
+		if (mvkIsAnyFlagEnabled(srcAccess | dstAccess, writes)) {
+			visibility |= MTL4VisibilityOptionDevice;
+		}
+		[_computeEncoder barrierAfterEncoderStages:after
+						 beforeEncoderStages:before
+						   visibilityOptions:visibility];
+		_state->recordBarrier();
 		return true;
 	}
 
@@ -384,6 +574,7 @@ public:
 							 toBuffer:dst->second.buffer
 					destinationOffset:(dst->second.offset + (NSUInteger)dstOffset)
 								 size:(NSUInteger)size];
+		_state->recordBufferCopy();
 		return true;
 	}
 
@@ -397,6 +588,7 @@ public:
 						  range:NSMakeRange(dst->second.offset + (NSUInteger)dstOffset,
 											 (NSUInteger)size)
 						  value:value];
+		_state->recordBufferFill();
 		return true;
 	}
 
@@ -410,10 +602,14 @@ public:
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
 
 private:
+	shared_ptr<MVKMetal4CommandQueueState> _state;
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
+	unordered_map<MVKImage*, ImageBinding> _images;
+	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	vector<id<MTLAllocation>> _allocations;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
+	MVKComputePipeline* _boundComputePipeline = nullptr;
 	bool _needsComputeEncoder = false;
 };
 
@@ -1112,6 +1308,17 @@ MVKQueue::~MVKQueue() {
 	_device->removeResidencySet(_mtlQueue);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (_metal4CommandState) {
+		_device->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command backend summary: real_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, barriers=%llu.",
+			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->fallbackCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->failureCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferCopyCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferFillCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->imageCopyCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed));
 		_metal4CommandState->shutdown();
 		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
 		if (_mtl4Queue && residencySet) { [_mtl4Queue removeResidencySet:residencySet]; }
@@ -1311,7 +1518,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		return VK_SUCCESS;
 	}
 
-	MVKMetal4TransferCommandEncoder encoder;
+	MVKMetal4TransferCommandEncoder encoder(state);
 	if (!prepareMetal4CommandBuffers(&encoder)) {
 		state->recordFallback();
 		return VK_SUCCESS;

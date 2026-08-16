@@ -25,6 +25,8 @@ class MVKBuffer;
 class MVKCommandBuffer;
 class MVKCommandEncoder;
 class MVKCommandPool;
+class MVKComputePipeline;
+class MVKImage;
 
 
 #pragma mark -
@@ -44,6 +46,12 @@ public:
 	/** Registers a buffer and its underlying Metal allocation before execution is claimed. */
 	virtual bool useBuffer(MVKBuffer* buffer) = 0;
 
+	/** Registers an image and its underlying Metal texture before execution is claimed. */
+	virtual bool useImage(MVKImage* image) = 0;
+
+	/** Registers a compute pipeline before execution is claimed. */
+	virtual bool useComputePipeline(MVKComputePipeline* pipeline) = 0;
+
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,
 							MVKBuffer* dstBuffer,
@@ -54,6 +62,23 @@ public:
 							VkDeviceSize dstOffset,
 							VkDeviceSize size,
 							uint8_t value) = 0;
+
+	virtual bool copyImage(MVKImage* srcImage,
+						   uint8_t srcPlane,
+						   const VkImageCopy2& region,
+						   MVKImage* dstImage,
+						   uint8_t dstPlane) = 0;
+
+	virtual bool bindComputePipeline(MVKComputePipeline* pipeline) = 0;
+
+	virtual bool dispatchThreadgroups(uint32_t groupCountX,
+								 uint32_t groupCountY,
+								 uint32_t groupCountZ) = 0;
+
+	virtual bool pipelineBarrier(VkPipelineStageFlags2 srcStages,
+								 VkAccessFlags2 srcAccess,
+								 VkPipelineStageFlags2 dstStages,
+								 VkAccessFlags2 dstAccess) = 0;
 };
 
 

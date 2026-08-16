@@ -526,6 +526,16 @@ public:
 	/** Returns the threadgroup size */
 	const MTLSize& getThreadgroupSize() const { return _mtlThreadgroupSize; }
 
+	/**
+	 * Returns whether this compute pipeline can execute on the first Metal 4
+	 * command backend without descriptor or implicit-buffer materialization.
+	 */
+	bool supportsMetal4DescriptorlessExecution() const {
+		return _mtlPipelineState &&
+			_stageResources.resources.allBits.areAllBitsClear() &&
+			_stageResources.implicitBuffers.needed.empty();
+	}
+
 	/** Constructs an instance for the device and parent (which may be NULL). */
 	MVKComputePipeline(MVKDevice* device,
 					   MVKPipelineCache* pipelineCache,

@@ -1,0 +1,28 @@
+name: Metal 4 current source snapshot
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/metal4-current-source-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package checkout
+        run: |
+          tar --exclude=.git -czf "$RUNNER_TEMP/source.tar.gz" .
+          git rev-parse HEAD > "$RUNNER_TEMP/EXACT_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metal4-source-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/source.tar.gz
+            ${{ runner.temp }}/EXACT_SHA
+          retention-days: 1

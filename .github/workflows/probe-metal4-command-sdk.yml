@@ -1,4 +1,4 @@
-name: Probe Metal 4 command SDK
+name: Generate Metal 4 render smoke shaders
 
 on:
   push:
@@ -6,46 +6,45 @@ on:
       - metal4/sdk-command-probe
 
 jobs:
-  probe:
+  shaders:
     runs-on: macos-26
     steps:
-      - name: Print focused Metal 4 render signatures
+      - name: Install glslang
+        run: brew install glslang
+
+      - name: Compile and print SPIR-V arrays
         shell: bash
         run: |
           set -euo pipefail
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          H="$SDK/System/Library/Frameworks/Metal.framework/Headers"
-          xcodebuild -version
-          echo "SDK=$SDK"
-
-          for pattern in \
-            'drawPrimitives:' \
-            'drawIndexedPrimitives:' \
-            'setRenderPipelineState:' \
-            'setArgumentTable:' \
-            'setViewport:' \
-            'setScissorRect:' \
-            'setCullMode:' \
-            'setFrontFacingWinding:' \
-            'setTriangleFillMode:' \
-            'endEncoding'; do
-            echo "===== MTL4RenderCommandEncoder $pattern ====="
-            grep -n -B 6 -A 18 -- "$pattern" "$H/MTL4RenderCommandEncoder.h" || true
-          done
-
-          for pattern in \
-            '@interface MTL4RenderPassDescriptor' \
-            '@interface MTL4RenderPassColorAttachmentDescriptor' \
-            'colorAttachments' \
-            'renderTargetWidth' \
-            'renderTargetHeight' \
-            'renderTargetArrayLength' \
-            '@property.*texture' \
-            '@property.*level' \
-            '@property.*slice' \
-            '@property.*loadAction' \
-            '@property.*storeAction' \
-            '@property.*clearColor'; do
-            echo "===== MTL4RenderPass $pattern ====="
-            grep -n -B 6 -A 18 -E -- "$pattern" "$H/MTL4RenderPass.h" || true
-          done
+          cat > /tmp/metal4-triangle.vert <<'GLSL'
+          #version 450
+          vec2 positions[3] = vec2[](
+              vec2(-0.75, -0.75),
+              vec2( 0.75, -0.75),
+              vec2( 0.00,  0.75)
+          );
+          void main() {
+              gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+          }
+          GLSL
+          cat > /tmp/metal4-triangle.frag <<'GLSL'
+          #version 450
+          layout(location = 0) out vec4 outColor;
+          void main() {
+              outColor = vec4(0.125, 0.5, 0.875, 1.0);
+          }
+          GLSL
+          glslangValidator -V /tmp/metal4-triangle.vert -o /tmp/metal4-triangle.vert.spv
+          glslangValidator -V /tmp/metal4-triangle.frag -o /tmp/metal4-triangle.frag.spv
+          python3 - <<'PY'
+          import struct
+          for label, path in (
+              ('VERTEX', '/tmp/metal4-triangle.vert.spv'),
+              ('FRAGMENT', '/tmp/metal4-triangle.frag.spv'),
+          ):
+              data = open(path, 'rb').read()
+              words = struct.unpack('<%dI' % (len(data) // 4), data)
+              print(f'===== {label} {len(words)} words =====')
+              for index in range(0, len(words), 8):
+                  print('    ' + ', '.join(f'0x{word:08x}' for word in words[index:index+8]) + ',')
+          PY

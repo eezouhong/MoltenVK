@@ -108,7 +108,7 @@ def main() -> int:
             f"runtime selector check is missing: {selector}",
         )
     require(
-        queue_mm,
+        queue_h,
         r"id<MTL4CommandQueue>\s+_mtl4Queue",
         "queue-owned MTL4CommandQueue is missing",
     )

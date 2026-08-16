@@ -253,12 +253,6 @@ public:
 		[_queue release];
 	}
 
-	void setLabel(const string& label) {
-		if (@available(macOS 26.0, iOS 26.0, *)) {
-			_queue.label = label.empty() ? nil : [NSString stringWithUTF8String:label.c_str()];
-		}
-	}
-
 private:
 	struct AllocatorSlot {
 		id<MTL4CommandAllocator> allocator = nil;
@@ -438,11 +432,6 @@ MVKQueueFamily::~MVKQueueFamily() {
 
 void MVKQueue::propagateDebugName() {
 	setMetalObjectLabel(_mtlQueue, _debugName);
-#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	if (_metal4CommandTransport) {
-		_metal4CommandTransport->setLabel(_debugName.empty() ? _name : _debugName);
-	}
-#endif
 }
 
 

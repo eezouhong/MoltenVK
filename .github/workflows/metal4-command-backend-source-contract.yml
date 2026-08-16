@@ -1,0 +1,32 @@
+name: Metal 4 Command Backend Source Contract
+
+on:
+  push:
+    paths:
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.h"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm"
+      - "MoltenVK/MoltenVK/Utility/MVKConfigMembers.def"
+      - "Scripts/test-metal4-command-backend-phase1.py"
+      - ".github/workflows/metal4-command-backend-source-contract.yml"
+  pull_request:
+    paths:
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.h"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm"
+      - "MoltenVK/MoltenVK/Utility/MVKConfigMembers.def"
+      - "Scripts/test-metal4-command-backend-phase1.py"
+      - ".github/workflows/metal4-command-backend-source-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify safe Phase 1A boundary
+        run: python3 Scripts/test-metal4-command-backend-phase1.py

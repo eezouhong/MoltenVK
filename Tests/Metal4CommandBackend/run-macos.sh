@@ -22,9 +22,12 @@ print_diagnostics() {
 }
 trap print_diagnostics EXIT
 
-DYLIB="$(find "${ROOT}/Package" -path '*/dynamic/dylib/macOS/libMoltenVK.dylib' -print | head -n 1)"
+# Current packages place the dylib inside MoltenVK.xcframework. Keep the lookup
+# independent of the XCFramework slice directory name and architecture spelling.
+DYLIB="$(find "${ROOT}/Package" -type f -name 'libMoltenVK.dylib' -print | head -n 1)"
 if [[ -z "${DYLIB}" ]]; then
   echo "libMoltenVK.dylib was not produced by the package build" >&2
+  find "${ROOT}/Package" -maxdepth 6 -type f -print >&2 || true
   exit 1
 fi
 DYLIB_DIR="$(dirname "${DYLIB}")"

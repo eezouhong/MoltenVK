@@ -1,0 +1,74 @@
+name: Metal 4 Command Backend E2E
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - "MoltenVK/MoltenVK/Commands/**"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.*"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKSync.*"
+      - "Scripts/test-metal4-command-backend-phase1.py"
+      - "Tests/Metal4CommandBackend/**"
+      - ".github/workflows/metal4-command-backend-e2e.yml"
+  pull_request:
+    paths:
+      - "MoltenVK/MoltenVK/Commands/**"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKQueue.*"
+      - "MoltenVK/MoltenVK/GPUObjects/MVKSync.*"
+      - "Scripts/test-metal4-command-backend-phase1.py"
+      - "Tests/Metal4CommandBackend/**"
+      - ".github/workflows/metal4-command-backend-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.platform == 'macos' && 'macOS build + Vulkan E2E' || 'iOS device build' }}
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, ios]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run source contracts
+        run: |
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          git diff --check
+
+      - name: Fetch ${{ matrix.platform }} dependencies
+        run: ./fetchDependencies -v --${{ matrix.platform }}
+
+      - name: Build ${{ matrix.platform }} package
+        run: make ${{ matrix.platform }}
+
+      - name: Run independent Vulkan transfer E2E
+        if: matrix.platform == 'macos'
+        run: Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal4-command-backend-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            xcodebuild.log
+            dependenciesbuild.log
+            build/metal4-command-backend-e2e/*.log
+          if-no-files-found: ignore
+          retention-days: 7

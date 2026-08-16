@@ -62,7 +62,12 @@ MVKQueueFamily::~MVKQueueFamily() {
 #pragma mark -
 #pragma mark MVKQueue
 
-void MVKQueue::propagateDebugName() { setMetalObjectLabel(_mtlQueue, _debugName); }
+void MVKQueue::propagateDebugName() {
+	setMetalObjectLabel(_mtlQueue, _debugName);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (_mtl4Queue) { _mtl4Queue.label = _debugName; }
+#endif
+}
 
 
 #pragma mark Queue submissions
@@ -291,6 +296,7 @@ MVKQueue::MVKQueue(MVKDevice* device, MVKQueueFamily* queueFamily, uint32_t inde
 	initName();
 	initExecQueue();
 	initMTLCommandQueue();
+	initMTL4CommandQueue();
 }
 
 void MVKQueue::initName() {
@@ -339,10 +345,104 @@ void MVKQueue::initMTLCommandQueue() {
 	_submissionCaptureScope->beginScope();	// Allow Xcode to capture the first frame if desired.
 }
 
+bool MVKQueue::validateMTL4CommandObjects() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		id<MTLDevice> mtlDevice = getMTLDevice();
+		id<MTL4CommandAllocator> allocator = [mtlDevice newCommandAllocator];
+		id<MTL4CommandBuffer> commandBuffer = [mtlDevice newCommandBuffer];
+		bool valid = allocator && commandBuffer;
+		if (valid) {
+			commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 command object probe", getName().c_str()];
+			[commandBuffer beginCommandBufferWithAllocator:allocator];
+			[commandBuffer endCommandBuffer];
+		}
+		[commandBuffer release];
+		[allocator release];
+		return valid;
+	}
+#endif
+	return false;
+}
+
+// Creates the independent Metal 4 queue and validates allocator/command-buffer lifecycle.
+// Phase 1 deliberately leaves Vulkan submission, semaphore, present, and completion handling
+// on the existing legacy queue until the full submission context is available.
+void MVKQueue::initMTL4CommandQueue() {
+	_metal4CommandBackendRequested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_BACKEND", 0.0) != 0.0;
+	if (!_metal4CommandBackendRequested) { return; }
+
+#if MVK_USE_METAL_PRIVATE_API
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend probe disabled in Metal private-API builds.");
+	return;
+#endif
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (getMVKConfig().useMetalPrivateAPI) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend probe disabled because Metal private APIs are active.");
+		return;
+	}
+	if (!getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4 ||
+		!mvkOSVersionIsAtLeast(26.0)) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend probe requested but unavailable on this OS or GPU.");
+		return;
+	}
+	if (!getMetalFeatures().residencySets) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend probe requested but residency sets are unavailable.");
+		return;
+	}
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		id<MTLDevice> mtlDevice = getMTLDevice();
+		if (![mtlDevice respondsToSelector:@selector(newMTL4CommandQueue)] ||
+			![mtlDevice respondsToSelector:@selector(newCommandAllocator)] ||
+			![mtlDevice respondsToSelector:@selector(newCommandBuffer)]) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command backend probe requested but command object creation selectors are unavailable.");
+			return;
+		}
+
+		_mtl4Queue = [mtlDevice newMTL4CommandQueue];
+		if (!_mtl4Queue) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Could not create the Metal 4 command queue for Vulkan queue %u-%u.",
+							  _queueFamily->getIndex(), _index);
+			return;
+		}
+		_mtl4Queue.label = [NSString stringWithFormat:@"%s MTL4CommandQueue", getName().c_str()];
+
+		if (!validateMTL4CommandObjects()) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command queue was created, but allocator/command-buffer validation failed for Vulkan queue %u-%u; retaining the legacy backend.",
+							  _queueFamily->getIndex(), _index);
+			[_mtl4Queue release];
+			_mtl4Queue = nil;
+			return;
+		}
+
+		_metal4CommandBackendReady = true;
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command objects ready for Vulkan queue %u-%u; Phase 1 keeps all Vulkan submissions on the legacy Metal queue.",
+						  _queueFamily->getIndex(), _index);
+		return;
+	}
+#endif
+
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+					  "Metal 4 command backend probe requested but excluded from this MoltenVK target.");
+}
+
 MVKQueue::~MVKQueue() {
 	destroyExecQueue();
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	[_mtl4Queue release];
+#endif
 
 	[_mtlCmdBuffLabelBeginCommandBuffer release];
 	[_mtlCmdBuffLabelQueueSubmit release];
@@ -794,7 +894,7 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 				pPresentModeInfo = (const VkSwapchainPresentModeInfoKHR*) next;
 				break;
 			case VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE:
-				pPresentTimesInfo = (const VkPresentTimesInfoGOOGLE*) next;
+				pPresentTimesInfo = (VkPresentTimesInfoGOOGLE*) next;
 				break;
 			default:
 				break;

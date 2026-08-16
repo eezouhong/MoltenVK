@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run the exact same Vulkan binary with the command backend disabled and enabled;
-# only MoltenVK's internal backend selection is allowed to change between runs.
+# Exact-SHA Phase 1C gate: run the same Vulkan binary with the command backend
+# disabled and enabled; only MoltenVK's internal backend selection may differ.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${ROOT}/build/metal4-command-backend-e2e"
 mkdir -p "${BUILD_DIR}"

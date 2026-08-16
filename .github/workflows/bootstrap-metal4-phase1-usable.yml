@@ -1,5 +1,6 @@
 name: Apply usable Metal 4 Phase 1
 
+# Retry after adding the independent Vulkan E2E fixtures.
 on:
   push:
     branches:

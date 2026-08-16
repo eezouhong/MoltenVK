@@ -9,30 +9,28 @@ jobs:
   probe:
     runs-on: macos-26
     steps:
-      - name: Locate SDK and headers
+      - name: Print exact SDK command signatures
         shell: bash
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          HEADERS="$SDK/System/Library/Frameworks/Metal.framework/Headers"
+          H="$SDK/System/Library/Frameworks/Metal.framework/Headers"
           echo "SDK=$SDK"
           xcodebuild -version
-          find "$HEADERS" -maxdepth 1 -type f | sort | grep -E 'MTL4|Metal\.h' || true
 
-          for file in \
-            MTL4CommandQueue.h \
-            MTL4CommandBuffer.h \
-            MTL4CommandEncoder.h \
-            MTL4ComputeCommandEncoder.h \
-            MTL4RenderCommandEncoder.h \
-            MTL4ArgumentTable.h \
-            MTLResidencySet.h \
-            MTL4Counters.h; do
-            path="$HEADERS/$file"
-            echo "===== $file ====="
-            if [[ -f "$path" ]]; then
-              grep -nE '@protocol|@interface|typedef NS_ENUM|typedef NS_OPTIONS|newCommand|beginCommand|endCommand|commit|feedback|computeCommandEncoder|renderCommandEncoder|copyFrom|fillBuffer|clear|resolve|barrier|waitForEvent|signalEvent|ArgumentTable|argumentTable|Residency|residency|PipelineState|dispatch|draw|useResource|useHeap|set[A-Z]|encode[A-Z]' "$path" || true
-            else
-              echo "missing"
-            fi
-          done
+          print_range() {
+            local file="$1"
+            local range="$2"
+            echo "===== $file $range ====="
+            sed -n "$range" "$H/$file"
+          }
+
+          print_range MTL4CommandAllocator.h '1,220p'
+          print_range MTL4CommandQueue.h '45,365p'
+          print_range MTL4CommitFeedback.h '1,220p'
+          print_range MTL4CommandBuffer.h '25,225p'
+          print_range MTL4CommandEncoder.h '1,145p'
+          print_range MTL4ComputeCommandEncoder.h '300,485p'
+          print_range MTL4ComputeCommandEncoder.h '550,590p'
+          print_range MTL4ArgumentTable.h '1,155p'
+          print_range MTLDevice.h '1420,1580p'

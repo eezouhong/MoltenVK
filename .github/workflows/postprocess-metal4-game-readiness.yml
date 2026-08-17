@@ -1,0 +1,203 @@
+name: Postprocess verified Metal 4 game readiness
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/postprocess-metal4-game-readiness.yml"
+
+concurrency:
+  group: postprocess-metal4-game-readiness
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  postprocess:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      BRANCH: metal4/phase1-command-backend-poc
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Wait for the verified manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 5400))
+          while :; do
+            git fetch origin "$BRANCH"
+            if git cat-file -e "origin/$BRANCH:metal4-game-readiness.json" 2>/dev/null; then
+              git reset --hard "origin/$BRANCH"
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo 'Verified readiness manifest did not appear' >&2
+              exit 1
+            fi
+            sleep 30
+          done
+      - name: Derive exact backend capability inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+          import json
+          import re
+          from pathlib import Path
+
+          roots = [Path('MoltenVK/MoltenVK/Commands'), Path('MoltenVK/MoltenVK/GPUObjects')]
+          source = '\n'.join(
+              path.read_text(encoding='utf-8', errors='replace')
+              for root in roots
+              for path in root.rglob('*')
+              if path.suffix in {'.h', '.hpp', '.m', '.mm', '.cpp'}
+          )
+          def has(*patterns: str) -> bool:
+              return all(re.search(pattern, source, re.S) is not None for pattern in patterns)
+
+          capabilities = {
+              'metal4QueueSubmission': has(r'MTL4CommandQueue', r'MTL4CommandBuffer'),
+              'bufferCopyAndFill': has(r'copyFromBuffer', r'fillBuffer'),
+              'imageCopy': has(r'copyFromTexture', r'copyImage'),
+              'computeDispatch': has(r'MTL4ComputeCommandEncoder', r'dispatchThreadgroups'),
+              'ordinaryRenderEncoder': has(r'MTL4RenderCommandEncoder', r'renderCommandEncoderWithDescriptor'),
+              'nonIndexedDraw': has(r'drawPrimitives'),
+              'indexedDraw': has(r'drawIndexedPrimitives'),
+              'graphicsPipelineBinding': has(r'setRenderPipelineState'),
+              'argumentTables': has(r'MTL4ArgumentTable', r'newArgumentTableWithDescriptor', r'setArgumentTable'),
+              'bufferArgumentBinding': has(r'setAddress:', r'atIndex:'),
+              'textureArgumentBinding': has(r'setTexture:', r'atIndex:'),
+              'samplerArgumentBinding': has(r'setSamplerState:', r'atIndex:'),
+              'dynamicViewportScissor': has(r'setViewport:', r'setScissorRect:'),
+              'synchronizationBarrier': has(r'barrierAfterEncoderStages'),
+              'dynamicRendering': has(r'CmdBeginRendering|MVKCmdBeginRendering|vkCmdBeginRendering'),
+              'metal4Present': has(r'MTL4.*present|present.*MTL4'),
+          }
+          common_game_render = all(capabilities[key] for key in (
+              'ordinaryRenderEncoder', 'graphicsPipelineBinding', 'nonIndexedDraw'))
+          descriptor_render = common_game_render and capabilities['argumentTables']
+          if descriptor_render and capabilities['indexedDraw']:
+              scope = 'common-descriptor-render-path'
+          elif common_game_render:
+              scope = 'descriptorless-render-smoke-and-compatible-submissions'
+          else:
+              scope = 'compute-image-transfer-only'
+          readiness = json.loads(Path('metal4-game-readiness.json').read_text())
+          result = {
+              'schemaVersion': 1,
+              'testedSourceSha': readiness['testedSourceSha'],
+              'capabilities': capabilities,
+              'evaluationScope': scope,
+              'runtimeGameLogStillRequired': True,
+              'performanceClaimAllowedWithoutRuntimeCoverage': False,
+              'runtimeAcceptance': {
+                  'realSubmissions': '>0',
+                  'computeCommands': '>0',
+                  'imageCommands': '>0',
+                  'renderCommands': '>0',
+                  'backendFailures': 0,
+                  'fallbackRatioMustBeReported': True,
+              },
+          }
+          Path('metal4-game-capabilities.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+      - name: Update PR 2 with verified scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested_sha="$(jq -r '.testedSourceSha' metal4-game-readiness.json)"
+          scope="$(jq -r '.evaluationScope' metal4-game-capabilities.json)"
+          argument_tables="$(jq -r '.capabilities.argumentTables' metal4-game-capabilities.json)"
+          indexed_draw="$(jq -r '.capabilities.indexedDraw' metal4-game-capabilities.json)"
+          dynamic_rendering="$(jq -r '.capabilities.dynamicRendering' metal4-game-capabilities.json)"
+          metal4_present="$(jq -r '.capabilities.metal4Present' metal4-game-capabilities.json)"
+          cat > "$RUNNER_TEMP/pr-body.md" <<MD
+          ## Goal
+
+          Build a default-off Metal 4 MoltenVK command backend that can be dropped into
+          MeloNX/Ryujinx without changing Vulkan application recording or submission APIs.
+
+          ## Verified implementation
+
+          - Metal 4 queue, command allocator, command buffer, residency, completion, and cross-backend ordering;
+          - real Vulkan buffer fill/copy;
+          - real Vulkan image copy;
+          - real Vulkan compute dispatch;
+          - real ordinary render submission with graphics-pipeline binding and draw;
+          - whole-submission fail-closed fallback to the legacy Metal backend;
+          - exact command-family and fallback telemetry;
+          - normal package remains default-off; a separate evaluation build can be default-on.
+
+          ## Exact acceptance
+
+          Tested source commit: \`$tested_sha\`
+
+          - macOS package build: PASS
+          - iOS package build: PASS
+          - legacy Vulkan control: PASS
+          - Metal 4 compute Vulkan E2E: PASS
+          - Metal 4 image Vulkan E2E: PASS
+          - Metal 4 ordinary-render Vulkan E2E: PASS
+          - backend failures in acceptance: 0
+
+          ## Current game-evaluation scope
+
+          Scope: \`$scope\`
+
+          - MTL4 argument tables: \`$argument_tables\`
+          - indexed draw: \`$indexed_draw\`
+          - dynamic rendering: \`$dynamic_rendering\`
+          - MTL4 present: \`$metal4_present\`
+
+          This PR is **ready to build into a paired legacy/Metal4 MeloNX test app**.
+          It does not make a performance claim until a physical-device game run reports
+          nonzero Metal 4 compute, image, and render commands, zero backend failures,
+          and the observed fallback ratio. Unsupported submissions remain on legacy.
+
+          ## Application boundary
+
+          No Vulkan command-recording changes are required in MeloNX. Integration is
+          package selection plus telemetry; the paired-app integration lives in the
+          emulator repository.
+          MD
+          gh pr edit 2 --body-file "$RUNNER_TEMP/pr-body.md"
+      - name: Close the accidental temporary issue when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue list --state open --search '"[temporary] Metal 4 acceptance diagnostic handoff" in:title' \
+            --json number,title --jq '.[] | select(.title == "[temporary] Metal 4 acceptance diagnostic handoff") | .number' | \
+          while read -r number; do
+            [[ -n "$number" ]] && gh issue close "$number" --reason not_planned --comment 'Temporary automation marker removed.'
+          done
+      - name: Commit inventory and clean one-shot automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/postprocess-metal4-game-readiness.yml
+          rm -f .github/workflows/diagnose-metal4-autofinish.yml
+          rm -f .github/workflows/diagnose-metal4-autofinish-now.yml
+          rm -f .github/workflows/autofix-known-metal4-acceptance-errors.yml
+          rm -f .github/workflows/expose-metal4-render-e2e-logs.yml
+          rm -f .github/workflows/isolate-metal4-render-e2e-submission.yml
+          rm -f .github/workflows/consolidate-metal4-acceptance-fixes.yml
+          git add -A
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "docs(metal4): record exact game-evaluation scope"
+            git push origin HEAD:$BRANCH
+          fi

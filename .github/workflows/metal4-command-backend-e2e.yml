@@ -57,9 +57,9 @@ jobs:
       - name: Build ${{ matrix.platform }} package
         run: make ${{ matrix.platform }}
 
-      - name: Run independent Vulkan transfer E2E
+      - name: Run independent Vulkan Phase 1C E2E
         if: matrix.platform == 'macos'
-        run: Tests/Metal4CommandBackend/run-macos.sh
+        run: bash Tests/Metal4CommandBackend/run-macos.sh
 
       - name: Upload diagnostics
         if: always()

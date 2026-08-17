@@ -1,0 +1,42 @@
+name: Fix Metal 4 mixed bitsets
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - .github/workflows/fix-metal4-mixed-bitsets.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply exact type-specific repair
+        run: python3 Scripts/fix-metal4-mixed-bitsets.py
+
+      - name: Validate source contracts
+        run: |
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          git diff --check
+
+      - name: Commit source repair
+        run: |
+          git add \
+            MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h \
+            Scripts/test-metal4-command-backend-phase1.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(metal4): use type-correct pipeline bitset predicates"
+          git push origin HEAD:metal4/phase1-command-backend-poc

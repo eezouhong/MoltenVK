@@ -22,6 +22,13 @@ void check(VkResult result, const char* operation) {
     }
 }
 
+template <typename T>
+T makeVkStruct(VkStructureType sType) {
+    T value{};
+    value.sType = sType;
+    return value;
+}
+
 bool hasExtension(const std::vector<VkExtensionProperties>& extensions, const char* name) {
     return std::any_of(extensions.begin(), extensions.end(), [name](const auto& extension) {
         return std::strcmp(extension.extensionName, name) == 0;
@@ -134,7 +141,7 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
     result.device = device;
     result.size = size;
 
-    VkBufferCreateInfo createInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    VkBufferCreateInfo createInfo = makeVkStruct<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
     createInfo.size = size;
     createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -153,7 +160,7 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         &coherent);
 
-    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryAllocateInfo allocateInfo = makeVkStruct<VkMemoryAllocateInfo>(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
     allocateInfo.allocationSize = requirements.size;
     allocateInfo.memoryTypeIndex = memoryType;
     check(vkAllocateMemory(device, &allocateInfo, nullptr, &result.memory), "vkAllocateMemory");
@@ -172,7 +179,7 @@ Image createImage(VkPhysicalDevice physicalDevice,
     result.width = width;
     result.height = height;
 
-    VkImageCreateInfo createInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    VkImageCreateInfo createInfo = makeVkStruct<VkImageCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
     createInfo.imageType = VK_IMAGE_TYPE_2D;
     createInfo.format = result.format;
     createInfo.extent = {width, height, 1};
@@ -197,13 +204,13 @@ Image createImage(VkPhysicalDevice physicalDevice,
         0,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         nullptr);
-    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryAllocateInfo allocateInfo = makeVkStruct<VkMemoryAllocateInfo>(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
     allocateInfo.allocationSize = requirements.size;
     allocateInfo.memoryTypeIndex = memoryType;
     check(vkAllocateMemory(device, &allocateInfo, nullptr, &result.memory), "vkAllocateMemory(image)");
     check(vkBindImageMemory(device, result.image, result.memory, 0), "vkBindImageMemory");
 
-    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    VkImageViewCreateInfo viewInfo = makeVkStruct<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
     viewInfo.image = result.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = result.format;
@@ -217,14 +224,14 @@ Image createImage(VkPhysicalDevice physicalDevice,
 }
 
 VkCommandBuffer beginCommandBuffer(VkDevice device, VkCommandPool commandPool) {
-    VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    VkCommandBufferAllocateInfo allocateInfo = makeVkStruct<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
     allocateInfo.commandPool = commandPool;
     allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocateInfo.commandBufferCount = 1;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     check(vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer), "vkAllocateCommandBuffers");
 
-    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkCommandBufferBeginInfo beginInfo = makeVkStruct<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer");
     return commandBuffer;
@@ -235,7 +242,7 @@ void endCommandBuffer(VkCommandBuffer commandBuffer) {
 }
 
 VkFence createFence(VkDevice device) {
-    VkFenceCreateInfo createInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFenceCreateInfo createInfo = makeVkStruct<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
     VkFence fence = VK_NULL_HANDLE;
     check(vkCreateFence(device, &createInfo, nullptr, &fence), "vkCreateFence");
     return fence;
@@ -249,7 +256,7 @@ void validateRepeatedByte(VkDevice device, Buffer& buffer, uint8_t expected) {
     void* mapped = nullptr;
     check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped), "vkMapMemory");
     if (!buffer.coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
         range.memory = buffer.memory;
         range.offset = 0;
         range.size = VK_WHOLE_SIZE;
@@ -274,7 +281,7 @@ void writeBytes(VkDevice device, Buffer& buffer, const std::vector<uint8_t>& byt
     check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped), "vkMapMemory(write)");
     std::memcpy(mapped, bytes.data(), bytes.size());
     if (!buffer.coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
         range.memory = buffer.memory;
         range.offset = 0;
         range.size = VK_WHOLE_SIZE;
@@ -287,7 +294,7 @@ void validateBytes(VkDevice device, Buffer& buffer, const std::vector<uint8_t>& 
     void* mapped = nullptr;
     check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped), "vkMapMemory(validate)");
     if (!buffer.coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
         range.memory = buffer.memory;
         range.offset = 0;
         range.size = VK_WHOLE_SIZE;
@@ -308,7 +315,7 @@ void validateSolidColor(VkDevice device,
     check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
           "vkMapMemory(validate solid color)");
     if (!buffer.coherent) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
         range.memory = buffer.memory;
         range.offset = 0;
         range.size = VK_WHOLE_SIZE;
@@ -340,7 +347,7 @@ void imageBarrier(VkCommandBuffer commandBuffer,
                   VkAccessFlags dstAccess,
                   VkPipelineStageFlags srcStage,
                   VkPipelineStageFlags dstStage) {
-    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    VkImageMemoryBarrier barrier = makeVkStruct<VkImageMemoryBarrier>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
     barrier.srcAccessMask = srcAccess;
     barrier.dstAccessMask = dstAccess;
     barrier.oldLayout = oldLayout;
@@ -372,7 +379,7 @@ VkShaderModule createDescriptorlessComputeShader(VkDevice device) {
         0x000100fd,
         0x00010038,
     };
-    VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModuleCreateInfo createInfo = makeVkStruct<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
     createInfo.codeSize = sizeof(code);
     createInfo.pCode = code;
     VkShaderModule module = VK_NULL_HANDLE;
@@ -453,7 +460,7 @@ VkShaderModule createShaderModule(VkDevice device,
                                   const uint32_t* code,
                                   size_t codeSize,
                                   const char* operation) {
-    VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModuleCreateInfo createInfo = makeVkStruct<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
     createInfo.codeSize = codeSize;
     createInfo.pCode = code;
     VkShaderModule module = VK_NULL_HANDLE;
@@ -481,11 +488,11 @@ int main() {
             instanceFlags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
         }
 
-        VkApplicationInfo applicationInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        VkApplicationInfo applicationInfo = makeVkStruct<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
         applicationInfo.pApplicationName = "MoltenVK Metal 4 Phase 1C e2e";
         applicationInfo.apiVersion = VK_API_VERSION_1_3;
 
-        VkInstanceCreateInfo instanceCreateInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+        VkInstanceCreateInfo instanceCreateInfo = makeVkStruct<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
         instanceCreateInfo.flags = instanceFlags;
         instanceCreateInfo.pApplicationInfo = &applicationInfo;
         instanceCreateInfo.enabledExtensionCount =
@@ -539,17 +546,15 @@ int main() {
         }
 
         float priority = 1.0f;
-        VkDeviceQueueCreateInfo queueCreateInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        VkDeviceQueueCreateInfo queueCreateInfo = makeVkStruct<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
         queueCreateInfo.queueFamilyIndex = queueFamilyIndex;
         queueCreateInfo.queueCount = 1;
         queueCreateInfo.pQueuePriorities = &priority;
 
-        VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
-        VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeatures{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES};
+        VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures = makeVkStruct<VkPhysicalDeviceDynamicRenderingFeatures>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES);
+        VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeatures = makeVkStruct<VkPhysicalDeviceTimelineSemaphoreFeatures>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES);
         timelineFeatures.pNext = &dynamicRenderingFeatures;
-        VkPhysicalDeviceFeatures2 supportedFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceFeatures2 supportedFeatures = makeVkStruct<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
         supportedFeatures.pNext = &timelineFeatures;
         vkGetPhysicalDeviceFeatures2(physicalDevice, &supportedFeatures);
         if (!timelineFeatures.timelineSemaphore) { fail("Timeline semaphores are unavailable"); }
@@ -557,7 +562,7 @@ int main() {
         timelineFeatures.timelineSemaphore = VK_TRUE;
         dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
 
-        VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        VkDeviceCreateInfo deviceCreateInfo = makeVkStruct<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
         deviceCreateInfo.pNext = &timelineFeatures;
         deviceCreateInfo.queueCreateInfoCount = 1;
         deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
@@ -571,7 +576,7 @@ int main() {
         VkQueue queue = VK_NULL_HANDLE;
         vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
 
-        VkCommandPoolCreateInfo poolCreateInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        VkCommandPoolCreateInfo poolCreateInfo = makeVkStruct<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
         poolCreateInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         poolCreateInfo.queueFamilyIndex = queueFamilyIndex;
         VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -590,7 +595,7 @@ int main() {
         endCommandBuffer(fillA);
 
         VkCommandBuffer fallbackCopy = beginCommandBuffer(device, commandPool);
-        VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        VkBufferMemoryBarrier barrier = makeVkStruct<VkBufferMemoryBarrier>(VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -640,17 +645,17 @@ int main() {
         vkCmdCopyBuffer(copyWithSemaphore, a.buffer, c.buffer, 1, &copyRegion);
         endCommandBuffer(copyWithSemaphore);
 
-        VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        VkSemaphoreCreateInfo semaphoreCreateInfo = makeVkStruct<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
         VkSemaphore semaphore = VK_NULL_HANDLE;
         check(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore),
               "vkCreateSemaphore");
-        VkSubmitInfo signalSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        VkSubmitInfo signalSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         signalSubmit.commandBufferCount = 1;
         signalSubmit.pCommandBuffers = &fillWithSemaphore;
         signalSubmit.signalSemaphoreCount = 1;
         signalSubmit.pSignalSemaphores = &semaphore;
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        VkSubmitInfo waitSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        VkSubmitInfo waitSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         waitSubmit.waitSemaphoreCount = 1;
         waitSubmit.pWaitSemaphores = &semaphore;
         waitSubmit.pWaitDstStageMask = &waitStage;
@@ -665,10 +670,10 @@ int main() {
         validateRepeatedByte(device, c, 0x3C);
 
         // Timeline semaphore values must survive the Metal 4 queue bridge.
-        VkSemaphoreTypeCreateInfo timelineType{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        VkSemaphoreTypeCreateInfo timelineType = makeVkStruct<VkSemaphoreTypeCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO);
         timelineType.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
         timelineType.initialValue = 0;
-        VkSemaphoreCreateInfo timelineCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        VkSemaphoreCreateInfo timelineCreateInfo = makeVkStruct<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
         timelineCreateInfo.pNext = &timelineType;
         VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
         check(vkCreateSemaphore(device, &timelineCreateInfo, nullptr, &timelineSemaphore),
@@ -682,22 +687,20 @@ int main() {
         endCommandBuffer(timelineCopy);
 
         const uint64_t timelineValue = 7;
-        VkTimelineSemaphoreSubmitInfo timelineSignalInfo{
-            VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+        VkTimelineSemaphoreSubmitInfo timelineSignalInfo = makeVkStruct<VkTimelineSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO);
         timelineSignalInfo.signalSemaphoreValueCount = 1;
         timelineSignalInfo.pSignalSemaphoreValues = &timelineValue;
-        VkSubmitInfo timelineSignalSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        VkSubmitInfo timelineSignalSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         timelineSignalSubmit.pNext = &timelineSignalInfo;
         timelineSignalSubmit.commandBufferCount = 1;
         timelineSignalSubmit.pCommandBuffers = &timelineFill;
         timelineSignalSubmit.signalSemaphoreCount = 1;
         timelineSignalSubmit.pSignalSemaphores = &timelineSemaphore;
 
-        VkTimelineSemaphoreSubmitInfo timelineWaitInfo{
-            VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+        VkTimelineSemaphoreSubmitInfo timelineWaitInfo = makeVkStruct<VkTimelineSemaphoreSubmitInfo>(VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO);
         timelineWaitInfo.waitSemaphoreValueCount = 1;
         timelineWaitInfo.pWaitSemaphoreValues = &timelineValue;
-        VkSubmitInfo timelineWaitSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        VkSubmitInfo timelineWaitSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         timelineWaitSubmit.pNext = &timelineWaitInfo;
         timelineWaitSubmit.waitSemaphoreCount = 1;
         timelineWaitSubmit.pWaitSemaphores = &timelineSemaphore;
@@ -715,18 +718,15 @@ int main() {
 
         // A descriptorless compute pipeline exercises the real MTL4 dispatch path.
         VkShaderModule computeModule = createDescriptorlessComputeShader(device);
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = makeVkStruct<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
         VkPipelineLayout computeLayout = VK_NULL_HANDLE;
         check(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &computeLayout),
               "vkCreatePipelineLayout(compute)");
-        VkPipelineShaderStageCreateInfo computeStage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        VkPipelineShaderStageCreateInfo computeStage = makeVkStruct<VkPipelineShaderStageCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
         computeStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         computeStage.module = computeModule;
         computeStage.pName = "main";
-        VkComputePipelineCreateInfo computePipelineInfo{
-            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        VkComputePipelineCreateInfo computePipelineInfo = makeVkStruct<VkComputePipelineCreateInfo>(VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
         computePipelineInfo.stage = computeStage;
         computePipelineInfo.layout = computeLayout;
         VkPipeline computePipeline = VK_NULL_HANDLE;
@@ -737,7 +737,7 @@ int main() {
         vkCmdBindPipeline(computeCommand, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
         vkCmdDispatch(computeCommand, 4, 2, 1);
         endCommandBuffer(computeCommand);
-        VkSubmitInfo computeSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        VkSubmitInfo computeSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         computeSubmit.commandBufferCount = 1;
         computeSubmit.pCommandBuffers = &computeCommand;
         VkFence computeFence = createFence(device);
@@ -834,8 +834,7 @@ int main() {
             device, kRenderSmokeFragmentSpirv, sizeof(kRenderSmokeFragmentSpirv),
             "vkCreateShaderModule(fragment)");
 
-        VkPipelineLayoutCreateInfo renderLayoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        VkPipelineLayoutCreateInfo renderLayoutInfo = makeVkStruct<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
         VkPipelineLayout renderLayout = VK_NULL_HANDLE;
         check(vkCreatePipelineLayout(device, &renderLayoutInfo, nullptr, &renderLayout),
               "vkCreatePipelineLayout(render)");
@@ -850,47 +849,39 @@ int main() {
         renderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
         renderStages[1].module = fragmentModule;
 
-        VkPipelineVertexInputStateCreateInfo vertexInput{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo inputAssembly{
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        VkPipelineVertexInputStateCreateInfo vertexInput = makeVkStruct<VkPipelineVertexInputStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly = makeVkStruct<VkPipelineInputAssemblyStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
         inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
         VkViewport viewport{0.0f, 0.0f, static_cast<float>(kImageWidth),
                             static_cast<float>(kImageHeight), 0.0f, 1.0f};
         VkRect2D scissor{{0, 0}, {kImageWidth, kImageHeight}};
-        VkPipelineViewportStateCreateInfo viewportState{
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        VkPipelineViewportStateCreateInfo viewportState = makeVkStruct<VkPipelineViewportStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
         viewportState.viewportCount = 1;
         viewportState.pViewports = &viewport;
         viewportState.scissorCount = 1;
         viewportState.pScissors = &scissor;
-        VkPipelineRasterizationStateCreateInfo rasterization{
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        VkPipelineRasterizationStateCreateInfo rasterization = makeVkStruct<VkPipelineRasterizationStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
         rasterization.depthClampEnable = VK_FALSE;
         rasterization.rasterizerDiscardEnable = VK_FALSE;
         rasterization.polygonMode = VK_POLYGON_MODE_FILL;
         rasterization.cullMode = VK_CULL_MODE_NONE;
         rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterization.lineWidth = 1.0f;
-        VkPipelineMultisampleStateCreateInfo multisample{
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        VkPipelineMultisampleStateCreateInfo multisample = makeVkStruct<VkPipelineMultisampleStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
         multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState blendAttachment{};
         blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
                                          VK_COLOR_COMPONENT_G_BIT |
                                          VK_COLOR_COMPONENT_B_BIT |
                                          VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendStateCreateInfo blendState{
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        VkPipelineColorBlendStateCreateInfo blendState = makeVkStruct<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
         blendState.attachmentCount = 1;
         blendState.pAttachments = &blendAttachment;
-        VkPipelineRenderingCreateInfo pipelineRendering{
-            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        VkPipelineRenderingCreateInfo pipelineRendering = makeVkStruct<VkPipelineRenderingCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
         pipelineRendering.colorAttachmentCount = 1;
         pipelineRendering.pColorAttachmentFormats = &renderTarget.format;
-        VkGraphicsPipelineCreateInfo graphicsInfo{
-            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        VkGraphicsPipelineCreateInfo graphicsInfo = makeVkStruct<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
         graphicsInfo.pNext = &pipelineRendering;
         graphicsInfo.stageCount = static_cast<uint32_t>(renderStages.size());
         graphicsInfo.pStages = renderStages.data();
@@ -907,15 +898,14 @@ int main() {
                                         nullptr, &graphicsPipeline),
               "vkCreateGraphicsPipelines(render)");
 
-        VkRenderingAttachmentInfo colorAttachment{
-            VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        VkRenderingAttachmentInfo colorAttachment = makeVkStruct<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
         colorAttachment.imageView = renderTarget.view;
         colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colorAttachment.resolveMode = VK_RESOLVE_MODE_NONE;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-        VkRenderingInfo renderingInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        VkRenderingInfo renderingInfo = makeVkStruct<VkRenderingInfo>(VK_STRUCTURE_TYPE_RENDERING_INFO);
         renderingInfo.renderArea = scissor;
         renderingInfo.layerCount = 1;
         renderingInfo.colorAttachmentCount = 1;

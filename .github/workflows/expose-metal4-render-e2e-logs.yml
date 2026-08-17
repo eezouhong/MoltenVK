@@ -1,0 +1,68 @@
+name: Expose Metal 4 render E2E logs before assertions
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/expose-metal4-render-e2e-logs.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  expose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          persist-credentials: true
+      - name: Print render logs before strict grep gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/zz-autofinish-metal4-game-evaluable.yml')
+          source = path.read_text()
+          legacy = '''          MVK_CONFIG_METAL4_COMMAND_BACKEND=0 "$BUILD_DIR/metal4-render-e2e" \\
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \\
+            >"$BUILD_DIR/legacy-render.log" 2>&1
+          grep -q 'RENDER_OK' "$BUILD_DIR/legacy-render.log"
+          '''
+          legacy_new = '''          MVK_CONFIG_METAL4_COMMAND_BACKEND=0 "$BUILD_DIR/metal4-render-e2e" \\
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \\
+            >"$BUILD_DIR/legacy-render.log" 2>&1
+          cat "$BUILD_DIR/legacy-render.log"
+          grep -q 'RENDER_OK' "$BUILD_DIR/legacy-render.log"
+          '''
+          metal4 = '''          MVK_CONFIG_METAL4_COMMAND_BACKEND=1 "$BUILD_DIR/metal4-render-e2e" \\
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \\
+            >"$BUILD_DIR/metal4-render.log" 2>&1
+          grep -q 'RENDER_OK' "$BUILD_DIR/metal4-render.log"
+          '''
+          metal4_new = '''          MVK_CONFIG_METAL4_COMMAND_BACKEND=1 "$BUILD_DIR/metal4-render-e2e" \\
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \\
+            >"$BUILD_DIR/metal4-render.log" 2>&1
+          cat "$BUILD_DIR/metal4-render.log"
+          grep -q 'RENDER_OK' "$BUILD_DIR/metal4-render.log"
+          '''
+          if legacy in source:
+              source = source.replace(legacy, legacy_new, 1)
+          elif 'cat "$BUILD_DIR/legacy-render.log"' not in source:
+              raise SystemExit('legacy render log insertion point not found')
+          if metal4 in source:
+              source = source.replace(metal4, metal4_new, 1)
+          elif 'cat "$BUILD_DIR/metal4-render.log"' not in source:
+              raise SystemExit('Metal 4 render log insertion point not found')
+          path.write_text(source)
+          PY
+          rm .github/workflows/expose-metal4-render-e2e-logs.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(metal4): expose render backend rejection logs"
+          git push origin HEAD:metal4/phase1-command-backend-poc

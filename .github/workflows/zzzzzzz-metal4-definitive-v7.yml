@@ -1,0 +1,306 @@
+name: Metal 4 definitive game acceptance v7
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/zzzzzzz-metal4-definitive-v7.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: orchestrate-metal4-game-acceptance-v4
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  accept:
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      BRANCH: metal4/phase1-command-backend-poc
+      GH_TOKEN: ${{ github.token }}
+      ACCEPTANCE_SOURCE: .github/workflows/zz-autofinish-metal4-game-evaluable.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reset after previous branch writers settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 180
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+      - name: Detect an existing verified result
+        id: ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f metal4-game-readiness.json ]] && python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('metal4-game-readiness.json').read_text())
+          e = d['vulkanE2E']
+          assert d['macOSBuild'] == 'pass' and d['iOSBuild'] == 'pass'
+          assert e['legacyControl'] == 'pass'
+          assert e['metal4Compute'] == 'pass'
+          assert e['metal4Image'] == 'pass'
+          assert e['metal4OrdinaryRender'] == 'pass'
+          assert e['backendFailures'] == 0
+          PY
+          then echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Normalize source and acceptance preparation
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/normalize-metal4-game-acceptance.py
+
+          cat > "$RUNNER_TEMP/run-embedded-step.py" <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+          import subprocess
+          import sys
+          import tempfile
+          import textwrap
+          from pathlib import Path
+
+          workflow = Path(sys.argv[1])
+          requested = sys.argv[2:]
+          text = workflow.read_text()
+          lines = text.splitlines()
+
+          def extract(name_fragment: str) -> str:
+              start = None
+              for index, line in enumerate(lines):
+                  if line.startswith('      - name: ') and name_fragment.lower() in line.lower():
+                      start = index
+                      break
+              if start is None:
+                  raise RuntimeError(f'workflow step not found: {name_fragment}')
+              run_line = None
+              for index in range(start + 1, len(lines)):
+                  line = lines[index]
+                  if line.startswith('      - name: '):
+                      break
+                  if line == '        run: |':
+                      run_line = index
+                      break
+              if run_line is None:
+                  raise RuntimeError(f'run block not found: {name_fragment}')
+              body: list[str] = []
+              for line in lines[run_line + 1:]:
+                  if line and not line.startswith('          '):
+                      break
+                  body.append(line[10:] if line.startswith('          ') else '')
+              return '\n'.join(body) + '\n'
+
+          for name in requested:
+              script = extract(name)
+              print(f'===== executing embedded step: {name} =====', flush=True)
+              with tempfile.NamedTemporaryFile('w', suffix='.sh', delete=False) as handle:
+                  handle.write(script)
+                  script_path = handle.name
+              subprocess.run(['/bin/bash', script_path], check=True)
+          PY
+          chmod +x "$RUNNER_TEMP/run-embedded-step.py"
+
+          python3 "$RUNNER_TEMP/run-embedded-step.py" "$ACCEPTANCE_SOURCE" \
+            'Apply the staged ordinary-render source patch' \
+            'Add a default-off compile-time evaluation switch' \
+            'Add standalone ordinary-render Vulkan E2E' \
+            'Add game-run telemetry analyzer and launcher'
+
+          # The normalizer edits the source workflow only to make its embedded scripts
+          # portable. The tested source commit does not need that workflow rewrite.
+          git checkout HEAD -- "$ACCEPTANCE_SOURCE"
+          rm -rf .github/render-source-patch
+          git diff --check
+
+      - name: Run source and tooling contracts
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          python3 -m py_compile Scripts/analyze-metal4-game-run.py
+          bash -n Scripts/run-melonx-metal4.sh
+          bash -n Tests/Metal4CommandBackend/run-macos.sh
+          bash -n Tests/Metal4CommandBackend/run-render-macos.sh
+          grep -R -q 'MTL4ComputeCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'copyFromTexture' MoltenVK/MoltenVK
+          grep -R -q 'MTL4RenderCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'drawPrimitives' MoltenVK/MoltenVK/Commands MoltenVK/MoltenVK/GPUObjects
+          grep -q '^#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0$' MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+          git diff --check
+
+      - name: Fetch macOS dependencies
+        if: steps.ready.outputs.exists != 'true'
+        run: ./fetchDependencies -v --macos
+
+      - name: Build macOS package
+        if: steps.ready.outputs.exists != 'true'
+        run: make macos
+
+      - name: Install GLSL compiler
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v glslangValidator >/dev/null; then
+            brew install glslang
+          fi
+
+      - name: Run exact compute and image Vulkan E2E
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash Tests/Metal4CommandBackend/run-macos.sh
+          log=build/metal4-command-backend-e2e/metal4.log
+          grep -q 'COMPUTE_OK' "$log"
+          grep -q 'IMAGE_DATA_OK' "$log"
+          grep -Eq 'compute_dispatches=[1-9][0-9]*' "$log"
+          grep -Eq 'image_copies=[1-9][0-9]*' "$log"
+          if grep -Eq 'failures=[1-9][0-9]*' "$log"; then
+            cat "$log" >&2
+            exit 1
+          fi
+
+      - name: Run isolated ordinary-render Vulkan E2E
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash Tests/Metal4CommandBackend/run-render-macos.sh
+          log=build/metal4-render-e2e/metal4-render.log
+          grep -q 'RENDER_OK' "$log"
+          grep -q 'Executed first Vulkan submission on the Metal 4' "$log"
+          grep -Eq 'render_passes=[1-9][0-9]*|draws=[1-9][0-9]*' "$log"
+          if grep -Eq 'failures=[1-9][0-9]*' "$log"; then
+            cat "$log" >&2
+            exit 1
+          fi
+
+      - name: Fetch iOS dependencies
+        if: steps.ready.outputs.exists != 'true'
+        run: ./fetchDependencies -v --ios
+
+      - name: Build iOS package
+        if: steps.ready.outputs.exists != 'true'
+        run: make ios
+
+      - name: Commit the exact tested source
+        if: steps.ready.outputs.exists != 'true'
+        id: tested
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never include incidental build products or temporary workflow rewrites.
+          git add -A -- . ':(exclude).github/workflows/**' ':(exclude)build/**' ':(exclude)Package/**' ':(exclude)External/build/**'
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            tested_sha="$(git rev-parse HEAD)"
+          else
+            git commit -m "feat(metal4): make compute image and render game-evaluable"
+            tested_sha="$(git rev-parse HEAD)"
+          fi
+          echo "sha=$tested_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Publish readiness for exactly the tested source commit
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cat > metal4-game-readiness.json <<JSON
+          {
+            "schemaVersion": 1,
+            "testedSourceSha": "$TESTED_SHA",
+            "backendDefault": "off",
+            "dropInEvaluationDefaultSupported": true,
+            "macOSBuild": "pass",
+            "iOSBuild": "pass",
+            "vulkanE2E": {
+              "legacyControl": "pass",
+              "metal4Compute": "pass",
+              "metal4Image": "pass",
+              "metal4OrdinaryRender": "pass",
+              "backendFailures": 0
+            },
+            "runtimeOverride": "MVK_CONFIG_METAL4_COMMAND_BACKEND=0|1",
+            "minimumGameEvidence": [
+              "real_submissions>0",
+              "compute_dispatches>0",
+              "image_commands>0",
+              "render_passes_or_draws>0",
+              "failures=0"
+            ]
+          }
+          JSON
+          git add metal4-game-readiness.json
+          git commit -m "test(metal4): publish exact game-readiness manifest"
+          git push origin HEAD:$BRANCH
+
+      - name: Upload exact pass evidence
+        if: steps.ready.outputs.exists != 'true' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal4-definitive-v7-${{ steps.tested.outputs.sha }}
+          path: |
+            metal4-game-readiness.json
+            build/metal4-command-backend-e2e/legacy.log
+            build/metal4-command-backend-e2e/metal4.log
+            build/metal4-render-e2e/legacy-render.log
+            build/metal4-render-e2e/metal4-render.log
+            xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Commit local failure evidence
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+          mkdir -p Diagnostics
+          output="Diagnostics/metal4-definitive-v7-${GITHUB_RUN_ID}.txt"
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "workflow_head_sha=$GITHUB_SHA"
+            echo
+            for log in \
+              xcodebuild.log \
+              build/metal4-command-backend-e2e/legacy.log \
+              build/metal4-command-backend-e2e/metal4.log \
+              build/metal4-render-e2e/legacy-render.log \
+              build/metal4-render-e2e/metal4-render.log; do
+              if [[ -f "$log" ]]; then
+                echo "===== $log ====="
+                tail -n 400 "$log"
+              fi
+            done
+          } > "$output"
+          git add "$output"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "diagnostics(metal4): record definitive v7 failure $GITHUB_RUN_ID"
+          git push origin HEAD:$BRANCH

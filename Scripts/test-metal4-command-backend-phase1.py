@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract for the usable Phase 1C Metal 4 compute/transfer backend."""
+"""Source contract for the usable Phase 1C Metal 4 compute/transfer/render backend."""
 
 from __future__ import annotations
 
@@ -45,6 +45,10 @@ def main() -> int:
     transfer_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm")
     dispatch_h = read("MoltenVK/MoltenVK/Commands/MVKCmdDispatch.h")
     dispatch_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdDispatch.mm")
+    draw_h = read("MoltenVK/MoltenVK/Commands/MVKCmdDraw.h")
+    draw_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm")
+    rendering_h = read("MoltenVK/MoltenVK/Commands/MVKCmdRendering.h")
+    rendering_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm")
     pipeline_cmd_h = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h")
     pipeline_cmd_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm")
     pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
@@ -57,8 +61,8 @@ def main() -> int:
     runner = read("Tests/Metal4CommandBackend/run-macos.sh")
     implementation = "\n".join(
         (command_h, command_buffer_h, command_buffer_mm, transfer_h, transfer_mm,
-         dispatch_h, dispatch_mm, pipeline_cmd_h, pipeline_cmd_mm, pipeline_h,
-         queue_h, queue_mm, sync_h, sync_mm)
+         dispatch_h, dispatch_mm, draw_h, draw_mm, rendering_h, rendering_mm,
+         pipeline_cmd_h, pipeline_cmd_mm, pipeline_h, queue_h, queue_mm, sync_h, sync_mm)
     )
 
     # Private, fail-closed enablement and supported-target boundary.
@@ -136,7 +140,7 @@ def main() -> int:
         "pre-commit materialization failure cannot select legacy fallback",
     )
 
-    # First real execution slice: buffer/image transfer, barriers, and descriptorless compute.
+    # First real execution slice: buffer/image transfer, barriers, descriptorless compute, and strict basic render.
     for command in ("MVKCmdCopyBuffer", "MVKCmdFillBuffer"):
         require(transfer_h, rf"{command}[\s\S]*?supportsMetal4Encoding", f"{command} is not opted in")
         require(transfer_h, rf"{command}[\s\S]*?prepareMetal4Encoding", f"{command} does not resolve resources")
@@ -190,12 +194,90 @@ def main() -> int:
         r"MVKCmdPipelineBarrier[\s\S]*?supportsMetal4PipelineBarriers[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
         "buffer/memory pipeline barriers are not materialized",
     )
-    require(queue_mm, r"barrierAfterEncoderStages:[\s\S]*?beforeEncoderStages:[\s\S]*?visibilityOptions:", "MTL4 encoder barrier is missing")
+    require(
+        queue_mm,
+        r"PendingBarrier[\s\S]*?barrierAfterQueueStages:[\s\S]*?beforeStages:[\s\S]*?visibilityOptions:",
+        "cross-encoder MTL4 consumer barrier is missing",
+    )
+    reject(
+        queue_mm,
+        r"_computeEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageVertex|_renderEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageBlit",
+        "render/compute stage masks are passed to an incompatible intra-pass encoder barrier",
+    )
     require(
         pipeline_cmd_mm,
-        r"barrier\.type\s*==\s*MVKPipelineBarrier::Image[\s\S]*?return\s+false",
-        "image layout barriers do not fail closed before layout handling exists",
+        r"_dependencyFlags\s*==\s*0[\s\S]*?supportsMetal4PipelineBarriers",
+        "unsupported dependency flags do not fail closed",
     )
+    require(
+        pipeline_cmd_mm,
+        r"srcIgnored\s*&&\s*dstIgnored[\s\S]*?srcQueueFamilyIndex\s*==\s*barrier\.dstQueueFamilyIndex",
+        "queue-family ownership barriers do not fail closed on a half-ignored transfer",
+    )
+    require(
+        pipeline_cmd_mm,
+        r"barrier\.type\s*==\s*MVKPipelineBarrier::Image[\s\S]*?useImage\(barrier\.mvkImage\)",
+        "image barriers do not register their Metal textures before execution is claimed",
+    )
+    require(
+        pipeline_cmd_mm,
+        r"MVKCmdPipelineBarrier<[^>]+>::encodeMetal4[\s\S]*?pipelineBarrier\(",
+        "image/buffer/memory barriers are not encoded through the backend-neutral barrier boundary",
+    )
+
+    # Strict ordinary-render slice: one dynamic-rendering color attachment, a descriptorless
+    # graphics pipeline, and a real non-indexed draw on MTL4RenderCommandEncoder.
+    for token in (
+        "useImageView",
+        "useGraphicsPipeline",
+        "beginRendering",
+        "endRendering",
+        "bindGraphicsPipeline",
+        "draw",
+    ):
+        require(command_h, re.escape(token), f"backend-neutral render boundary is missing: {token}")
+    require(
+        rendering_h + rendering_mm,
+        r"MVKCmdBeginRendering[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
+        "dynamic rendering is not opted into the strict Metal 4 render slice",
+    )
+    require(
+        rendering_mm,
+        r"mvkSupportsMetal4RenderingInfo[\s\S]*?colorAttachmentCount\s*!=\s*1[\s\S]*?pDepthAttachment[\s\S]*?pStencilAttachment[\s\S]*?VK_SAMPLE_COUNT_1_BIT",
+        "dynamic-rendering eligibility does not fail closed on unsupported attachments or multisampling",
+    )
+    require(
+        pipeline_cmd_h + pipeline_cmd_mm,
+        r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4DescriptorlessRenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
+        "descriptorless graphics-pipeline binding is not materialized",
+    )
+    require(
+        pipeline_h,
+        r"supportsMetal4DescriptorlessRenderExecution",
+        "graphics pipeline does not expose strict Metal 4 render eligibility",
+    )
+    require(
+        pipeline_h + read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm"),
+        r"_supportsMetal4DescriptorlessRenderExecution[\s\S]*?resources\.allBits\.empty[\s\S]*?implicitBuffers\.needed\.empty",
+        "graphics pipeline eligibility does not reject descriptor or implicit-buffer use",
+    )
+    require(
+        draw_h + draw_mm,
+        r"MVKCmdDraw[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?cmdEncoder->draw",
+        "real non-indexed Vulkan draw is not routed to Metal 4",
+    )
+    for token in (
+        "MTL4RenderPassDescriptor",
+        "renderCommandEncoderWithDescriptor",
+        "setRenderPipelineState",
+        "setViewport",
+        "setScissorRect",
+        "drawPrimitives",
+        "recordRenderSubmission",
+        "recordRenderPass",
+        "recordDraw",
+    ):
+        require(queue_mm, re.escape(token), f"Metal 4 render materializer is missing: {token}")
 
     # Independent residency remains live until the definitive completion callback.
     for token in (
@@ -285,7 +367,8 @@ def main() -> int:
     )
 
     # Independent Vulkan e2e validates hybrid order, binary/timeline semaphores,
-    # descriptorless compute, image data, barriers, and exact path telemetry.
+    # descriptorless compute, image data, a real dynamic-rendering draw, barriers,
+    # pixel readback, and exact path telemetry.
     for token in (
         "vkCmdFillBuffer",
         "vkCmdPipelineBarrier",
@@ -293,6 +376,10 @@ def main() -> int:
         "vkCmdCopyImage",
         "vkCmdDispatch",
         "vkCreateComputePipelines",
+        "vkCreateGraphicsPipelines",
+        "vkCmdBeginRendering",
+        "vkCmdDraw",
+        "vkCmdEndRendering",
         "vkCreateSemaphore",
         "VK_SEMAPHORE_TYPE_TIMELINE",
         "vkWaitForFences",
@@ -300,16 +387,24 @@ def main() -> int:
         "TIMELINE_OK",
         "COMPUTE_OK",
         "IMAGE_DATA_OK",
+        "RENDER_OK",
         "METAL4_PHASE1C_E2E_PASS",
     ):
         require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=0", "legacy control run is missing")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=1", "Metal 4 run is missing")
     require(runner, r"Executed first Vulkan submission on the Metal 4 transfer backend", "runtime path proof is missing")
-    for counter in ("image_copies", "compute_dispatches", "barriers"):
+    for counter in (
+        "image_copies",
+        "compute_dispatches",
+        "render_submissions",
+        "render_passes",
+        "draws",
+        "barriers",
+    ):
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
 
-    print("PASS: usable Metal 4 Phase 1C compute/transfer backend source contract")
+    print("PASS: usable Metal 4 Phase 1C compute/transfer/render backend source contract")
     return 0
 
 

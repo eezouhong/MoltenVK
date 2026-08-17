@@ -129,6 +129,10 @@ class MVKCmdBindGraphicsPipeline : public MVKCmdBindPipeline {
 public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
+	bool supportsMetal4Encoding() const override;
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
 	bool isTessellationPipeline() override;
 
 protected:

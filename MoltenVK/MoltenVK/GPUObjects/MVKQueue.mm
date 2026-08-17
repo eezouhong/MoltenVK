@@ -89,6 +89,9 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> bufferFillCount = 0;
 	atomic<uint64_t> imageCopyCount = 0;
 	atomic<uint64_t> computeDispatchCount = 0;
+	atomic<uint64_t> renderSubmissionCount = 0;
+	atomic<uint64_t> renderPassCount = 0;
+	atomic<uint64_t> drawCount = 0;
 	atomic<uint64_t> barrierCount = 0;
 	string lastError;
 
@@ -328,6 +331,9 @@ struct MVKMetal4CommandQueueState {
 	void recordBufferFill() { bufferFillCount.fetch_add(1, memory_order_relaxed); }
 	void recordImageCopy() { imageCopyCount.fetch_add(1, memory_order_relaxed); }
 	void recordComputeDispatch() { computeDispatchCount.fetch_add(1, memory_order_relaxed); }
+	void recordRenderSubmission() { renderSubmissionCount.fetch_add(1, memory_order_relaxed); }
+	void recordRenderPass() { renderPassCount.fetch_add(1, memory_order_relaxed); }
+	void recordDraw() { drawCount.fetch_add(1, memory_order_relaxed); }
 	void recordBarrier() { barrierCount.fetch_add(1, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
@@ -361,15 +367,29 @@ static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stage
 	if (mvkIsAnyFlagEnabled(stages, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)) {
 		mtlStages |= MTLStageDispatch;
 	}
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+						  VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+						  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+						  VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT)) {
+		mtlStages |= MTLStageVertex;
+	}
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+						  VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+						  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+						  VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)) {
+		mtlStages |= MTLStageFragment;
+	}
 	if (!mtlStages && stages) {
-		// The first MTL4 backend slice only contains dispatch and blit work. Treat
-		// broader Vulkan stages conservatively as both rather than dropping order.
-		mtlStages = MTLStageDispatch | MTLStageBlit;
+		// Conservatively cover every encoder type currently materialized rather
+		// than dropping ordering for a broader Vulkan stage mask.
+		mtlStages = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit;
 	}
 	return mtlStages;
 }
 
-/** Concrete compute/transfer command materializer for the first usable backend slice. */
+/** Concrete compute/transfer/render command materializer for the first usable backend slice. */
 class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
 
 public:
@@ -383,6 +403,20 @@ public:
 	struct ImageBinding {
 		vector<id<MTLTexture>> textures;
 	};
+	struct PendingBarrier {
+		MTLStages afterQueueStages = 0;
+		MTLStages beforeStages = 0;
+		MTL4VisibilityOptions visibilityOptions = MTL4VisibilityOptionNone;
+	};
+	struct ImageViewBinding {
+		id<MTLTexture> texture = nil;
+		NSUInteger level = 0;
+		NSUInteger slice = 0;
+		NSUInteger depthPlane = 0;
+		VkFormat format = VK_FORMAT_UNDEFINED;
+		NSUInteger width = 0;
+		NSUInteger height = 0;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -390,7 +424,9 @@ public:
 		for (auto& item : _images) {
 			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
 		}
+		for (auto& item : _imageViews) { [item.second.texture release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
+		for (auto& item : _graphicsPipelines) { [item.second release]; }
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -400,7 +436,6 @@ public:
 		if (!mtlBuffer) { return false; }
 		_buffers.emplace(buffer, BufferBinding{[mtlBuffer retain], buffer->getMTLBufferOffset()});
 		_allocations.push_back((id<MTLAllocation>)mtlBuffer);
-		_needsComputeEncoder = true;
 		return true;
 	}
 
@@ -419,7 +454,33 @@ public:
 			_allocations.push_back((id<MTLAllocation>)texture);
 		}
 		_images.emplace(image, std::move(binding));
-		_needsComputeEncoder = true;
+		return true;
+	}
+
+	bool useImageView(MVKImageView* imageView) override {
+		if (!imageView) { return false; }
+		if (_imageViews.count(imageView)) { return true; }
+		if (!useImage(imageView->getImage())) { return false; }
+
+		MTLRenderPassColorAttachmentDescriptor* descriptor =
+			[MTLRenderPassColorAttachmentDescriptor new];
+		imageView->populateMTLRenderPassAttachmentDescriptor(descriptor);
+		id<MTLTexture> texture = descriptor.texture;
+		if (!texture) {
+			[descriptor release];
+			return false;
+		}
+		ImageViewBinding binding;
+		binding.texture = [texture retain];
+		binding.level = descriptor.level;
+		binding.slice = descriptor.slice;
+		binding.depthPlane = descriptor.depthPlane;
+		binding.format = imageView->getVkFormat();
+		binding.width = texture.width;
+		binding.height = texture.height;
+		[descriptor release];
+		_imageViews.emplace(imageView, binding);
+		_allocations.push_back((id<MTLAllocation>)texture);
 		return true;
 	}
 
@@ -430,7 +491,16 @@ public:
 		if (!pipelineState) { return false; }
 		_computePipelines.emplace(pipeline, [pipelineState retain]);
 		_allocations.push_back((id<MTLAllocation>)pipelineState);
-		_needsComputeEncoder = true;
+		return true;
+	}
+
+	bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
+		if (!pipeline || !pipeline->supportsMetal4DescriptorlessRenderExecution()) { return false; }
+		if (_graphicsPipelines.count(pipeline)) { return true; }
+		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
+		if (!pipelineState) { return false; }
+		_graphicsPipelines.emplace(pipeline, [pipelineState retain]);
+		_allocations.push_back((id<MTLAllocation>)pipelineState);
 		return true;
 	}
 
@@ -438,10 +508,6 @@ public:
 		if (!commandBuffer || _commandBuffer) { return false; }
 		_commandBuffer = commandBuffer;
 		[commandBuffer useResidencySet:residencySet];
-		if (_needsComputeEncoder) {
-			_computeEncoder = [[commandBuffer computeCommandEncoder] retain];
-			if (!_computeEncoder) { return false; }
-		}
 		return true;
 	}
 
@@ -452,7 +518,7 @@ public:
 				   uint8_t dstPlane) override {
 		auto src = _images.find(srcImage);
 		auto dst = _images.find(dstImage);
-		if (!_computeEncoder || src == _images.end() || dst == _images.end() ||
+		if (!ensureComputeEncoder() || src == _images.end() || dst == _images.end() ||
 			srcPlane >= src->second.textures.size() || dstPlane >= dst->second.textures.size()) {
 			return false;
 		}
@@ -521,7 +587,7 @@ public:
 
 	bool bindComputePipeline(MVKComputePipeline* pipeline) override {
 		auto it = _computePipelines.find(pipeline);
-		if (!_computeEncoder || it == _computePipelines.end()) { return false; }
+		if (!ensureComputeEncoder() || it == _computePipelines.end()) { return false; }
 		[_computeEncoder setComputePipelineState:it->second];
 		_boundComputePipeline = pipeline;
 		return true;
@@ -530,7 +596,7 @@ public:
 	bool dispatchThreadgroups(uint32_t groupCountX,
 							 uint32_t groupCountY,
 							 uint32_t groupCountZ) override {
-		if (!_computeEncoder || !_boundComputePipeline) { return false; }
+		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
 		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
 					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
 		_state->recordComputeDispatch();
@@ -541,22 +607,33 @@ public:
 						 VkAccessFlags2 srcAccess,
 						 VkPipelineStageFlags2 dstStages,
 						 VkAccessFlags2 dstAccess) override {
-		if (!_computeEncoder) { return false; }
+		// The strict render slice does not claim barriers from inside an active render pass.
+		// Ending that encoder here would silently terminate Vulkan rendering, while an
+		// intra-pass MTL4 barrier cannot legally name transfer/dispatch stages.
+		if (_renderEncoder) { return false; }
+
 		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
 		MTLStages before = mvkMetal4StagesFromVkPipelineStages(dstStages);
-		if (!after) { after = MTLStageDispatch | MTLStageBlit; }
-		if (!before) { before = MTLStageDispatch | MTLStageBlit; }
+		if (!after) { after = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
+		if (!before) { before = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
 		MTL4VisibilityOptions visibility = MTL4VisibilityOptionNone;
 		VkAccessFlags2 writes = VK_ACCESS_2_MEMORY_WRITE_BIT |
 			VK_ACCESS_2_SHADER_WRITE_BIT |
+			VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+			VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
 			VK_ACCESS_2_TRANSFER_WRITE_BIT |
 			VK_ACCESS_2_HOST_WRITE_BIT;
 		if (mvkIsAnyFlagEnabled(srcAccess | dstAccess, writes)) {
 			visibility |= MTL4VisibilityOptionDevice;
 		}
-		[_computeEncoder barrierAfterEncoderStages:after
-						 beforeEncoderStages:before
-						   visibilityOptions:visibility];
+
+		// A Vulkan barrier may cross Metal encoder classes. Defer it until the next
+		// consuming encoder exists, then issue a consumer queue-stage barrier with a
+		// before-stage mask legal for that encoder. This preserves render<->compute/
+		// transfer ordering without passing render stages to a compute encoder or blit
+		// stages to a render encoder.
+		endComputeEncoding();
+		_pendingBarriers.push_back(PendingBarrier{after, before, visibility});
 		_state->recordBarrier();
 		return true;
 	}
@@ -568,7 +645,7 @@ public:
 					VkDeviceSize size) override {
 		auto src = _buffers.find(srcBuffer);
 		auto dst = _buffers.find(dstBuffer);
-		if (!_computeEncoder || src == _buffers.end() || dst == _buffers.end() || !size) { return false; }
+		if (!ensureComputeEncoder() || src == _buffers.end() || dst == _buffers.end() || !size) { return false; }
 		[_computeEncoder copyFromBuffer:src->second.buffer
 						 sourceOffset:(src->second.offset + (NSUInteger)srcOffset)
 							 toBuffer:dst->second.buffer
@@ -583,7 +660,7 @@ public:
 					VkDeviceSize size,
 					uint8_t value) override {
 		auto dst = _buffers.find(dstBuffer);
-		if (!_computeEncoder || dst == _buffers.end() || !size) { return false; }
+		if (!ensureComputeEncoder() || dst == _buffers.end() || !size) { return false; }
 		[_computeEncoder fillBuffer:dst->second.buffer
 						  range:NSMakeRange(dst->second.offset + (NSUInteger)dstOffset,
 											 (NSUInteger)size)
@@ -592,25 +669,176 @@ public:
 		return true;
 	}
 
+	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
+		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
+			!renderingInfo.pColorAttachments) {
+			return false;
+		}
+		const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
+		auto viewIt = _imageViews.find((MVKImageView*)color.imageView);
+		if (viewIt == _imageViews.end()) { return false; }
+		endComputeEncoding();
+
+		const ImageViewBinding& binding = viewIt->second;
+		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
+		MTLRenderPassColorAttachmentDescriptor* colorDescriptor = descriptor.colorAttachments[0];
+		colorDescriptor.texture = binding.texture;
+		colorDescriptor.level = binding.level;
+		colorDescriptor.slice = binding.slice;
+		colorDescriptor.depthPlane = binding.depthPlane;
+		colorDescriptor.loadAction = mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
+		colorDescriptor.storeAction = mvkMTLStoreActionFromVkAttachmentStoreOpInObj(color.storeOp, false, true, nullptr);
+		colorDescriptor.clearColor = MTLClearColorMake(color.clearValue.color.float32[0],
+												 color.clearValue.color.float32[1],
+												 color.clearValue.color.float32[2],
+												 color.clearValue.color.float32[3]);
+		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
+		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
+		descriptor.renderTargetArrayLength = 1;
+		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
+		[descriptor release];
+		if (!_renderEncoder) { return false; }
+		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+
+		_currentRenderFormat = binding.format;
+		_currentRenderWidth = binding.width;
+		_currentRenderHeight = binding.height;
+		_graphicsPipelineBoundForEncoder = false;
+		_state->recordRenderPass();
+		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+	}
+
+	bool endRendering() override {
+		if (!_renderEncoder) { return false; }
+		endRenderEncoding();
+		return true;
+	}
+
+	bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
+		if (_graphicsPipelines.find(pipeline) == _graphicsPipelines.end()) { return false; }
+		_boundGraphicsPipeline = pipeline;
+		return !_renderEncoder || applyGraphicsPipeline();
+	}
+
+	bool draw(uint32_t firstVertex,
+			  uint32_t vertexCount,
+			  uint32_t firstInstance,
+			  uint32_t instanceCount) override {
+		if (!_renderEncoder || !_boundGraphicsPipeline || !_graphicsPipelineBoundForEncoder ||
+			!vertexCount || !instanceCount) {
+			return false;
+		}
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
+						 vertexStart:firstVertex
+						 vertexCount:vertexCount
+					   instanceCount:instanceCount
+						baseInstance:firstInstance];
+		_state->recordDraw();
+		_renderWork = true;
+		return true;
+	}
+
 	void endEncoding() {
+		endRenderEncoding();
+		endComputeEncoding();
+	}
+
+	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
+	bool hasRenderWork() const { return _renderWork; }
+
+private:
+	bool ensureComputeEncoder() {
+		if (!_commandBuffer || _renderEncoder) { return false; }
+		if (_computeEncoder) { return true; }
+		_computeEncoder = [[_commandBuffer computeCommandEncoder] retain];
+		if (!_computeEncoder) { return false; }
+		applyPendingBarriers(_computeEncoder, MTLStageDispatch | MTLStageBlit);
+		return true;
+	}
+
+	void applyPendingBarriers(id<MTL4CommandEncoder> encoder, MTLStages supportedStages) {
+		for (auto it = _pendingBarriers.begin(); it != _pendingBarriers.end();) {
+			MTLStages before = it->beforeStages & supportedStages;
+			if (!before) {
+				++it;
+				continue;
+			}
+			[encoder barrierAfterQueueStages:it->afterQueueStages
+							 beforeStages:before
+						visibilityOptions:it->visibilityOptions];
+			it->beforeStages &= ~before;
+			if (it->beforeStages) {
+				++it;
+			} else {
+				it = _pendingBarriers.erase(it);
+			}
+		}
+	}
+
+	void endComputeEncoding() {
 		if (!_computeEncoder) { return; }
 		[_computeEncoder endEncoding];
 		[_computeEncoder release];
 		_computeEncoder = nil;
+		_boundComputePipeline = nullptr;
 	}
 
-	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
+	void endRenderEncoding() {
+		if (!_renderEncoder) { return; }
+		[_renderEncoder endEncoding];
+		[_renderEncoder release];
+		_renderEncoder = nil;
+		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = 0;
+		_currentRenderHeight = 0;
+		_graphicsPipelineBoundForEncoder = false;
+	}
 
-private:
+	bool applyGraphicsPipeline() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
+		if (it == _graphicsPipelines.end() ||
+			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat) {
+			return false;
+		}
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		const VkViewport& viewport = _boundGraphicsPipeline->getViewports()[0];
+		const VkRect2D& scissor = _boundGraphicsPipeline->getScissors()[0];
+		if (stateData.numViewports != 1 || stateData.numScissors != 1 ||
+			scissor.offset.x < 0 || scissor.offset.y < 0 ||
+			(uint64_t)scissor.offset.x + scissor.extent.width > _currentRenderWidth ||
+			(uint64_t)scissor.offset.y + scissor.extent.height > _currentRenderHeight) {
+			return false;
+		}
+		[_renderEncoder setRenderPipelineState:it->second];
+		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(viewport)];
+		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(scissor)];
+		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
+		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
+		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
+		_graphicsPipelineBoundForEncoder = true;
+		return true;
+	}
+
 	shared_ptr<MVKMetal4CommandQueueState> _state;
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
 	unordered_map<MVKImage*, ImageBinding> _images;
+	unordered_map<MVKImageView*, ImageViewBinding> _imageViews;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
+	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	vector<PendingBarrier> _pendingBarriers;
 	vector<id<MTLAllocation>> _allocations;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
+	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
-	bool _needsComputeEncoder = false;
+	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
+	VkFormat _currentRenderFormat = VK_FORMAT_UNDEFINED;
+	NSUInteger _currentRenderWidth = 0;
+	NSUInteger _currentRenderHeight = 0;
+	bool _graphicsPipelineBoundForEncoder = false;
+	bool _renderWork = false;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
@@ -1310,14 +1538,17 @@ MVKQueue::~MVKQueue() {
 	if (_metal4CommandState) {
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: real_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, barriers=%llu.",
+			"Metal 4 command backend summary: real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->fallbackCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->failureCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferFillCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->imageCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed));
 		_metal4CommandState->shutdown();
 		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
@@ -1634,6 +1865,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		endMetal4CommandBuffers(true);
 		claimedCommandBuffers = false;
 		state->recordRealSubmission();
+		if (encoder.hasRenderWork()) { state->recordRenderSubmission(); }
 
 		for (auto& signal : _signalSemaphores) { signal.encodeMetal4Signal(commandQueue); }
 		[commandQueue signalEvent:orderingEvent value:_submissionSequence];

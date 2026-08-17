@@ -360,6 +360,12 @@ public:
 	/** Returns the Vulkan primitive topology. */
 	VkPrimitiveTopology getVkPrimitiveTopology() { return _vkPrimitiveTopology; }
 
+	/** Returns whether the strict descriptorless Metal 4 render slice can execute this pipeline. */
+	bool supportsMetal4DescriptorlessRenderExecution() const { return _supportsMetal4DescriptorlessRenderExecution; }
+
+	/** Returns the one color format accepted by the strict Metal 4 render slice. */
+	VkFormat getMetal4ColorAttachmentFormat() const { return _metal4ColorAttachmentFormat; }
+
 	/** Returns the Metal vertex buffer index to use for the specified vertex attribute binding number.  */
 	uint32_t getMetalBufferIndexForVertexAttributeBinding(uint32_t binding) { return _device->getMetalBufferIndexForVertexAttributeBinding(binding); }
 
@@ -498,6 +504,8 @@ protected:
 	bool _isTessellationPipeline = false;
 	bool _inputAttachmentIsDSAttachment = false;
 	bool _hasRemappedAttachmentLocations = false;
+	bool _supportsMetal4DescriptorlessRenderExecution = false;
+	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 
 

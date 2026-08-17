@@ -60,14 +60,12 @@ template <typename Barriers>
 static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 	if (barriers.empty()) { return true; }
 	for (const auto& barrier : barriers) {
-		if (barrier.type == MVKPipelineBarrier::Image ||
-			barrier.type == MVKPipelineBarrier::None) {
-			return false;
-		}
-		if (barrier.type == MVKPipelineBarrier::Buffer) {
+		if (barrier.type == MVKPipelineBarrier::None) { return false; }
+		if (barrier.type == MVKPipelineBarrier::Buffer ||
+			barrier.type == MVKPipelineBarrier::Image) {
 			bool srcIgnored = barrier.srcQueueFamilyIndex == UINT8_MAX;
 			bool dstIgnored = barrier.dstQueueFamilyIndex == UINT8_MAX;
-			if (!(srcIgnored || dstIgnored ||
+			if (!((srcIgnored && dstIgnored) ||
 				  barrier.srcQueueFamilyIndex == barrier.dstQueueFamilyIndex)) {
 				return false;
 			}
@@ -95,7 +93,7 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pDependencyInfo->pImageMemoryBarriers[i]);
 	}
-	_supportsMetal4Encoding = supportsMetal4PipelineBarriers(_barriers);
+	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
 
 	return VK_SUCCESS;
 }
@@ -125,7 +123,7 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pImageMemoryBarriers[i], srcStageMask, dstStageMask);
 	}
-	_supportsMetal4Encoding = supportsMetal4PipelineBarriers(_barriers);
+	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
 
 	return VK_SUCCESS;
 }
@@ -136,6 +134,10 @@ bool MVKCmdPipelineBarrier<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cm
 	for (const auto& barrier : _barriers) {
 		if (barrier.type == MVKPipelineBarrier::Buffer &&
 			!cmdEncoder->useBuffer(barrier.mvkBuffer)) {
+			return false;
+		}
+		if (barrier.type == MVKPipelineBarrier::Image &&
+			!cmdEncoder->useImage(barrier.mvkImage)) {
 			return false;
 		}
 	}
@@ -299,6 +301,21 @@ VkResult MVKCmdBindPipeline::setContent(MVKCommandBuffer* cmdBuff, VkPipeline pi
 
 void MVKCmdBindGraphicsPipeline::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
+}
+
+bool MVKCmdBindGraphicsPipeline::supportsMetal4Encoding() const {
+	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
+	return pipeline && pipeline->supportsMetal4DescriptorlessRenderExecution();
+}
+
+bool MVKCmdBindGraphicsPipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useGraphicsPipeline(pipeline);
+}
+
+bool MVKCmdBindGraphicsPipeline::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->bindGraphicsPipeline(pipeline);
 }
 
 bool MVKCmdBindGraphicsPipeline::isTessellationPipeline() {

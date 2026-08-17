@@ -59,6 +59,7 @@ grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/legacy.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'COMPUTE_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'IMAGE_DATA_OK' "${BUILD_DIR}/legacy.log"
+grep -q 'RENDER_OK' "${BUILD_DIR}/legacy.log"
 if grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/legacy.log"; then
   echo "Metal 4 marker appeared with the backend disabled" >&2
   exit 1
@@ -72,10 +73,14 @@ grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'COMPUTE_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'IMAGE_DATA_OK' "${BUILD_DIR}/metal4.log"
+grep -q 'RENDER_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'Metal 4 Vulkan transfer backend ready' "${BUILD_DIR}/metal4.log"
 grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4.log"
 grep -Eq 'image_copies=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'compute_dispatches=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -Eq 'render_submissions=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -Eq 'render_passes=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -Eq 'draws=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'barriers=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 
 cat "${BUILD_DIR}/legacy.log"

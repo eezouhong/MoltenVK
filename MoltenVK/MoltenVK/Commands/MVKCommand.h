@@ -26,7 +26,9 @@ class MVKCommandBuffer;
 class MVKCommandEncoder;
 class MVKCommandPool;
 class MVKComputePipeline;
+class MVKGraphicsPipeline;
 class MVKImage;
+class MVKImageView;
 
 
 #pragma mark -
@@ -49,8 +51,14 @@ public:
 	/** Registers an image and its underlying Metal texture before execution is claimed. */
 	virtual bool useImage(MVKImage* image) = 0;
 
+	/** Registers an image view used as a render attachment before execution is claimed. */
+	virtual bool useImageView(MVKImageView* imageView) = 0;
+
 	/** Registers a compute pipeline before execution is claimed. */
 	virtual bool useComputePipeline(MVKComputePipeline* pipeline) = 0;
+
+	/** Registers a graphics pipeline before execution is claimed. */
+	virtual bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
 
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,
@@ -79,6 +87,14 @@ public:
 								 VkAccessFlags2 srcAccess,
 								 VkPipelineStageFlags2 dstStages,
 								 VkAccessFlags2 dstAccess) = 0;
+
+	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
+	virtual bool endRendering() = 0;
+	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+	virtual bool draw(uint32_t firstVertex,
+					  uint32_t vertexCount,
+					  uint32_t firstInstance,
+					  uint32_t instanceCount) = 0;
 };
 
 

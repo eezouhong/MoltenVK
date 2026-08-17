@@ -1,0 +1,142 @@
+name: Publish Metal 4 game-readiness manifest
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/publish-metal4-game-readiness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  readiness:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require complete source and test coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d .github/render-source-patch
+          grep -R -q 'MTL4ComputeCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'copyFromTexture' MoltenVK/MoltenVK
+          grep -R -q 'MTL4RenderCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'drawPrimitives' MoltenVK/MoltenVK/Commands MoltenVK/MoltenVK/GPUObjects
+          grep -q 'vkCmdDispatch' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'vkCmdCopyImage' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'vkCmdDraw' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'COMPUTE_OK' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'IMAGE_DATA_OK' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'RENDER_OK' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -Eq 'compute_dispatches=[1-9]' Tests/Metal4CommandBackend/run-macos.sh
+          grep -Eq 'image_copies=[1-9]' Tests/Metal4CommandBackend/run-macos.sh
+          grep -Eq 'render_passes=[1-9]|draws=[1-9]' Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          python3 -m py_compile Scripts/analyze-metal4-game-run.py
+          bash -n Scripts/run-melonx-metal4.sh
+          bash -n Tests/Metal4CommandBackend/run-macos.sh
+          git diff --check
+
+      - name: Build macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./fetchDependencies -v --macos
+          make macos
+
+      - name: Execute legacy and Metal 4 Vulkan E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash Tests/Metal4CommandBackend/run-macos.sh
+          log=build/metal4-command-backend-e2e/metal4.log
+          grep -q 'COMPUTE_OK' "$log"
+          grep -q 'IMAGE_DATA_OK' "$log"
+          grep -q 'RENDER_OK' "$log"
+          grep -Eq 'compute_dispatches=[1-9][0-9]*' "$log"
+          grep -Eq 'image_copies=[1-9][0-9]*' "$log"
+          grep -Eq 'render_passes=[1-9][0-9]*|draws=[1-9][0-9]*' "$log"
+          if grep -Eq 'failures=[1-9][0-9]*' "$log"; then
+            echo "Metal 4 backend reported failures" >&2
+            exit 1
+          fi
+
+      - name: Build iOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./fetchDependencies -v --ios
+          make ios
+          find Package -iname '*MoltenVK*.xcframework' -o -iname 'libMoltenVK.a' | grep -q .
+
+      - name: Publish exact tested source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > metal4-game-readiness.json <<JSON
+          {
+            "schemaVersion": 1,
+            "testedSourceSha": "$GITHUB_SHA",
+            "backendDefault": "off",
+            "dropInEvaluationDefaultSupported": true,
+            "macOSBuild": "pass",
+            "iOSBuild": "pass",
+            "vulkanE2E": {
+              "legacyControl": "pass",
+              "metal4Compute": "pass",
+              "metal4Image": "pass",
+              "metal4OrdinaryRender": "pass",
+              "backendFailures": 0
+            },
+            "runtimeOverride": "MVK_CONFIG_METAL4_COMMAND_BACKEND=0|1",
+            "minimumGameEvidence": [
+              "real_submissions>0",
+              "compute_dispatches>0",
+              "image_commands>0",
+              "render_passes_or_draws>0",
+              "failures=0"
+            ]
+          }
+          JSON
+          rm -f .github/workflows/publish-metal4-game-readiness.yml
+          rm -f .github/workflows/add-metal4-render-e2e.yml
+          rm -f .github/workflows/finalize-metal4-game-evaluable.yml
+          rm -f .github/workflows/apply-metal4-render-source.yml
+          rm -f .github/workflows/install-metal4-game-evaluation.yml
+          rm -f .github/workflows/add-metal4-evaluation-default-switch.yml
+          rm -f .github/workflows/fix-metal4-render-e2e-runner.yml
+          rm -rf .github/render-source-patch
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(metal4): publish game-readiness manifest"
+          git push origin HEAD:metal4/phase1-command-backend-poc
+
+      - name: Upload exact evaluation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal4-game-readiness-${{ github.sha }}
+          path: |
+            metal4-game-readiness.json
+            build/metal4-command-backend-e2e/legacy.log
+            build/metal4-command-backend-e2e/metal4.log
+            xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14

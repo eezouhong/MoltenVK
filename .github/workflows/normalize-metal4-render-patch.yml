@@ -1,0 +1,57 @@
+name: Normalize staged Metal 4 render patch
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/normalize-metal4-render-patch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Normalize transport to a plain unified diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          chunks=(.github/render-source-patch/chunk-*)
+          if (( ${#chunks[@]} )); then
+            cat "${chunks[@]}" > "$RUNNER_TEMP/transport"
+            python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          source = Path(__import__('os').environ['TRANSPORT']).read_bytes()
+          if source.startswith(b'diff --git '):
+              patch = source
+          else:
+              patch = base64.b64decode(b''.join(source.split()), validate=True)
+          if not patch.startswith(b'diff --git '):
+              raise SystemExit('normalized payload is not a unified git diff')
+          Path(__import__('os').environ['PATCH']).write_bytes(patch)
+          PY
+            mkdir -p .github/render-source-patch
+            rm -f .github/render-source-patch/chunk-*
+            cp "$RUNNER_TEMP/render.patch" .github/render-source-patch/chunk-00
+          fi
+          rm .github/workflows/normalize-metal4-render-patch.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci(metal4): normalize staged render patch transport"
+          git push origin HEAD:metal4/phase1-command-backend-poc
+        env:
+          TRANSPORT: ${{ runner.temp }}/transport
+          PATCH: ${{ runner.temp }}/render.patch

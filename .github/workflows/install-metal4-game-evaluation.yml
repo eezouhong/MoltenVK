@@ -1,0 +1,475 @@
+name: Install Metal 4 game evaluation tooling
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/install-metal4-game-evaluation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require an applied basic render path
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d .github/render-source-patch
+          grep -R -q 'MTL4RenderCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'drawPrimitives' MoltenVK/MoltenVK
+          grep -R -q 'supportsMetal4Encoding' MoltenVK/MoltenVK/Commands
+
+      - name: Add game-run analyzer
+        shell: bash
+        run: |
+          cat > Scripts/analyze-metal4-game-run.py <<'PY'
+          #!/usr/bin/env python3
+          """Aggregate MoltenVK Metal 4 backend telemetry from one or more game logs."""
+
+          from __future__ import annotations
+
+          import argparse
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          from typing import Iterable
+
+          SUMMARY_MARKER = "Metal 4 command backend summary:"
+          PAIR_RE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*=\s*(-?\d+)")
+          FALLBACK_RE = re.compile(r"Metal 4[^\n]*fallback[^\n]*", re.IGNORECASE)
+          FAILURE_RE = re.compile(r"Metal 4[^\n]*(?:failed|failure|device lost)[^\n]*", re.IGNORECASE)
+
+
+          def read_lines(paths: Iterable[Path]) -> Iterable[tuple[Path, int, str]]:
+              for path in paths:
+                  try:
+                      with path.open("r", encoding="utf-8", errors="replace") as handle:
+                          for line_number, line in enumerate(handle, 1):
+                              yield path, line_number, line.rstrip("\n")
+                  except OSError as exc:
+                      raise RuntimeError(f"cannot read {path}: {exc}") from exc
+
+
+          def main() -> int:
+              parser = argparse.ArgumentParser()
+              parser.add_argument("logs", nargs="+", type=Path)
+              parser.add_argument("--output", type=Path)
+              parser.add_argument(
+                  "--require-evaluable",
+                  action="store_true",
+                  help="fail unless compute, image, and ordinary render work all reached Metal 4",
+              )
+              args = parser.parse_args()
+
+              totals: dict[str, int] = {}
+              summaries: list[dict[str, object]] = []
+              fallbacks: list[dict[str, object]] = []
+              failures: list[dict[str, object]] = []
+              backend_ready = False
+              first_real_submission = False
+
+              for path, line_number, line in read_lines(args.logs):
+                  backend_ready |= "Metal 4 Vulkan" in line and "backend ready" in line
+                  first_real_submission |= (
+                      "Executed first Vulkan submission on the Metal 4" in line
+                  )
+                  if SUMMARY_MARKER in line:
+                      parsed = {key: int(value) for key, value in PAIR_RE.findall(line)}
+                      for key, value in parsed.items():
+                          totals[key] = totals.get(key, 0) + value
+                      summaries.append(
+                          {"file": str(path), "line": line_number, "values": parsed}
+                      )
+                  if FALLBACK_RE.search(line):
+                      fallbacks.append(
+                          {"file": str(path), "line": line_number, "message": line}
+                      )
+                  if FAILURE_RE.search(line):
+                      failures.append(
+                          {"file": str(path), "line": line_number, "message": line}
+                      )
+
+              real = totals.get("real_submissions", 0)
+              fallback_count = totals.get("fallbacks", 0)
+              attempts = real + fallback_count
+              coverage = (real / attempts) if attempts else 0.0
+
+              compute = totals.get("compute_dispatches", totals.get("dispatches", 0))
+              image = sum(
+                  totals.get(key, 0)
+                  for key in (
+                      "image_copies",
+                      "image_clears",
+                      "buffer_to_image_copies",
+                      "image_to_buffer_copies",
+                  )
+              )
+              render = sum(
+                  totals.get(key, 0)
+                  for key in ("draws", "draw_calls", "render_passes", "render_submissions")
+              )
+              evaluable = (
+                  backend_ready
+                  and first_real_submission
+                  and compute > 0
+                  and image > 0
+                  and render > 0
+                  and totals.get("failures", 0) == 0
+                  and not failures
+              )
+
+              result = {
+                  "schemaVersion": 1,
+                  "backendReady": backend_ready,
+                  "firstRealSubmissionObserved": first_real_submission,
+                  "summaryCount": len(summaries),
+                  "totals": dict(sorted(totals.items())),
+                  "submissionCoverage": {
+                      "real": real,
+                      "fallback": fallback_count,
+                      "attempts": attempts,
+                      "ratio": round(coverage, 6),
+                  },
+                  "workloadCoverage": {
+                      "computeCommands": compute,
+                      "imageCommands": image,
+                      "renderCommands": render,
+                      "evaluable": evaluable,
+                  },
+                  "fallbackMessages": fallbacks,
+                  "failureMessages": failures,
+                  "summaries": summaries,
+              }
+
+              rendered = json.dumps(result, indent=2, sort_keys=True)
+              if args.output:
+                  args.output.parent.mkdir(parents=True, exist_ok=True)
+                  args.output.write_text(rendered + "\n", encoding="utf-8")
+              print(rendered)
+
+              if not summaries:
+                  print("No Metal 4 backend summary was found.", file=sys.stderr)
+                  return 2
+              if args.require_evaluable and not evaluable:
+                  print(
+                      "Run is not evaluable: compute, image, and ordinary render must all "
+                      "reach Metal 4 without backend failures.",
+                      file=sys.stderr,
+                  )
+                  return 3
+              return 0
+
+
+          if __name__ == "__main__":
+              try:
+                  raise SystemExit(main())
+              except RuntimeError as exc:
+                  print(str(exc), file=sys.stderr)
+                  raise SystemExit(1) from exc
+          PY
+          chmod +x Scripts/analyze-metal4-game-run.py
+
+      - name: Add macOS launcher and log capture
+        shell: bash
+        run: |
+          cat > Scripts/run-melonx-metal4.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          usage() {
+            cat >&2 <<'EOF'
+          Usage: run-melonx-metal4.sh [--backend 0|1] [--log-dir DIR] -- EXECUTABLE [ARGS...]
+
+          Runs the same MeloNX/Ryujinx executable with the private MoltenVK Metal 4
+          backend disabled or enabled and captures a timestamped log. Set
+          METAL4_REQUIRE_EVALUABLE=1 to require compute, image, and render telemetry.
+          EOF
+          }
+
+          backend=1
+          log_dir="${METAL4_LOG_DIR:-$PWD/build/metal4-game-evaluation}"
+          while (($#)); do
+            case "$1" in
+              --backend) backend="${2:?missing backend value}"; shift 2 ;;
+              --log-dir) log_dir="${2:?missing log directory}"; shift 2 ;;
+              --) shift; break ;;
+              -h|--help) usage; exit 0 ;;
+              *) break ;;
+            esac
+          done
+          (($#)) || { usage; exit 64; }
+          [[ "$backend" == 0 || "$backend" == 1 ]] || {
+            echo "--backend must be 0 or 1" >&2
+            exit 64
+          }
+
+          mkdir -p "$log_dir"
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          mode=$([[ "$backend" == 1 ]] && echo metal4 || echo legacy)
+          log="$log_dir/${mode}-${stamp}.log"
+          json="$log_dir/${mode}-${stamp}.json"
+
+          export MVK_CONFIG_METAL4_COMMAND_BACKEND="$backend"
+          export MVK_CONFIG_LOG_LEVEL="${MVK_CONFIG_LOG_LEVEL:-3}"
+          export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS="${MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS:-0}"
+
+          set +e
+          "$@" > >(tee "$log") 2>&1
+          app_status=$?
+          set -e
+
+          analyzer="$(cd "$(dirname "$0")" && pwd)/analyze-metal4-game-run.py"
+          analyzer_args=("$log" --output "$json")
+          if [[ "${METAL4_REQUIRE_EVALUABLE:-0}" == 1 && "$backend" == 1 ]]; then
+            analyzer_args+=(--require-evaluable)
+          fi
+          set +e
+          python3 "$analyzer" "${analyzer_args[@]}"
+          analyzer_status=$?
+          set -e
+
+          printf 'application_status=%s\nanalyzer_status=%s\nlog=%s\njson=%s\n' \
+            "$app_status" "$analyzer_status" "$log" "$json"
+          (( app_status == 0 )) || exit "$app_status"
+          exit "$analyzer_status"
+          SH
+          chmod +x Scripts/run-melonx-metal4.sh
+
+      - name: Add drop-in evaluation package workflow
+        shell: bash
+        run: |
+          cat > .github/workflows/metal4-game-evaluation-package.yml <<'YML'
+          name: Metal 4 game evaluation package
+
+          on:
+            workflow_dispatch:
+            push:
+              branches:
+                - metal4/phase1-command-backend-poc
+              paths:
+                - "MoltenVK/MoltenVK/**"
+                - "Scripts/analyze-metal4-game-run.py"
+                - "Scripts/run-melonx-metal4.sh"
+                - "Docs/Metal4_Game_Evaluation.md"
+                - ".github/workflows/metal4-game-evaluation-package.yml"
+
+          concurrency:
+            group: metal4-game-evaluation-${{ github.ref }}
+            cancel-in-progress: true
+
+          permissions:
+            contents: read
+
+          jobs:
+            package:
+              runs-on: macos-26
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Run source gates
+                  run: |
+                    python3 Scripts/test-metal4-base-cache-policy.py
+                    python3 Scripts/test-metal4-flexible-pipeline.py
+                    python3 Scripts/test-metal4-command-backend-phase1.py
+                    git diff --check
+
+                - name: Locate private backend default
+                  id: default
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    file="$(grep -R -l 'MVK_CONFIG_METAL4_COMMAND_BACKEND' MoltenVK/MoltenVK --include='*.mm' --include='*.cpp' | head -n 1)"
+                    test -n "$file"
+                    echo "file=$file" >> "$GITHUB_OUTPUT"
+                    grep -n 'MVK_CONFIG_METAL4_COMMAND_BACKEND' "$file"
+
+                - name: Build default-off control package
+                  run: |
+                    ./fetchDependencies -v --ios
+                    make ios
+                    mkdir -p "$RUNNER_TEMP/control"
+                    cp -R Package "$RUNNER_TEMP/control/Package"
+
+                - name: Build default-on drop-in evaluation package
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python3 - <<'PY'
+                    from pathlib import Path
+                    import os
+                    path = Path(os.environ["DEFAULT_FILE"])
+                    source = path.read_text()
+                    candidates = (
+                        ("MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0", "MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 1"),
+                        ("MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT false", "MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT true"),
+                    )
+                    for old, new in candidates:
+                        if old in source:
+                            path.write_text(source.replace(old, new, 1))
+                            break
+                    else:
+                        raise SystemExit(
+                            "compile-time Metal 4 backend default switch was not found; "
+                            "the evaluation artifact must never silently remain default-off"
+                        )
+                    PY
+                    make clean
+                    make ios
+                  env:
+                    DEFAULT_FILE: ${{ steps.default.outputs.file }}
+
+                - name: Assemble exact-SHA bundle
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    bundle="$RUNNER_TEMP/metal4-game-evaluation-${GITHUB_SHA}"
+                    mkdir -p "$bundle/default-on" "$bundle/default-off" "$bundle/tools"
+                    cp -R Package "$bundle/default-on/Package"
+                    cp -R "$RUNNER_TEMP/control/Package" "$bundle/default-off/Package"
+                    cp Scripts/analyze-metal4-game-run.py "$bundle/tools/"
+                    cp Scripts/run-melonx-metal4.sh "$bundle/tools/"
+                    cp Docs/Metal4_Game_Evaluation.md "$bundle/"
+                    cat > "$bundle/manifest.json" <<JSON
+                    {
+                      "schemaVersion": 1,
+                      "exactSha": "$GITHUB_SHA",
+                      "normalPackageDefault": "legacy",
+                      "evaluationPackageDefault": "metal4",
+                      "runtimeOverride": "MVK_CONFIG_METAL4_COMMAND_BACKEND=0|1",
+                      "requiredTelemetry": ["compute_dispatches", "image_copies", "render_passes", "draws"]
+                    }
+                    JSON
+                    tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/metal4-game-evaluation-${GITHUB_SHA}.tar.gz" \
+                      "metal4-game-evaluation-${GITHUB_SHA}"
+
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: metal4-game-evaluation-${{ github.sha }}
+                    path: ${{ runner.temp }}/metal4-game-evaluation-${{ github.sha }}.tar.gz
+                    if-no-files-found: error
+                    retention-days: 14
+          YML
+
+      - name: Add integration and comparison guide
+        shell: bash
+        run: |
+          cat > Docs/Metal4_Game_Evaluation.md <<'MD'
+          # Metal 4 game evaluation
+
+          This branch keeps normal MoltenVK builds **default-off**. The
+          `Metal 4 game evaluation package` workflow produces two exact-SHA iOS
+          packages from the same source:
+
+          - `default-off`: legacy Metal command submission;
+          - `default-on`: Metal 4 command submission enabled at process start.
+
+          The default-on package exists so an emulator can evaluate the backend by
+          replacing its MoltenVK package without adding app-side configuration code.
+          `MVK_CONFIG_METAL4_COMMAND_BACKEND=0` still forces the control path.
+
+          ## Minimum valid comparison
+
+          Use the same emulator commit, game, save, scene, graphics settings, device,
+          OS build, thermal starting state, and run duration. Change only the bundled
+          MoltenVK package. Run control first, then Metal 4, then repeat in alternating
+          order to reduce thermal-order bias.
+
+          A run is not considered Metal 4 performance evidence unless its telemetry
+          shows all three command families on Metal 4:
+
+          1. `compute_dispatches > 0`;
+          2. at least one image command, such as `image_copies > 0`;
+          3. ordinary render work, represented by `render_passes > 0` and/or `draws > 0`.
+
+          It must also report `real_submissions > 0`, no backend failures, and the
+          fallback count. A game that launches entirely through legacy fallback is a
+          compatibility result, not a Metal 4 performance result.
+
+          ## macOS host/debug launch
+
+          ```bash
+          Scripts/run-melonx-metal4.sh --backend 0 -- /path/to/MeloNX [args]
+          Scripts/run-melonx-metal4.sh --backend 1 -- /path/to/MeloNX [args]
+          ```
+
+          Add `METAL4_REQUIRE_EVALUABLE=1` to make the Metal 4 run fail its analysis
+          gate unless compute, image, and render telemetry were all observed.
+
+          ## iOS drop-in package
+
+          Run the `Metal 4 game evaluation package` workflow at the exact PR SHA.
+          Replace the emulator's existing MoltenVK package with the matching folder
+          under `default-on/Package`; use `default-off/Package` for the control build.
+          Do not mix packages from different SHAs.
+
+          If the emulator can set process environment before Vulkan initialization,
+          the normal package can also be used with:
+
+          ```c
+          setenv("MVK_CONFIG_METAL4_COMMAND_BACKEND", "1", 1);
+          ```
+
+          The variable must be set before creation of the first Vulkan instance or
+          device. The package-level default removes this requirement for evaluation.
+
+          ## Analyze captured logs
+
+          ```bash
+          python3 Scripts/analyze-metal4-game-run.py \
+            path/to/control.log path/to/metal4.log \
+            --output build/metal4-comparison.json
+          ```
+
+          Analyze each run separately when enforcing `--require-evaluable`; aggregate
+          only runs produced by the same backend and exact source SHA.
+          MD
+
+      - name: Make E2E shell invocation mode-independent
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/metal4-command-backend-e2e.yml')
+          source = path.read_text()
+          source = source.replace(
+              'run: Tests/Metal4CommandBackend/run-macos.sh',
+              'run: bash Tests/Metal4CommandBackend/run-macos.sh',
+          )
+          path.write_text(source)
+          PY
+
+      - name: Validate tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile Scripts/analyze-metal4-game-run.py
+          bash -n Scripts/run-melonx-metal4.sh
+          python3 Scripts/analyze-metal4-game-run.py --help >/dev/null
+          git diff --check
+
+      - name: Commit tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/install-metal4-game-evaluation.yml
+          rm -f .github/workflows/metal4-current-source-snapshot.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(metal4): add drop-in game evaluation package"
+          git push origin HEAD:metal4/phase1-command-backend-poc

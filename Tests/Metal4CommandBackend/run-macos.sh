@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exact-SHA Phase 1C gate: run the same Vulkan binary with the command backend
-# disabled and enabled; only MoltenVK's internal backend selection may differ.
+# Exact-SHA Phase 1C gate after the small-bitset compile repair: run the same
+# Vulkan binary with the command backend disabled and enabled; only MoltenVK's
+# internal backend selection may differ.
 # CI invokes this script through bash, so validation does not depend on Git's executable bit.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${ROOT}/build/metal4-command-backend-e2e"

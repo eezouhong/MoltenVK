@@ -1,0 +1,47 @@
+name: Add explicit stdlib dependency for Metal 4 evaluation switch
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/add-metal4-eval-cstdlib.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  add-include:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          persist-credentials: true
+      - name: Add explicit cstdlib include
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm')
+          source = path.read_text()
+          if '#include <cstdlib>' not in source:
+              lines = source.splitlines(keepends=True)
+              insert_at = 0
+              for index, line in enumerate(lines):
+                  if line.startswith('#include'):
+                      insert_at = index + 1
+              if not insert_at:
+                  raise SystemExit('include block not found')
+              lines.insert(insert_at, '#include <cstdlib>\n')
+              path.write_text(''.join(lines))
+          PY
+          rm .github/workflows/add-metal4-eval-cstdlib.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build(metal4): include cstdlib for evaluation switch"
+          git push origin HEAD:metal4/phase1-command-backend-poc

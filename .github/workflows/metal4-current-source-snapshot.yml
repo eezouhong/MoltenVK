@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Package checkout
+      - name: Package exact Phase 1C checkout for render implementation
         run: |
           tar --exclude=.git -czf "$RUNNER_TEMP/source.tar.gz" .
           git rev-parse HEAD > "$RUNNER_TEMP/EXACT_SHA"

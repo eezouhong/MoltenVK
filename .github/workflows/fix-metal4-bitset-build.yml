@@ -34,9 +34,10 @@ jobs:
 
       - name: Commit source repair
         run: |
-          rm Scripts/fix-metal4-bitset-build.py
-          rm .github/workflows/fix-metal4-bitset-build.yml
-          git add -A
+          git add \
+            MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h \
+            MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm \
+            Scripts/test-metal4-command-backend-phase1.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(metal4): use the small-bitset clear predicate"

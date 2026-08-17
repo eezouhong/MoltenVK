@@ -1,0 +1,28 @@
+name: Probe Metal 4 render stage API
+
+on:
+  push:
+    branches:
+      - metal4/sdk-command-probe
+    paths:
+      - ".github/workflows/probe-metal4-render-stage-api.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    steps:
+      - name: Print exact render-stage and command-buffer API
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          H="$SDK/System/Library/Frameworks/Metal.framework/Headers"
+          echo "SDK=$SDK"
+          xcodebuild -version
+          echo '===== stage enum declarations ====='
+          grep -R -n -B 4 -A 12 -E 'MTLStage(Vertex|Fragment|Dispatch|Blit)|typedef.*MTLStages|NS_OPTIONS.*MTLStages' "$H" || true
+          echo '===== render encoder factory ====='
+          grep -n -B 8 -A 20 -E 'renderCommandEncoderWithDescriptor' "$H/MTL4CommandBuffer.h"
+          echo '===== encoder base/end/barrier ====='
+          grep -R -n -B 6 -A 18 -E 'barrierAfterEncoderStages|beforeEncoderStages|endEncoding' "$H/MTL4CommandEncoder.h" "$H/MTL4RenderCommandEncoder.h" "$H/MTL4ComputeCommandEncoder.h" || true

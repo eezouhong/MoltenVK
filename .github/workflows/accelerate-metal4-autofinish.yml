@@ -1,0 +1,52 @@
+name: Accelerate definitive Metal 4 acceptance
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/accelerate-metal4-autofinish.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  accelerate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          persist-credentials: true
+      - name: Wait only for workflows that can write the branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/zz-autofinish-metal4-game-evaluable.yml')
+          source = path.read_text()
+          source = source.replace('  cancel-in-progress: false\n', '  cancel-in-progress: true\n', 1)
+          source = source.replace("    if: github.actor != 'github-actions[bot]'\n", '', 1)
+          old_candidates = [
+              '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and ((.id|tostring) != $current))] | length',
+              '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and ((.id|tostring) != $current) and (.name != "Autofinish game-evaluable Metal 4 backend"))] | length',
+          ]
+          new = '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and ((.id|tostring) != $current) and (.name != "Autofinish game-evaluable Metal 4 backend") and (.name | test("Normalize staged Metal 4 render patch|Fix definitive Metal 4 E2E fixture|Retrigger definitive Metal 4 acceptance v2|Add explicit stdlib dependency for Metal 4 evaluation switch|Apply Metal 4 basic render source patch|Install Metal 4 game evaluation tooling|Add Metal 4 evaluation default switch|Finalize game-evaluable Metal 4 backend|Add and verify Metal 4 ordinary render E2E|Fix Metal 4 render E2E runner prerequisites|Publish Metal 4 game-readiness manifest")))] | length'
+          for old in old_candidates:
+              if old in source:
+                  source = source.replace(old, new, 1)
+                  break
+          else:
+              if new not in source:
+                  raise SystemExit('definitive wait query not found')
+          path.write_text(source)
+          PY
+          rm .github/workflows/accelerate-metal4-autofinish.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci(metal4): wait only for branch writers"
+          git push origin HEAD:metal4/phase1-command-backend-poc

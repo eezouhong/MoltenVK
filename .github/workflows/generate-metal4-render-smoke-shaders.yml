@@ -1,0 +1,62 @@
+name: Generate Metal 4 render smoke shaders
+
+on:
+  push:
+    branches:
+      - metal4/sdk-command-probe
+    paths:
+      - ".github/workflows/generate-metal4-render-smoke-shaders.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: macos-26
+    steps:
+      - name: Compile minimal descriptorless Vulkan shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew list glslang >/dev/null 2>&1 || brew install glslang
+          cat > "$RUNNER_TEMP/smoke.vert" <<'EOF'
+          #version 450
+          void main() {
+              vec2 positions[3] = vec2[](
+                  vec2(-1.0, -1.0),
+                  vec2( 3.0, -1.0),
+                  vec2(-1.0,  3.0));
+              gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+          }
+          EOF
+          cat > "$RUNNER_TEMP/smoke.frag" <<'EOF'
+          #version 450
+          layout(location = 0) out vec4 outColor;
+          void main() {
+              outColor = vec4(0.25, 0.5, 0.75, 1.0);
+          }
+          EOF
+          glslangValidator -V --target-env vulkan1.0 -S vert -o "$RUNNER_TEMP/smoke.vert.spv" "$RUNNER_TEMP/smoke.vert"
+          glslangValidator -V --target-env vulkan1.0 -S frag -o "$RUNNER_TEMP/smoke.frag.spv" "$RUNNER_TEMP/smoke.frag"
+          spirv-val --target-env vulkan1.0 "$RUNNER_TEMP/smoke.vert.spv"
+          spirv-val --target-env vulkan1.0 "$RUNNER_TEMP/smoke.frag.spv"
+          python3 - "$RUNNER_TEMP/smoke.vert.spv" "$RUNNER_TEMP/smoke.frag.spv" > "$RUNNER_TEMP/render-smoke-shaders.inc" <<'PY'
+          import pathlib, struct, sys
+          for symbol, path in zip(("kRenderSmokeVertexSpirv", "kRenderSmokeFragmentSpirv"), sys.argv[1:]):
+              data = pathlib.Path(path).read_bytes()
+              words = struct.unpack(f"<{len(data)//4}I", data)
+              print(f"static constexpr uint32_t {symbol}[] = {{")
+              for index in range(0, len(words), 6):
+                  print("    " + ", ".join(f"0x{word:08x}" for word in words[index:index+6]) + ",")
+              print("};\n")
+          PY
+          cat "$RUNNER_TEMP/render-smoke-shaders.inc"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metal4-render-smoke-shaders
+          path: |
+            ${{ runner.temp }}/render-smoke-shaders.inc
+            ${{ runner.temp }}/smoke.vert.spv
+            ${{ runner.temp }}/smoke.frag.spv
+          retention-days: 1

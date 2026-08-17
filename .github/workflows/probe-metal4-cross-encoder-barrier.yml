@@ -1,0 +1,23 @@
+name: Probe Metal 4 cross-encoder barriers
+
+on:
+  push:
+    branches:
+      - metal4/sdk-command-probe
+    paths:
+      - ".github/workflows/probe-metal4-cross-encoder-barrier.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    steps:
+      - name: Print exact cross-encoder barrier signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          H="$SDK/System/Library/Frameworks/Metal.framework/Headers/MTL4CommandEncoder.h"
+          xcodebuild -version
+          echo "SDK=$SDK"
+          sed -n '45,118p' "$H"

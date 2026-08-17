@@ -2867,7 +2867,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	auto stageIsDescriptorless = [this](MVKShaderStage stage) {
 		const auto& resources = _stageResources[stage];
-		return resources.resources.allBits.empty() &&
+		return resources.resources.allBits.areAllBitsClear() &&
 			resources.implicitBuffers.needed.empty() &&
 			!resources.usesPhysicalStorageBufferAddresses;
 	};

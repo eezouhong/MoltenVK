@@ -1,0 +1,934 @@
+name: Autofinish game-evaluable Metal 4 backend
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/zz-autofinish-metal4-game-evaluable.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: metal4-game-evaluable-autofinish
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  autofinish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      BRANCH: metal4/phase1-command-backend-poc
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for older branch writers, then reset to latest branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 2700))
+          while :; do
+            active="$(curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs?branch=$BRANCH&per_page=100" | \
+              jq --arg current "$GITHUB_RUN_ID" '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and ((.id|tostring) != $current))] | length')"
+            if [[ "$active" == 0 ]]; then break; fi
+            if (( SECONDS >= deadline )); then
+              echo "Timed out waiting for $active older branch workflow(s)" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+      - name: Stop when a verified readiness manifest already exists
+        id: ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f metal4-game-readiness.json ]] && \
+             python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('metal4-game-readiness.json').read_text())
+          assert data['macOSBuild'] == 'pass'
+          assert data['iOSBuild'] == 'pass'
+          assert data['vulkanE2E']['metal4Compute'] == 'pass'
+          assert data['vulkanE2E']['metal4Image'] == 'pass'
+          assert data['vulkanE2E']['metal4OrdinaryRender'] == 'pass'
+          assert data['vulkanE2E']['backendFailures'] == 0
+          PY
+          then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the staged ordinary-render source patch
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          chunks=(.github/render-source-patch/chunk-*)
+          if (( ${#chunks[@]} )); then
+            cat "${chunks[@]}" > "$RUNNER_TEMP/render.transport"
+            if base64 --decode "$RUNNER_TEMP/render.transport" > "$RUNNER_TEMP/render.patch" 2>/dev/null && \
+               grep -q '^diff --git ' "$RUNNER_TEMP/render.patch"; then
+              echo "Decoded staged render patch"
+            else
+              cp "$RUNNER_TEMP/render.transport" "$RUNNER_TEMP/render.patch"
+            fi
+            if git apply --check "$RUNNER_TEMP/render.patch"; then
+              git apply "$RUNNER_TEMP/render.patch"
+            elif git apply --reverse --check "$RUNNER_TEMP/render.patch"; then
+              echo "Render patch is already applied"
+            else
+              echo "Staged render patch is neither applicable nor already applied" >&2
+              exit 1
+            fi
+          fi
+          grep -q 'MTL4RenderCommandEncoder' MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+          grep -R -q 'drawPrimitives' MoltenVK/MoltenVK/Commands MoltenVK/MoltenVK/GPUObjects
+
+      - name: Add a default-off compile-time evaluation switch
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm')
+          source = path.read_text()
+          if 'MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT' not in source:
+              lines = source.splitlines(keepends=True)
+              insert_at = 0
+              for index, line in enumerate(lines):
+                  if line.startswith('#include'):
+                      insert_at = index + 1
+              if not insert_at:
+                  raise SystemExit('MVKQueue.mm include block not found')
+              block = '''\n#ifndef MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0\n#endif\n\n#if MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n__attribute__((constructor)) static void mvkEnableMetal4CommandBackendEvaluationDefault() {\n\t// Keep production/default packages off. Evaluation packages compile this to 1,\n\t// while an explicit process environment value still wins.\n\tif (!getenv("MVK_CONFIG_METAL4_COMMAND_BACKEND")) {\n\t\tsetenv("MVK_CONFIG_METAL4_COMMAND_BACKEND", "1", 0);\n\t}\n}\n#endif\n\n'''
+              lines.insert(insert_at, block)
+              path.write_text(''.join(lines))
+          PY
+          grep -q '^#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0$' MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+
+      - name: Add standalone ordinary-render Vulkan E2E
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Tests/Metal4CommandBackend
+          cat > Tests/Metal4CommandBackend/metal4_render.vert <<'GLSL'
+          #version 450
+          vec2 positions[3] = vec2[](
+              vec2(-0.80, -0.80),
+              vec2( 0.80, -0.80),
+              vec2( 0.00,  0.80)
+          );
+          void main() {
+              gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+          }
+          GLSL
+          cat > Tests/Metal4CommandBackend/metal4_render.frag <<'GLSL'
+          #version 450
+          layout(location = 0) out vec4 outColor;
+          void main() {
+              outColor = vec4(0.25, 0.50, 0.75, 1.0);
+          }
+          GLSL
+          cat > Tests/Metal4CommandBackend/metal4_render_e2e.cpp <<'CPP'
+          #include <vulkan/vulkan.h>
+
+          #include <algorithm>
+          #include <array>
+          #include <cstdint>
+          #include <cstring>
+          #include <fstream>
+          #include <iostream>
+          #include <stdexcept>
+          #include <string>
+          #include <vector>
+
+          namespace {
+
+          [[noreturn]] void fail(const std::string& message) { throw std::runtime_error(message); }
+
+          void check(VkResult result, const char* operation) {
+              if (result != VK_SUCCESS) {
+                  fail(std::string(operation) + " failed with VkResult " + std::to_string(result));
+              }
+          }
+
+          bool hasName(const std::vector<VkExtensionProperties>& extensions, const char* name) {
+              return std::any_of(extensions.begin(), extensions.end(), [&](const auto& extension) {
+                  return std::strcmp(extension.extensionName, name) == 0;
+              });
+          }
+
+          std::vector<uint32_t> readSpirv(const char* path) {
+              std::ifstream stream(path, std::ios::binary | std::ios::ate);
+              if (!stream) { fail(std::string("Cannot open SPIR-V file: ") + path); }
+              const auto size = stream.tellg();
+              if (size <= 0 || (size % 4) != 0) { fail("Invalid SPIR-V byte count"); }
+              std::vector<uint32_t> words(static_cast<size_t>(size) / sizeof(uint32_t));
+              stream.seekg(0);
+              stream.read(reinterpret_cast<char*>(words.data()), size);
+              if (!stream) { fail("Cannot read complete SPIR-V file"); }
+              return words;
+          }
+
+          uint32_t chooseMemoryType(const VkPhysicalDeviceMemoryProperties& properties,
+                                    uint32_t typeBits,
+                                    VkMemoryPropertyFlags required,
+                                    VkMemoryPropertyFlags preferred,
+                                    bool* coherent = nullptr) {
+              uint32_t fallback = UINT32_MAX;
+              for (uint32_t index = 0; index < properties.memoryTypeCount; ++index) {
+                  if ((typeBits & (1u << index)) == 0) { continue; }
+                  const auto flags = properties.memoryTypes[index].propertyFlags;
+                  if ((flags & required) != required) { continue; }
+                  if (fallback == UINT32_MAX) { fallback = index; }
+                  if ((flags & preferred) == preferred) {
+                      if (coherent) { *coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0; }
+                      return index;
+                  }
+              }
+              if (fallback == UINT32_MAX) { fail("No compatible Vulkan memory type"); }
+              if (coherent) {
+                  *coherent = (properties.memoryTypes[fallback].propertyFlags &
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+              }
+              return fallback;
+          }
+
+          VkShaderModule createShaderModule(VkDevice device, const std::vector<uint32_t>& words) {
+              VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+              info.codeSize = words.size() * sizeof(uint32_t);
+              info.pCode = words.data();
+              VkShaderModule module = VK_NULL_HANDLE;
+              check(vkCreateShaderModule(device, &info, nullptr, &module), "vkCreateShaderModule");
+              return module;
+          }
+
+          VkFence createFence(VkDevice device) {
+              VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+              VkFence fence = VK_NULL_HANDLE;
+              check(vkCreateFence(device, &info, nullptr, &fence), "vkCreateFence");
+              return fence;
+          }
+
+          void waitFence(VkDevice device, VkFence fence) {
+              check(vkWaitForFences(device, 1, &fence, VK_TRUE, 30'000'000'000ull), "vkWaitForFences");
+          }
+
+          VkCommandBuffer beginCommandBuffer(VkDevice device, VkCommandPool pool) {
+              VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+              allocation.commandPool = pool;
+              allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+              allocation.commandBufferCount = 1;
+              VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+              check(vkAllocateCommandBuffers(device, &allocation, &commandBuffer), "vkAllocateCommandBuffers");
+              VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+              begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+              check(vkBeginCommandBuffer(commandBuffer, &begin), "vkBeginCommandBuffer");
+              return commandBuffer;
+          }
+
+          void endCommandBuffer(VkCommandBuffer commandBuffer) {
+              check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
+          }
+
+          struct Buffer {
+              VkDevice device = VK_NULL_HANDLE;
+              VkBuffer buffer = VK_NULL_HANDLE;
+              VkDeviceMemory memory = VK_NULL_HANDLE;
+              VkDeviceSize size = 0;
+              bool coherent = false;
+              void destroy() {
+                  if (buffer) { vkDestroyBuffer(device, buffer, nullptr); buffer = VK_NULL_HANDLE; }
+                  if (memory) { vkFreeMemory(device, memory, nullptr); memory = VK_NULL_HANDLE; }
+              }
+              ~Buffer() { destroy(); }
+              Buffer() = default;
+              Buffer(const Buffer&) = delete;
+              Buffer& operator=(const Buffer&) = delete;
+          };
+
+          Buffer createReadbackBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSize size) {
+              Buffer result;
+              result.device = device;
+              result.size = size;
+              VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+              info.size = size;
+              info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+              info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+              check(vkCreateBuffer(device, &info, nullptr, &result.buffer), "vkCreateBuffer");
+              VkMemoryRequirements requirements{};
+              vkGetBufferMemoryRequirements(device, result.buffer, &requirements);
+              VkPhysicalDeviceMemoryProperties properties{};
+              vkGetPhysicalDeviceMemoryProperties(physicalDevice, &properties);
+              const uint32_t memoryType = chooseMemoryType(
+                  properties,
+                  requirements.memoryTypeBits,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                  &result.coherent);
+              VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+              allocation.allocationSize = requirements.size;
+              allocation.memoryTypeIndex = memoryType;
+              check(vkAllocateMemory(device, &allocation, nullptr, &result.memory), "vkAllocateMemory(buffer)");
+              check(vkBindBufferMemory(device, result.buffer, result.memory, 0), "vkBindBufferMemory");
+              return result;
+          }
+
+          }  // namespace
+
+          int main(int argc, char** argv) {
+              try {
+                  if (argc != 3) { fail("usage: metal4-render-e2e vertex.spv fragment.spv"); }
+
+                  uint32_t instanceExtensionCount = 0;
+                  check(vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr),
+                        "vkEnumerateInstanceExtensionProperties(count)");
+                  std::vector<VkExtensionProperties> instanceExtensions(instanceExtensionCount);
+                  check(vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, instanceExtensions.data()),
+                        "vkEnumerateInstanceExtensionProperties");
+                  std::vector<const char*> enabledInstanceExtensions;
+                  VkInstanceCreateFlags instanceFlags = 0;
+          #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+                  if (hasName(instanceExtensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+                      enabledInstanceExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+                      instanceFlags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+                  }
+          #endif
+                  VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+                  application.pApplicationName = "MoltenVK Metal 4 render E2E";
+                  application.apiVersion = VK_API_VERSION_1_1;
+                  VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+                  instanceInfo.flags = instanceFlags;
+                  instanceInfo.pApplicationInfo = &application;
+                  instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledInstanceExtensions.size());
+                  instanceInfo.ppEnabledExtensionNames = enabledInstanceExtensions.data();
+                  VkInstance instance = VK_NULL_HANDLE;
+                  check(vkCreateInstance(&instanceInfo, nullptr, &instance), "vkCreateInstance");
+
+                  uint32_t physicalDeviceCount = 0;
+                  check(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr),
+                        "vkEnumeratePhysicalDevices(count)");
+                  if (!physicalDeviceCount) { fail("No Vulkan physical device"); }
+                  std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+                  check(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()),
+                        "vkEnumeratePhysicalDevices");
+                  VkPhysicalDevice physicalDevice = physicalDevices.front();
+
+                  uint32_t queueFamilyCount = 0;
+                  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
+                  std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+                  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
+                  uint32_t queueFamilyIndex = UINT32_MAX;
+                  for (uint32_t index = 0; index < queueFamilyCount; ++index) {
+                      if ((queueFamilies[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                          queueFamilyIndex = index;
+                          break;
+                      }
+                  }
+                  if (queueFamilyIndex == UINT32_MAX) { fail("No graphics queue family"); }
+
+                  uint32_t deviceExtensionCount = 0;
+                  check(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &deviceExtensionCount, nullptr),
+                        "vkEnumerateDeviceExtensionProperties(count)");
+                  std::vector<VkExtensionProperties> deviceExtensions(deviceExtensionCount);
+                  check(vkEnumerateDeviceExtensionProperties(
+                            physicalDevice, nullptr, &deviceExtensionCount, deviceExtensions.data()),
+                        "vkEnumerateDeviceExtensionProperties");
+                  std::vector<const char*> enabledDeviceExtensions;
+          #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+                  if (hasName(deviceExtensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+                      enabledDeviceExtensions.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+                  }
+          #endif
+                  const float priority = 1.0f;
+                  VkDeviceQueueCreateInfo queueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+                  queueInfo.queueFamilyIndex = queueFamilyIndex;
+                  queueInfo.queueCount = 1;
+                  queueInfo.pQueuePriorities = &priority;
+                  VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+                  deviceInfo.queueCreateInfoCount = 1;
+                  deviceInfo.pQueueCreateInfos = &queueInfo;
+                  deviceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledDeviceExtensions.size());
+                  deviceInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
+                  VkDevice device = VK_NULL_HANDLE;
+                  check(vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &device), "vkCreateDevice");
+                  VkQueue queue = VK_NULL_HANDLE;
+                  vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
+
+                  VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+                  poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+                  poolInfo.queueFamilyIndex = queueFamilyIndex;
+                  VkCommandPool commandPool = VK_NULL_HANDLE;
+                  check(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool), "vkCreateCommandPool");
+
+                  constexpr uint32_t width = 64;
+                  constexpr uint32_t height = 64;
+                  constexpr VkDeviceSize imageBytes = width * height * 4;
+                  VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                  imageInfo.imageType = VK_IMAGE_TYPE_2D;
+                  imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+                  imageInfo.extent = {width, height, 1};
+                  imageInfo.mipLevels = 1;
+                  imageInfo.arrayLayers = 1;
+                  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+                  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+                  imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                  VkImage image = VK_NULL_HANDLE;
+                  check(vkCreateImage(device, &imageInfo, nullptr, &image), "vkCreateImage");
+                  VkMemoryRequirements imageRequirements{};
+                  vkGetImageMemoryRequirements(device, image, &imageRequirements);
+                  VkPhysicalDeviceMemoryProperties memoryProperties{};
+                  vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+                  const uint32_t imageMemoryType = chooseMemoryType(
+                      memoryProperties, imageRequirements.memoryTypeBits, 0,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                  VkMemoryAllocateInfo imageAllocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                  imageAllocation.allocationSize = imageRequirements.size;
+                  imageAllocation.memoryTypeIndex = imageMemoryType;
+                  VkDeviceMemory imageMemory = VK_NULL_HANDLE;
+                  check(vkAllocateMemory(device, &imageAllocation, nullptr, &imageMemory), "vkAllocateMemory(image)");
+                  check(vkBindImageMemory(device, image, imageMemory, 0), "vkBindImageMemory");
+
+                  VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                  viewInfo.image = image;
+                  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                  viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+                  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                  viewInfo.subresourceRange.levelCount = 1;
+                  viewInfo.subresourceRange.layerCount = 1;
+                  VkImageView imageView = VK_NULL_HANDLE;
+                  check(vkCreateImageView(device, &viewInfo, nullptr, &imageView), "vkCreateImageView");
+
+                  VkAttachmentDescription attachment{};
+                  attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+                  attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+                  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                  attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                  attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                  attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                  attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                  attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                  VkAttachmentReference colorReference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+                  VkSubpassDescription subpass{};
+                  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+                  subpass.colorAttachmentCount = 1;
+                  subpass.pColorAttachments = &colorReference;
+                  std::array<VkSubpassDependency, 2> dependencies{};
+                  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+                  dependencies[0].dstSubpass = 0;
+                  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  dependencies[1].srcSubpass = 0;
+                  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+                  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  dependencies[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                  VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+                  renderPassInfo.attachmentCount = 1;
+                  renderPassInfo.pAttachments = &attachment;
+                  renderPassInfo.subpassCount = 1;
+                  renderPassInfo.pSubpasses = &subpass;
+                  renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+                  renderPassInfo.pDependencies = dependencies.data();
+                  VkRenderPass renderPass = VK_NULL_HANDLE;
+                  check(vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass), "vkCreateRenderPass");
+
+                  VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                  framebufferInfo.renderPass = renderPass;
+                  framebufferInfo.attachmentCount = 1;
+                  framebufferInfo.pAttachments = &imageView;
+                  framebufferInfo.width = width;
+                  framebufferInfo.height = height;
+                  framebufferInfo.layers = 1;
+                  VkFramebuffer framebuffer = VK_NULL_HANDLE;
+                  check(vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffer), "vkCreateFramebuffer");
+
+                  const auto vertexWords = readSpirv(argv[1]);
+                  const auto fragmentWords = readSpirv(argv[2]);
+                  VkShaderModule vertexModule = createShaderModule(device, vertexWords);
+                  VkShaderModule fragmentModule = createShaderModule(device, fragmentWords);
+                  std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
+                  shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                  shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+                  shaderStages[0].module = vertexModule;
+                  shaderStages[0].pName = "main";
+                  shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                  shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+                  shaderStages[1].module = fragmentModule;
+                  shaderStages[1].pName = "main";
+                  VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+                  VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+                  check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout),
+                        "vkCreatePipelineLayout");
+                  VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+                  VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+                  inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                  VkViewport viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+                  VkRect2D scissor{{0, 0}, {width, height}};
+                  VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+                  viewportState.viewportCount = 1;
+                  viewportState.pViewports = &viewport;
+                  viewportState.scissorCount = 1;
+                  viewportState.pScissors = &scissor;
+                  VkPipelineRasterizationStateCreateInfo rasterization{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+                  rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+                  rasterization.cullMode = VK_CULL_MODE_NONE;
+                  rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                  rasterization.lineWidth = 1.0f;
+                  VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+                  multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                  VkPipelineColorBlendAttachmentState colorAttachment{};
+                  colorAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                  VkPipelineColorBlendStateCreateInfo colorBlend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+                  colorBlend.attachmentCount = 1;
+                  colorBlend.pAttachments = &colorAttachment;
+                  VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+                  pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+                  pipelineInfo.pStages = shaderStages.data();
+                  pipelineInfo.pVertexInputState = &vertexInput;
+                  pipelineInfo.pInputAssemblyState = &inputAssembly;
+                  pipelineInfo.pViewportState = &viewportState;
+                  pipelineInfo.pRasterizationState = &rasterization;
+                  pipelineInfo.pMultisampleState = &multisample;
+                  pipelineInfo.pColorBlendState = &colorBlend;
+                  pipelineInfo.layout = pipelineLayout;
+                  pipelineInfo.renderPass = renderPass;
+                  VkPipeline pipeline = VK_NULL_HANDLE;
+                  check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
+                        "vkCreateGraphicsPipelines");
+
+                  VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
+                  VkClearValue clear{};
+                  clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+                  VkRenderPassBeginInfo beginInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                  beginInfo.renderPass = renderPass;
+                  beginInfo.framebuffer = framebuffer;
+                  beginInfo.renderArea.extent = {width, height};
+                  beginInfo.clearValueCount = 1;
+                  beginInfo.pClearValues = &clear;
+                  vkCmdBeginRenderPass(renderCommand, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+                  vkCmdBindPipeline(renderCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                  vkCmdDraw(renderCommand, 3, 1, 0, 0);
+                  vkCmdEndRenderPass(renderCommand);
+                  endCommandBuffer(renderCommand);
+                  VkSubmitInfo renderSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                  renderSubmit.commandBufferCount = 1;
+                  renderSubmit.pCommandBuffers = &renderCommand;
+                  VkFence renderFence = createFence(device);
+                  check(vkQueueSubmit(queue, 1, &renderSubmit, renderFence), "vkQueueSubmit(render)");
+                  waitFence(device, renderFence);
+
+                  Buffer readback = createReadbackBuffer(physicalDevice, device, imageBytes);
+                  VkCommandBuffer copyCommand = beginCommandBuffer(device, commandPool);
+                  VkBufferImageCopy copy{};
+                  copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                  copy.imageSubresource.layerCount = 1;
+                  copy.imageExtent = {width, height, 1};
+                  vkCmdCopyImageToBuffer(copyCommand, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                         readback.buffer, 1, &copy);
+                  endCommandBuffer(copyCommand);
+                  VkSubmitInfo copySubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                  copySubmit.commandBufferCount = 1;
+                  copySubmit.pCommandBuffers = &copyCommand;
+                  VkFence copyFence = createFence(device);
+                  check(vkQueueSubmit(queue, 1, &copySubmit, copyFence), "vkQueueSubmit(readback)");
+                  waitFence(device, copyFence);
+
+                  void* mapped = nullptr;
+                  check(vkMapMemory(device, readback.memory, 0, imageBytes, 0, &mapped), "vkMapMemory");
+                  if (!readback.coherent) {
+                      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+                      range.memory = readback.memory;
+                      range.size = VK_WHOLE_SIZE;
+                      check(vkInvalidateMappedMemoryRanges(device, 1, &range),
+                            "vkInvalidateMappedMemoryRanges");
+                  }
+                  const auto* bytes = static_cast<const uint8_t*>(mapped);
+                  const size_t center = (static_cast<size_t>(height / 2) * width + width / 2) * 4;
+                  const bool matches = bytes[center] >= 60 && bytes[center] <= 68 &&
+                                       bytes[center + 1] >= 124 && bytes[center + 1] <= 132 &&
+                                       bytes[center + 2] >= 187 && bytes[center + 2] <= 195 &&
+                                       bytes[center + 3] >= 250;
+                  vkUnmapMemory(device, readback.memory);
+                  if (!matches) { fail("Rendered center pixel does not match fragment output"); }
+                  std::cout << "RENDER_OK" << std::endl;
+
+                  check(vkDeviceWaitIdle(device), "vkDeviceWaitIdle");
+                  vkDestroyFence(device, copyFence, nullptr);
+                  vkDestroyFence(device, renderFence, nullptr);
+                  vkFreeCommandBuffers(device, commandPool, 1, &copyCommand);
+                  vkFreeCommandBuffers(device, commandPool, 1, &renderCommand);
+                  readback.destroy();
+                  vkDestroyPipeline(device, pipeline, nullptr);
+                  vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+                  vkDestroyShaderModule(device, fragmentModule, nullptr);
+                  vkDestroyShaderModule(device, vertexModule, nullptr);
+                  vkDestroyFramebuffer(device, framebuffer, nullptr);
+                  vkDestroyRenderPass(device, renderPass, nullptr);
+                  vkDestroyImageView(device, imageView, nullptr);
+                  vkDestroyImage(device, image, nullptr);
+                  vkFreeMemory(device, imageMemory, nullptr);
+                  vkDestroyCommandPool(device, commandPool, nullptr);
+                  vkDestroyDevice(device, nullptr);
+                  vkDestroyInstance(instance, nullptr);
+                  return 0;
+              } catch (const std::exception& error) {
+                  std::cerr << "METAL4_RENDER_E2E_FAIL: " << error.what() << std::endl;
+                  return 1;
+              }
+          }
+          CPP
+
+          cat > Tests/Metal4CommandBackend/run-render-macos.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+          BUILD_DIR="$ROOT/build/metal4-render-e2e"
+          mkdir -p "$BUILD_DIR"
+          DYLIB="$(find "$ROOT/Package" -path '*/dynamic/dylib/macOS/libMoltenVK.dylib' -print -quit)"
+          if [[ -z "$DYLIB" ]]; then
+            DYLIB="$(find "$ROOT/Package" -type f -name 'libMoltenVK.dylib' -print -quit)"
+          fi
+          [[ -n "$DYLIB" ]] || { echo 'Packaged libMoltenVK.dylib not found' >&2; exit 1; }
+          command -v glslangValidator >/dev/null || { echo 'glslangValidator is required' >&2; exit 1; }
+          glslangValidator -V --target-env vulkan1.1 -S vert \
+            -o "$BUILD_DIR/render.vert.spv" "$ROOT/Tests/Metal4CommandBackend/metal4_render.vert"
+          glslangValidator -V --target-env vulkan1.1 -S frag \
+            -o "$BUILD_DIR/render.frag.spv" "$ROOT/Tests/Metal4CommandBackend/metal4_render.frag"
+          xcrun --sdk macosx clang++ -std=c++17 -Wall -Wextra -Werror \
+            -I"$ROOT/MoltenVK/include" \
+            "$ROOT/Tests/Metal4CommandBackend/metal4_render_e2e.cpp" "$DYLIB" \
+            -Wl,-rpath,"$(dirname "$DYLIB")" \
+            -framework Metal -framework Foundation -framework QuartzCore \
+            -framework IOSurface -framework IOKit \
+            -o "$BUILD_DIR/metal4-render-e2e"
+          export MVK_CONFIG_LOG_LEVEL=3
+          export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=0
+          MVK_CONFIG_METAL4_COMMAND_BACKEND=0 "$BUILD_DIR/metal4-render-e2e" \
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \
+            >"$BUILD_DIR/legacy-render.log" 2>&1
+          grep -q 'RENDER_OK' "$BUILD_DIR/legacy-render.log"
+          if grep -q 'Executed first Vulkan submission on the Metal 4' "$BUILD_DIR/legacy-render.log"; then
+            echo 'Metal 4 executed in the legacy control' >&2; exit 1
+          fi
+          MVK_CONFIG_METAL4_COMMAND_BACKEND=1 "$BUILD_DIR/metal4-render-e2e" \
+            "$BUILD_DIR/render.vert.spv" "$BUILD_DIR/render.frag.spv" \
+            >"$BUILD_DIR/metal4-render.log" 2>&1
+          grep -q 'RENDER_OK' "$BUILD_DIR/metal4-render.log"
+          grep -q 'Executed first Vulkan submission on the Metal 4' "$BUILD_DIR/metal4-render.log"
+          grep -Eq 'render_passes=[1-9][0-9]*|draws=[1-9][0-9]*' "$BUILD_DIR/metal4-render.log"
+          if grep -Eq 'failures=[1-9][0-9]*' "$BUILD_DIR/metal4-render.log"; then
+            cat "$BUILD_DIR/metal4-render.log" >&2; exit 1
+          fi
+          cat "$BUILD_DIR/legacy-render.log"
+          cat "$BUILD_DIR/metal4-render.log"
+          SH
+          chmod +x Tests/Metal4CommandBackend/run-render-macos.sh
+          bash -n Tests/Metal4CommandBackend/run-render-macos.sh
+
+      - name: Add game-run telemetry analyzer and launcher
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Scripts Docs
+          cat > Scripts/analyze-metal4-game-run.py <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+          import argparse
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          MARKER = 'Metal 4 command backend summary:'
+          PAIR = re.compile(r'([A-Za-z][A-Za-z0-9_]*)\s*=\s*(-?\d+)')
+
+          def main() -> int:
+              parser = argparse.ArgumentParser()
+              parser.add_argument('logs', nargs='+', type=Path)
+              parser.add_argument('--output', type=Path)
+              parser.add_argument('--require-evaluable', action='store_true')
+              args = parser.parse_args()
+              totals: dict[str, int] = {}
+              summaries = 0
+              backend_ready = False
+              first_real = False
+              failures: list[str] = []
+              for path in args.logs:
+                  for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+                      backend_ready |= 'Metal 4 Vulkan' in line and 'backend ready' in line
+                      first_real |= 'Executed first Vulkan submission on the Metal 4' in line
+                      if MARKER in line:
+                          summaries += 1
+                          for key, value in PAIR.findall(line):
+                              totals[key] = totals.get(key, 0) + int(value)
+                      if 'Metal 4' in line and any(token in line.lower() for token in ('failed', 'device lost')):
+                          failures.append(line)
+              real = totals.get('real_submissions', 0)
+              fallback = totals.get('fallbacks', 0)
+              compute = totals.get('compute_dispatches', totals.get('dispatches', 0))
+              image = sum(totals.get(key, 0) for key in (
+                  'image_copies', 'image_clears', 'buffer_to_image_copies', 'image_to_buffer_copies'))
+              render = sum(totals.get(key, 0) for key in (
+                  'render_passes', 'render_submissions', 'draws', 'draw_calls'))
+              evaluable = (backend_ready and first_real and compute > 0 and image > 0 and render > 0 and
+                           totals.get('failures', 0) == 0 and not failures)
+              result = {
+                  'schemaVersion': 1,
+                  'backendReady': backend_ready,
+                  'firstRealSubmissionObserved': first_real,
+                  'summaryCount': summaries,
+                  'totals': dict(sorted(totals.items())),
+                  'submissionCoverage': {
+                      'real': real,
+                      'fallback': fallback,
+                      'ratio': round(real / (real + fallback), 6) if real + fallback else 0.0,
+                  },
+                  'workloadCoverage': {
+                      'compute': compute, 'image': image, 'render': render, 'evaluable': evaluable,
+                  },
+                  'failureMessages': failures,
+              }
+              rendered = json.dumps(result, indent=2, sort_keys=True)
+              print(rendered)
+              if args.output:
+                  args.output.parent.mkdir(parents=True, exist_ok=True)
+                  args.output.write_text(rendered + '\n', encoding='utf-8')
+              if not summaries:
+                  return 2
+              if args.require_evaluable and not evaluable:
+                  return 3
+              return 0
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+          PY
+          chmod +x Scripts/analyze-metal4-game-run.py
+          cat > Scripts/run-melonx-metal4.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          backend=1
+          log_dir="${METAL4_LOG_DIR:-$PWD/build/metal4-game-evaluation}"
+          while (($#)); do
+            case "$1" in
+              --backend) backend="${2:?missing backend}"; shift 2 ;;
+              --log-dir) log_dir="${2:?missing log dir}"; shift 2 ;;
+              --) shift; break ;;
+              *) break ;;
+            esac
+          done
+          (($#)) || { echo "usage: $0 [--backend 0|1] [--log-dir DIR] -- EXECUTABLE [ARGS...]" >&2; exit 64; }
+          [[ "$backend" == 0 || "$backend" == 1 ]] || exit 64
+          mkdir -p "$log_dir"
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          mode=$([[ "$backend" == 1 ]] && echo metal4 || echo legacy)
+          log="$log_dir/$mode-$stamp.log"
+          json="$log_dir/$mode-$stamp.json"
+          export MVK_CONFIG_METAL4_COMMAND_BACKEND="$backend"
+          export MVK_CONFIG_LOG_LEVEL="${MVK_CONFIG_LOG_LEVEL:-3}"
+          export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS="${MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS:-0}"
+          set +e
+          "$@" > >(tee "$log") 2>&1
+          app_status=$?
+          set -e
+          analyzer_args=("$log" --output "$json")
+          [[ "${METAL4_REQUIRE_EVALUABLE:-0}" == 1 && "$backend" == 1 ]] && analyzer_args+=(--require-evaluable)
+          set +e
+          python3 "$(dirname "$0")/analyze-metal4-game-run.py" "${analyzer_args[@]}"
+          analyzer_status=$?
+          set -e
+          printf 'application_status=%s\nanalyzer_status=%s\nlog=%s\njson=%s\n' \
+            "$app_status" "$analyzer_status" "$log" "$json"
+          ((app_status == 0)) || exit "$app_status"
+          exit "$analyzer_status"
+          SH
+          chmod +x Scripts/run-melonx-metal4.sh
+          cat > Docs/Metal4_Game_Evaluation.md <<'MD'
+          # Metal 4 game evaluation
+
+          Production/default MoltenVK builds remain default-off. A verified evaluation
+          package may compile `MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT=1`; an explicit
+          `MVK_CONFIG_METAL4_COMMAND_BACKEND=0|1` process value always overrides it.
+
+          A game run is performance-evaluable only when the same run reports real
+          Metal 4 submissions and nonzero compute, image, and ordinary-render commands,
+          with zero backend failures. Fallbacks are reported and remain compatibility
+          evidence rather than Metal 4 performance evidence.
+
+          On macOS host/debug builds:
+
+          ```bash
+          Scripts/run-melonx-metal4.sh --backend 0 -- /path/to/MeloNX
+          Scripts/run-melonx-metal4.sh --backend 1 -- /path/to/MeloNX
+          ```
+
+          On iOS, build the exact tested source twice: unmodified for the legacy
+          control, and with the compile-time evaluation default set to 1 for the
+          drop-in Metal 4 build. Keep emulator SHA, game/save/scene/settings, device,
+          OS, run duration, and thermal starting condition fixed.
+          MD
+          python3 -m py_compile Scripts/analyze-metal4-game-run.py
+          bash -n Scripts/run-melonx-metal4.sh
+
+      - name: Remove superseded temporary transport and workflows
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/render-source-patch
+          rm -f .github/workflows/apply-metal4-render-source.yml
+          rm -f .github/workflows/install-metal4-game-evaluation.yml
+          rm -f .github/workflows/add-metal4-evaluation-default-switch.yml
+          rm -f .github/workflows/finalize-metal4-game-evaluable.yml
+          rm -f .github/workflows/add-metal4-render-e2e.yml
+          rm -f .github/workflows/fix-metal4-render-e2e-runner.yml
+          rm -f .github/workflows/publish-metal4-game-readiness.yml
+          rm -f .github/workflows/metal4-current-source-snapshot.yml
+          rm -f .github/workflows/zz-autofinish-metal4-game-evaluable.yml
+
+      - name: Run source contracts and static gates
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          grep -R -q 'MTL4ComputeCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'copyFromTexture' MoltenVK/MoltenVK
+          grep -R -q 'MTL4RenderCommandEncoder' MoltenVK/MoltenVK
+          grep -R -q 'drawPrimitives' MoltenVK/MoltenVK/Commands MoltenVK/MoltenVK/GPUObjects
+          grep -q '^#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0$' MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+          bash -n Tests/Metal4CommandBackend/run-macos.sh
+          bash -n Tests/Metal4CommandBackend/run-render-macos.sh
+          git diff --check
+
+      - name: Fetch macOS dependencies
+        if: steps.ready.outputs.exists != 'true'
+        run: ./fetchDependencies -v --macos
+
+      - name: Build macOS package
+        if: steps.ready.outputs.exists != 'true'
+        run: make macos
+
+      - name: Install GLSL compiler
+        if: steps.ready.outputs.exists != 'true'
+        run: brew install glslang
+
+      - name: Run existing compute and image Vulkan E2E
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash Tests/Metal4CommandBackend/run-macos.sh
+          log=build/metal4-command-backend-e2e/metal4.log
+          grep -q 'COMPUTE_OK' "$log"
+          grep -q 'IMAGE_DATA_OK' "$log"
+          grep -Eq 'compute_dispatches=[1-9][0-9]*' "$log"
+          grep -Eq 'image_copies=[1-9][0-9]*' "$log"
+          if grep -Eq 'failures=[1-9][0-9]*' "$log"; then cat "$log" >&2; exit 1; fi
+
+      - name: Run ordinary-render Vulkan E2E
+        if: steps.ready.outputs.exists != 'true'
+        run: bash Tests/Metal4CommandBackend/run-render-macos.sh
+
+      - name: Fetch iOS dependencies
+        if: steps.ready.outputs.exists != 'true'
+        run: ./fetchDependencies -v --ios
+
+      - name: Build iOS package
+        if: steps.ready.outputs.exists != 'true'
+        run: make ios
+
+      - name: Commit the exact tested implementation locally
+        if: steps.ready.outputs.exists != 'true'
+        id: tested
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(metal4): make compute image and render game-evaluable"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Add readiness manifest for the tested commit
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cat > metal4-game-readiness.json <<JSON
+          {
+            "schemaVersion": 1,
+            "testedSourceSha": "$TESTED_SHA",
+            "backendDefault": "off",
+            "dropInEvaluationDefaultSupported": true,
+            "macOSBuild": "pass",
+            "iOSBuild": "pass",
+            "vulkanE2E": {
+              "legacyControl": "pass",
+              "metal4Compute": "pass",
+              "metal4Image": "pass",
+              "metal4OrdinaryRender": "pass",
+              "backendFailures": 0
+            },
+            "runtimeOverride": "MVK_CONFIG_METAL4_COMMAND_BACKEND=0|1",
+            "minimumGameEvidence": [
+              "real_submissions>0",
+              "compute_dispatches>0",
+              "image_commands>0",
+              "render_passes_or_draws>0",
+              "failures=0"
+            ]
+          }
+          JSON
+          git add metal4-game-readiness.json
+          git commit -m "test(metal4): publish exact game-readiness manifest"
+
+      - name: Push only after all validation succeeds
+        if: steps.ready.outputs.exists != 'true'
+        run: git push origin HEAD:$BRANCH
+
+      - name: Upload exact validation evidence
+        if: steps.ready.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal4-game-readiness-${{ steps.tested.outputs.sha }}
+          path: |
+            metal4-game-readiness.json
+            build/metal4-command-backend-e2e/legacy.log
+            build/metal4-command-backend-e2e/metal4.log
+            build/metal4-render-e2e/legacy-render.log
+            build/metal4-render-e2e/metal4-render.log
+            xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14

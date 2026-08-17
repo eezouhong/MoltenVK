@@ -1,0 +1,106 @@
+name: Diagnose latest definitive Metal 4 acceptance now
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/diagnose-metal4-autofinish-now.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: metal4/phase1-command-backend-poc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Poll the latest definitive run
+        id: run
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 2700))
+          while :; do
+            data="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/zz-autofinish-metal4-game-evaluable.yml/runs?branch=$BRANCH&per_page=20")"
+            status="$(jq -r '.workflow_runs[0].status // "missing"' <<<"$data")"
+            if [[ "$status" == completed ]]; then
+              echo "run_id=$(jq -r '.workflow_runs[0].id' <<<"$data")" >> "$GITHUB_OUTPUT"
+              echo "head_sha=$(jq -r '.workflow_runs[0].head_sha' <<<"$data")" >> "$GITHUB_OUTPUT"
+              echo "conclusion=$(jq -r '.workflow_runs[0].conclusion' <<<"$data")" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo 'Latest definitive run did not complete in time' >&2
+              exit 1
+            fi
+            sleep 20
+          done
+      - name: Exit when the run passed
+        if: steps.run.outputs.conclusion == 'success'
+        run: echo 'Definitive Metal 4 acceptance passed; no diagnostic required.'
+      - name: Download exact failed-run logs
+        if: steps.run.outputs.conclusion != 'success'
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.run.outputs.run_id }}
+          HEAD_SHA: ${{ steps.run.outputs.head_sha }}
+          CONCLUSION: ${{ steps.run.outputs.conclusion }}
+        run: |
+          set -euo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/logs" \
+            -o "$RUNNER_TEMP/logs.zip"
+          mkdir -p "$RUNNER_TEMP/logs"
+          unzip -q "$RUNNER_TEMP/logs.zip" -d "$RUNNER_TEMP/logs"
+          mkdir -p Diagnostics
+          output="Diagnostics/metal4-autofinish-failure-$RUN_ID.txt"
+          {
+            echo "workflow=Autofinish game-evaluable Metal 4 backend"
+            echo "run_id=$RUN_ID"
+            echo "head_sha=$HEAD_SHA"
+            echo "conclusion=$CONCLUSION"
+            echo
+            echo '===== ERROR SUMMARY ====='
+            grep -RinE '(^|[^[:alpha:]])(error:|fatal:|failed|failure|No such file|not found|undefined|undeclared|AssertionError|Traceback|Process completed with exit code)' \
+              "$RUNNER_TEMP/logs" | tail -n 700 || true
+            echo
+            echo '===== FAILED STEP TAILS ====='
+            while IFS= read -r -d '' log; do
+              if grep -Eqi '(error:|fatal:|failed|failure|Process completed with exit code)' "$log"; then
+                echo
+                echo "--- ${log#$RUNNER_TEMP/logs/} ---"
+                tail -n 180 "$log"
+              fi
+            done < <(find "$RUNNER_TEMP/logs" -type f -print0)
+          } > "$output"
+          rm -f .github/workflows/diagnose-metal4-autofinish-now.yml
+          rm -f .github/workflows/diagnose-metal4-autofinish.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "diagnostics(metal4): capture failed acceptance run $RUN_ID"
+          git push origin HEAD:$BRANCH
+      - name: Remove the one-shot observer after success
+        if: steps.run.outputs.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/diagnose-metal4-autofinish-now.yml
+          rm -f .github/workflows/diagnose-metal4-autofinish.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci(metal4): remove completed acceptance observers"
+          git push origin HEAD:$BRANCH

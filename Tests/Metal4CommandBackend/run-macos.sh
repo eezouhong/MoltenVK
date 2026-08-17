@@ -34,10 +34,21 @@ if [[ -z "${DYLIB}" ]]; then
 fi
 DYLIB_DIR="$(dirname "${DYLIB}")"
 
+# A normal source build provides Vulkan-Headers under External. The fast E2E
+# path intentionally reuses a verified package, which carries the same public
+# Vulkan headers under Package/MoltenVK/MoltenVK/include.
+INCLUDE_ARGS=("-I${ROOT}/MoltenVK/include")
+if [[ -f "${ROOT}/External/Vulkan-Headers/include/vulkan/vulkan.h" ]]; then
+  INCLUDE_ARGS+=("-I${ROOT}/External/Vulkan-Headers/include")
+fi
+if [[ -f "${ROOT}/Package/MoltenVK/MoltenVK/include/vulkan/vulkan.h" ]]; then
+  INCLUDE_ARGS+=("-I${ROOT}/Package/MoltenVK/MoltenVK/include")
+fi
+
 xcrun --sdk macosx clang++ \
   -std=c++17 \
   -Wall -Wextra -Werror \
-  -I"${ROOT}/MoltenVK/include" \
+  "${INCLUDE_ARGS[@]}" \
   "${ROOT}/Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp" \
   "${DYLIB}" \
   -Wl,-rpath,"${DYLIB_DIR}" \

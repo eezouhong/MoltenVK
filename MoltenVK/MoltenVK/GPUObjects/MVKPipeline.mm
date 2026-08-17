@@ -2867,7 +2867,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	auto stageIsDescriptorless = [this](MVKShaderStage stage) {
 		const auto& resources = _stageResources[stage];
-		return resources.resources.allBits.areAllBitsClear() &&
+		return resources.resources.allBits.empty() &&
 			resources.implicitBuffers.needed.empty() &&
 			!resources.usesPhysicalStorageBufferAddresses;
 	};
@@ -2892,7 +2892,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasNoVertexInput = pVI &&
 		pVI->vertexBindingDescriptionCount == 0 &&
 		pVI->vertexAttributeDescriptionCount == 0 &&
-		_vkVertexBuffers.empty() && _mtlVertexBuffers.empty();
+		_vkVertexBuffers.areAllBitsClear() && _mtlVertexBuffers.areAllBitsClear();
 	bool hasStrictFixedFunction =
 		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
 		!pIA->primitiveRestartEnable &&

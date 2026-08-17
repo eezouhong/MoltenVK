@@ -258,8 +258,13 @@ def main() -> int:
     )
     require(
         pipeline_h + read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm"),
-        r"_supportsMetal4DescriptorlessRenderExecution[\s\S]*?resources\.allBits\.areAllBitsClear[\s\S]*?implicitBuffers\.needed\.empty",
+        r"_supportsMetal4DescriptorlessRenderExecution[\s\S]*?resources\.allBits\.empty[\s\S]*?implicitBuffers\.needed\.empty",
         "graphics pipeline eligibility does not reject descriptor or implicit-buffer use",
+    )
+    require(
+        pipeline_h + read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm"),
+        r"_vkVertexBuffers\.areAllBitsClear\(\)[\s\S]*?_mtlVertexBuffers\.areAllBitsClear\(\)",
+        "strict render eligibility does not use the small-bitset clear predicate for vertex bindings",
     )
     require(
         draw_h + draw_mm,

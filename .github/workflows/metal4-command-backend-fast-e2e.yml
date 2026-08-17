@@ -1,0 +1,65 @@
+name: Metal 4 Command Backend Fast E2E
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - Tests/Metal4CommandBackend/**
+      - .github/workflows/metal4-command-backend-fast-e2e.yml
+  workflow_dispatch:
+
+concurrency:
+  group: metal4-command-backend-fast-e2e
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      BUILT_SOURCE_SHA: 0a435358962e8dadcb690de2e5a159d85047ff9d
+      BUILT_WORKFLOW_RUN: "32069062383"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove the cached library is source-identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --quiet "$BUILT_SOURCE_SHA"..HEAD -- MoltenVK/
+          git diff --quiet "$BUILT_SOURCE_SHA"..HEAD -- ExternalRevisions/
+
+      - name: Download the successful macOS package
+        uses: actions/download-artifact@v4
+        with:
+          name: MoltenVK-macos
+          run-id: ${{ env.BUILT_WORKFLOW_RUN }}
+          github-token: ${{ github.token }}
+          path: build/fast-e2e-package
+
+      - name: Restore the package layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Package
+          tar -xf build/fast-e2e-package/MoltenVK-macos.tar -C Package
+          test -f Package/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib
+
+      - name: Run independent Vulkan compute image and render E2E
+        run: bash Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Upload exact logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal4-fast-e2e-${{ github.sha }}
+          path: build/metal4-command-backend-e2e/*.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1429,11 +1429,17 @@ void MVKQueue::initMTL4CommandQueue() {
 						  "Metal 4 command backend disabled because Metal private APIs are active.");
 		return;
 	}
-	if (!getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4 ||
-		!mvkOSVersionIsAtLeast(26.0)) {
+	bool supportsMetal4Family = getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4;
+	bool validationOverride =
+		mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_VALIDATION", 0.0) != 0.0;
+	if ((!supportsMetal4Family && !validationOverride) || !mvkOSVersionIsAtLeast(26.0)) {
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
 						  "Metal 4 command backend requested but unavailable on this OS or GPU.");
 		return;
+	}
+	if (!supportsMetal4Family) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command validation override bypassed only the GPU-family advertisement; public factories and the bounded commit probe must still pass.");
 	}
 	if (!getMetalFeatures().residencySets) {
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,

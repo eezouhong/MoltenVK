@@ -79,6 +79,7 @@ if grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "$
 fi
 
 MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
+MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
   >"${BUILD_DIR}/metal4.log" 2>&1
 

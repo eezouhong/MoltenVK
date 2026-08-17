@@ -1,0 +1,184 @@
+name: Autofix deterministic Metal 4 acceptance errors
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - "Diagnostics/metal4-autofinish-failure-*.txt"
+
+concurrency:
+  group: autofix-known-metal4-acceptance-errors
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply only deterministic fixes supported by the exact diagnostic
+        id: fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+          import re
+          from pathlib import Path
+
+          diagnostics = sorted(Path('Diagnostics').glob('metal4-autofinish-failure-*.txt'), key=lambda p: p.stat().st_mtime)
+          if not diagnostics:
+              raise SystemExit('diagnostic file is missing')
+          diagnostic_path = diagnostics[-1]
+          diagnostic = diagnostic_path.read_text(encoding='utf-8', errors='replace')
+          changed: list[str] = []
+
+          source_paths = [
+              *Path('MoltenVK/MoltenVK/Commands').glob('MVKCmd*.mm'),
+              Path('MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm'),
+              Path('MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h'),
+          ]
+          if re.search(r"undeclared identifier ['\"]mvK|use of undeclared identifier 'mvK|mvK[A-Z].*not found", diagnostic):
+              for path in source_paths:
+                  if not path.is_file():
+                      continue
+                  source = path.read_text()
+                  fixed = re.sub(r'\bmvK(?=[A-Z])', 'mvk', source)
+                  if fixed != source:
+                      path.write_text(fixed)
+                      changed.append(f'normalized helper-name casing in {path}')
+
+          pipeline = Path('MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h')
+          if pipeline.is_file() and ('areAllBitsClear' in diagnostic or "no member named 'areAllBitsClear'" in diagnostic):
+              source = pipeline.read_text()
+              fixed = source.replace('_stageResources.resources.allBits.areAllBitsClear()',
+                                     '_stageResources.resources.allBits.empty()')
+              if fixed != source:
+                  pipeline.write_text(fixed)
+                  changed.append('fixed descriptorless resource bitset predicate')
+
+          queue = Path('MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm')
+          if queue.is_file() and re.search(r"(getenv|setenv).*(undeclared|not found)|undeclared.*(getenv|setenv)", diagnostic, re.I):
+              source = queue.read_text()
+              if '#include <stdlib.h>' not in source:
+                  lines = source.splitlines(keepends=True)
+                  insert_at = max((i + 1 for i, line in enumerate(lines) if line.startswith('#include')), default=0)
+                  lines.insert(insert_at, '#include <stdlib.h>\n')
+                  queue.write_text(''.join(lines))
+                  changed.append('added POSIX stdlib declarations')
+
+          workflow = Path('.github/workflows/zz-autofinish-metal4-game-evaluable.yml')
+          if not workflow.is_file():
+              raise SystemExit('definitive acceptance workflow is missing')
+          source = workflow.read_text()
+          original = source
+
+          if 'call to deleted constructor of' in diagnostic or 'use of deleted function' in diagnostic:
+              old = '''              Buffer() = default;
+              Buffer(const Buffer&) = delete;
+              Buffer& operator=(const Buffer&) = delete;
+          };
+          '''
+              new = '''              Buffer() = default;
+              Buffer(const Buffer&) = delete;
+              Buffer& operator=(const Buffer&) = delete;
+              Buffer(Buffer&& other) noexcept :
+                  device(other.device), buffer(other.buffer), memory(other.memory),
+                  size(other.size), coherent(other.coherent) {
+                  other.device = VK_NULL_HANDLE;
+                  other.buffer = VK_NULL_HANDLE;
+                  other.memory = VK_NULL_HANDLE;
+                  other.size = 0;
+                  other.coherent = false;
+              }
+              Buffer& operator=(Buffer&& other) noexcept {
+                  if (this == &other) { return *this; }
+                  destroy();
+                  device = other.device;
+                  buffer = other.buffer;
+                  memory = other.memory;
+                  size = other.size;
+                  coherent = other.coherent;
+                  other.device = VK_NULL_HANDLE;
+                  other.buffer = VK_NULL_HANDLE;
+                  other.memory = VK_NULL_HANDLE;
+                  other.size = 0;
+                  other.coherent = false;
+                  return *this;
+              }
+          };
+          '''
+              if old in source:
+                  source = source.replace(old, new, 1)
+
+          if re.search(r"unused function ['\"]hasName|hasName.*unused", diagnostic, re.I):
+              source = source.replace('          bool hasName(const std::vector<VkExtensionProperties>& extensions,',
+                                      '          [[maybe_unused]] bool hasName(const std::vector<VkExtensionProperties>& extensions,', 1)
+
+          if re.search(r'ifstream.*read|stream\.read|streampos|streamsize', diagnostic, re.I):
+              source = source.replace(
+                  '              stream.read(reinterpret_cast<char*>(words.data()), size);',
+                  '              stream.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(size));',
+                  1,
+              )
+
+          if re.search(r'base64.*(invalid|unknown|usage)|--decode', diagnostic, re.I):
+              source = source.replace(
+                  '            if base64 --decode "$RUNNER_TEMP/render.transport" > "$RUNNER_TEMP/render.patch" 2>/dev/null && \\\n',
+                  '            if python3 -c \'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))\' < "$RUNNER_TEMP/render.transport" > "$RUNNER_TEMP/render.patch" 2>/dev/null && \\\n',
+                  1,
+              )
+
+          if 'neither applicable nor already applied' in diagnostic or 'git apply' in diagnostic and 'patch failed' in diagnostic:
+              source = source.replace(
+                  '''            else
+              echo "Staged render patch is neither applicable nor already applied" >&2
+              exit 1
+            fi
+''',
+                  '''            elif git apply --3way "$RUNNER_TEMP/render.patch"; then
+              echo "Applied staged render patch with three-way merge"
+            else
+              echo "Staged render patch is neither applicable nor already applied" >&2
+              exit 1
+            fi
+''',
+                  1,
+              )
+
+          if source != original:
+              workflow.write_text(source)
+              changed.append('hardened generated acceptance fixture from exact compiler diagnostic')
+
+          # A diagnostic is consumed only when at least one deterministic edit was made.
+          if not changed:
+              Path('Diagnostics/metal4-autofinish-unhandled.txt').write_text(
+                  f'No deterministic autofix matched {diagnostic_path.name}.\n'
+                  'The exact diagnostic remains in the repository for semantic review.\n',
+                  encoding='utf-8',
+              )
+              raise SystemExit('diagnostic requires semantic review; no source was changed')
+
+          diagnostic_path.unlink()
+          # Change the workflow content even when only source files were fixed, so the
+          # bot-authored commit starts a fresh cancel-in-progress acceptance run.
+          workflow_source = workflow.read_text()
+          marker = f"\n# deterministic-autofix-source: {diagnostic_path.stem}\n"
+          if marker not in workflow_source:
+              workflow.write_text(workflow_source + marker)
+          Path('/tmp/metal4-autofix-summary.txt').write_text('\n'.join(changed) + '\n')
+          PY
+          cat /tmp/metal4-autofix-summary.txt
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(metal4): apply deterministic acceptance corrections"
+          git push origin HEAD:metal4/phase1-command-backend-poc

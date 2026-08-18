@@ -4615,6 +4615,28 @@ MVKComputePipeline::~MVKComputePipeline() {
 #pragma mark MVKPipelineCache
 
 // Return a shader library from the specified shader conversion configuration sourced from the specified shader module.
+
+void MVKPipelineCache::getMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) {
+    if (!pStats) { return; }
+    *pStats = {};
+
+    unique_lock<mutex> lock(_shaderCacheLock, try_to_lock);
+    if (!lock.owns_lock()) { return; }
+
+    pStats->available = VK_TRUE;
+    pStats->shaderModuleCacheCount = _shaderCache.size();
+    pStats->estimatedViewHostBytes =
+        sizeof(*this) +
+        (_shaderCache.bucket_count() * sizeof(void*)) +
+        (_shaderCache.size() * sizeof(decltype(_shaderCache)::value_type));
+
+    for (const auto& cacheEntry : _shaderCache) {
+        if (cacheEntry.second) {
+            cacheEntry.second->accumulateMemoryStatistics(pStats);
+        }
+    }
+}
+
 MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pContext,
 													 MVKShaderModule* shaderModule,
 													 MVKPipeline* pipeline,

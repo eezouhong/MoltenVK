@@ -570,6 +570,9 @@ public:
 	 */
 	VkResult writeData(size_t* pDataSize, void* pData);
 
+	/** Returns a nonblocking logical memory snapshot for this cache view. */
+	void getMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats);
+
 	/**
 	 * Return a shader library for the shader conversion configuration, from the
 	 * pipeline's pipeline cache, or compiled from source in the shader module.

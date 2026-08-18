@@ -133,6 +133,19 @@ typedef struct MVKShaderMacroValue {
  * MVKShaderLibrary creates specialized variants (each one also a MVKShaderLibrary) behind
  * the scene and cache them in a map according to the macro-value mapping.
  */
+
+
+/** Internal nonblocking snapshot of one physical shader-library payload. */
+struct MVKShaderLibraryMemorySnapshot {
+    uint64_t shaderLibraryCount = 0;
+    uint64_t residentShaderLibraryCount = 0;
+    uint64_t specializationVariantCount = 0;
+    uint64_t compressedMSLBytes = 0;
+    uint64_t uncompressedMSLBytes = 0;
+    uint64_t residentUncompressedMSLBytes = 0;
+    uint64_t estimatedHostBytes = 0;
+};
+
 class MVKShaderLibrary : public MVKBaseDeviceObject {
 
 public:
@@ -199,6 +212,9 @@ protected:
 
 	/** Returns whether the expensive Metal library payload is currently resident. */
 	bool isResident() const { return _resident.load(std::memory_order_acquire); }
+
+	/** Captures known physical payload bytes without waiting on an active library. */
+	bool tryGetMemorySnapshot(MVKShaderLibraryMemorySnapshot& snapshot);
 
 	/** Returns the repository-wide approximate LRU sequence of the last real use. */
 	uint64_t getLastUseSequence() const { return _lastUseSequence.load(std::memory_order_relaxed); }
@@ -271,6 +287,9 @@ public:
 									   bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
 									   uint64_t startTime = 0);
 
+	/** Adds this logical view's known bytes to a pipeline-cache snapshot. */
+	void accumulateMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) const;
+
 	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner,
 						  MVKShaderModuleKey shaderModuleKey = {});
 
@@ -324,13 +343,19 @@ public:
 	uint64_t nextUseSequence();
 
 	/** Accounts for a cold entry becoming resident and applies the configured budget. */
-	void libraryBecameResident(MVKShaderLibrary* library, bool rehydrated);
+	void libraryBecameResident(MVKShaderLibrary* library, bool rehydrated, uint64_t rehydrateNanoseconds = 0);
+
+	/** Records an attempted cold-entry rehydrate that failed. */
+	void recordRehydrateFailure(uint64_t rehydrateNanoseconds);
 
 	/** Accounts for a resident entry becoming cold. */
 	void libraryBecameCold(MVKShaderLibrary* library);
 
 	/** Evicts coldest resident payloads without removing logical cache membership. */
 	void trimToResidentLimit(MVKShaderLibrary* protectedLibrary = nullptr);
+
+	/** Returns a nonblocking physical repository memory and reclaim snapshot. */
+	void getMemoryStatistics(MVKMetal4ShaderLibraryRepositoryStatistics* pStats);
 
 	size_t getResidentLimit() const { return _residentLimit; }
 	size_t getResidentCount() const { return _residentEntryCount.load(std::memory_order_relaxed); }
@@ -366,8 +391,17 @@ private:
 	std::atomic<uint64_t> _dedupeHitCount { 0 };
 	std::atomic<uint64_t> _raceLoserCount { 0 };
 	std::atomic<uint64_t> _residentEvictionCount { 0 };
+	std::atomic<uint64_t> _evictedUncompressedMSLBytes { 0 };
 	std::atomic<uint64_t> _residentAdoptionCount { 0 };
 	std::atomic<uint64_t> _rehydrateCount { 0 };
+	std::atomic<uint64_t> _rehydrateFailureCount { 0 };
+	std::atomic<uint64_t> _rehydrateTotalNanoseconds { 0 };
+	std::atomic<uint64_t> _rehydrateMaximumNanoseconds { 0 };
+	std::atomic<uint64_t> _trimCycleCount { 0 };
+	std::atomic<uint64_t> _trimBusyCount { 0 };
+	std::atomic<uint64_t> _trimCandidateCount { 0 };
+	std::atomic<uint64_t> _trimTotalNanoseconds { 0 };
+	std::atomic<uint64_t> _trimMaximumNanoseconds { 0 };
 	std::unordered_map<MVKShaderModuleKey, std::vector<Entry>> _entries;
 };
 

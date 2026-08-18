@@ -125,3 +125,22 @@ not requested while making a dedupe-only limit of `0` unambiguous.
    across each A/B pair. Its compiled base pipelines are a separate bounded
    owner, and changing that policy simultaneously would make memory results
    ambiguous.
+
+
+## Runtime memory and reclaim telemetry
+
+The private diagnostic ABI exposes two nonblocking snapshots:
+
+- `vkGetPipelineCacheMemoryStatisticsMVK` reports the exact compressed and
+  uncompressed MSL represented by one logical `VkPipelineCache` view plus a
+  lower-bound estimate of that view's C++ index storage.
+- `vkGetMetal4ShaderLibraryRepositoryStatisticsMVK` reports the unique physical
+  canonical payload, logical membership count, resident/cold counts, reclaim
+  proxy bytes, and rehydrate latency.
+
+Metal does not expose the allocated byte size of an individual `MTLLibrary`.
+`residentUncompressedMSLBytes` and `evictedUncompressedMSLBytes` are explicitly
+workload-size proxies. `deviceCurrentAllocatedBytes` and process `phys_footprint`
+remain the evidence for actual memory release. Snapshot acquisition uses
+`try_lock`; a busy cache or library is reported as unavailable/skipped rather
+than blocking a render or compiler thread.

@@ -44,7 +44,7 @@ typedef unsigned long MTLArgumentBuffersTier;
  */
 
 
-#define MVK_PRIVATE_API_VERSION   44
+#define MVK_PRIVATE_API_VERSION   45
 
 
 #pragma mark -
@@ -330,11 +330,74 @@ typedef struct {
 } MVKPerformanceStatistics;
 
 
+/**
+ * Logical memory represented by one VkPipelineCache view.
+ *
+ * The MSL byte counts are exact for MoltenVK-owned serialized source payloads.
+ * estimatedViewHostBytes is a lower-bound estimate for C++ view/index storage and
+ * deliberately excludes shared MVKShaderLibrary physical payloads and Metal driver
+ * allocations.
+ */
+typedef struct {
+    VkBool32 available;
+    uint64_t shaderModuleCacheCount;
+    uint64_t logicalShaderLibraryCount;
+    uint64_t logicalResidentShaderLibraryCount;
+    uint64_t specializationVariantCount;
+    uint64_t compressedMSLBytes;
+    uint64_t uncompressedMSLBytes;
+    uint64_t estimatedViewHostBytes;
+    uint64_t skippedShaderLibraryCount;
+} MVKPipelineCacheMemoryStatistics;
+
+/**
+ * Device-wide physical payload owned by the Metal 4 shared shader-library repository.
+ *
+ * compressedMSLBytes and uncompressedMSLBytes are exact MoltenVK-owned source
+ * payload counts. residentUncompressedMSLBytes is a workload-size proxy for
+ * resident MTLLibrary payloads, not the Metal driver's allocation size. Metal does
+ * not expose per-MTLLibrary allocated bytes; deviceCurrentAllocatedBytes and the
+ * process physical footprint must be used to validate real memory release.
+ */
+typedef struct {
+    VkBool32 available;
+    uint64_t canonicalShaderLibraryCount;
+    uint64_t logicalMembershipCount;
+    uint64_t residentCanonicalShaderLibraryCount;
+    uint64_t residentShaderLibraryCount;
+    uint64_t specializationVariantCount;
+    uint64_t compressedMSLBytes;
+    uint64_t uncompressedMSLBytes;
+    uint64_t residentUncompressedMSLBytes;
+    uint64_t estimatedHostBytes;
+    uint64_t deviceCurrentAllocatedBytes;
+    uint64_t residentLimit;
+    uint64_t residentTrimHighWater;
+    uint64_t trimCycleCount;
+    uint64_t trimBusyCount;
+    uint64_t trimCandidateCount;
+    uint64_t trimTotalNanoseconds;
+    uint64_t trimMaximumNanoseconds;
+    uint64_t residentEvictionCount;
+    uint64_t evictedUncompressedMSLBytes;
+    uint64_t rehydrateCount;
+    uint64_t rehydrateFailureCount;
+    uint64_t rehydrateTotalNanoseconds;
+    uint64_t rehydrateMaximumNanoseconds;
+    uint64_t dedupeHitCount;
+    uint64_t raceLoserCount;
+    uint64_t residentAdoptionCount;
+    uint64_t snapshotSkippedShaderLibraryCount;
+} MVKMetal4ShaderLibraryRepositoryStatistics;
+
+
 #pragma mark -
 #pragma mark Function types
 
 typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignored, MVKConfiguration* pConfiguration, size_t* pConfigurationSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
 
 
 #pragma mark -
@@ -403,6 +466,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPerformanceStatisticsMVK(
 	VkDevice                                    device,
 	MVKPerformanceStatistics*            		pPerf,
 	size_t*                                     pPerfSize);
+
+
+/** Returns a nonblocking snapshot of one logical VkPipelineCache view. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMemoryStatisticsMVK(
+    VkPipelineCache                            pipelineCache,
+    MVKPipelineCacheMemoryStatistics*          pStats,
+    size_t*                                    pStatsSize);
+
+/** Returns a nonblocking snapshot of the device-wide shared shader repository. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
+    VkDevice                                   device,
+    MVKMetal4ShaderLibraryRepositoryStatistics* pStats,
+    size_t*                                    pStatsSize);
 
 
 #endif // VK_NO_PROTOTYPES

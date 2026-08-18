@@ -25,6 +25,7 @@
 #include "MVKBuffer.h"
 #include "MVKFoundation.h"
 #include "MVKShaderModule.h"
+#include "MVKPipeline.h"
 #include "MVKQueue.h"
 #include <string>
 
@@ -92,6 +93,35 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPerformanceStatisticsMVK(
 	MVKPerformanceStatistics mvkPerf;
 	MVKDevice::getMVKDevice(device)->getPerformanceStatistics(&mvkPerf);
 	return mvkCopyGrowingStruct(pPerf, &mvkPerf, pPerfSize);
+}
+
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPipelineCacheMemoryStatisticsMVK(
+    VkPipelineCache                           pipelineCache,
+    MVKPipelineCacheMemoryStatistics*         pStats,
+    size_t*                                   pStatsSize) {
+
+    MVKPipelineCacheMemoryStatistics stats = {};
+    if (pipelineCache) {
+        ((MVKPipelineCache*)pipelineCache)->getMemoryStatistics(&stats);
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
+    VkDevice                                  device,
+    MVKMetal4ShaderLibraryRepositoryStatistics* pStats,
+    size_t*                                   pStatsSize) {
+
+    MVKMetal4ShaderLibraryRepositoryStatistics stats = {};
+    if (device) {
+        MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+        if (MVKShaderLibraryRepository* repository =
+                mvkDevice->getShaderLibraryRepository()) {
+            repository->getMemoryStatistics(&stats);
+        }
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
 

@@ -178,11 +178,17 @@ def test_source_policy() -> None:
     require(shader_h, "static MVKShaderLibraryRepository* create(MVKDevice* device);", SHADER_H)
     require(shader_mm, "getSharedShaderLibraryTrimHighWater", SHADER_MM)
     require(shader_h, "size_t _residentTrimHighWater = 0;", SHADER_H)
-    require(
-        shader_mm,
-        "Metal 4 shared shader-library repository summary:",
-        SHADER_MM,
-    )
+    require(shader_mm, "Metal 4 shared shader-library repository summary:", SHADER_MM)
+
+    require(private_api_h, "MVKPipelineCacheMemoryStatistics", PRIVATE_API_H)
+    require(private_api_h, "MVKMetal4ShaderLibraryRepositoryStatistics", PRIVATE_API_H)
+    require(private_api_h, "vkGetPipelineCacheMemoryStatisticsMVK", PRIVATE_API_H)
+    require(private_api_h, "vkGetMetal4ShaderLibraryRepositoryStatisticsMVK", PRIVATE_API_H)
+    require(shader_h, "tryGetMemorySnapshot", SHADER_H)
+    require(shader_h, "getMemoryStatistics(MVKMetal4ShaderLibraryRepositoryStatistics", SHADER_H)
+    require(shader_mm, "rehydrateTotalNanoseconds", SHADER_MM)
+    require(shader_mm, "evictedUncompressedMSLBytes", SHADER_MM)
+    require(shader_mm, "deviceCurrentAllocatedBytes", SHADER_MM)
 
     # A repository lookup must happen before either source compilation or
     # persisted-MSL construction, otherwise an already-published winner would
@@ -256,7 +262,7 @@ def test_source_policy() -> None:
     adoption_body = shader_mm[adoption_start : adoption_start + 1900]
     assert "_mtlLibrary = candidate->_mtlLibrary;" in adoption_body
     assert "candidate->_mtlLibrary = nil;" in adoption_body
-    assert "libraryBecameResident(this, false)" in adoption_body
+    assert "libraryBecameResident(this, false, 0)" in adoption_body
     acquire_start_for_adoption = shader_mm.index("MVKShaderLibrary* MVKShaderLibraryRepository::acquire(")
     acquire_body_for_adoption = shader_mm[acquire_start_for_adoption : acquire_start_for_adoption + 6500]
     assert "shouldAdoptCandidatePayload" in acquire_body_for_adoption
@@ -305,8 +311,8 @@ def test_source_policy() -> None:
     # Resident accounting must be published before the library lock is
     # released, so a concurrent trim cannot miss a newly rehydrated payload.
     function_start = shader_mm.index("MVKMTLFunction MVKShaderLibrary::getMTLFunction")
-    function_body = shader_mm[function_start : function_start + 9000]
-    resident_notify = function_body.index("libraryBecameResident(this, true)")
+    function_body = shader_mm[function_start : function_start + 14000]
+    resident_notify = function_body.index("libraryBecameResident(this, true, rehydrateNanoseconds)")
     access_unlock = function_body.index("accessLock.unlock();", resident_notify)
     metal_function_lookup = function_body.index("newFunctionWithName", access_unlock)
     local_release = function_body.index("[lib release];", metal_function_lookup)

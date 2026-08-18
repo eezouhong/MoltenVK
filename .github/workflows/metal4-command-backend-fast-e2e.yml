@@ -22,8 +22,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     env:
-      BUILT_SOURCE_SHA: 0a435358962e8dadcb690de2e5a159d85047ff9d
-      BUILT_WORKFLOW_RUN: "32069062383"
+      BUILT_SOURCE_SHA: 344a8fb65731fe5393a854f58b68ebe8eb5b12ed
+      BUILT_WORKFLOW_RUN: "32198442246"
     steps:
       - uses: actions/checkout@v4
         with:

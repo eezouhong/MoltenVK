@@ -36,6 +36,18 @@ jobs:
           path.write_text(text[:start] + replacement + text[end:])
           PY
           python3 Scripts/apply-cache-memory-diagnostics.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Scripts/test-metal4-shared-shader-repository.py')
+          text = path.read_text()
+          text = text.replace(
+              '"libraryBecameResident(this, false)"',
+              '"libraryBecameResident(this, false, 0)"')
+          text = text.replace(
+              'function_body.index("libraryBecameResident(this, true)")',
+              'function_body.index("libraryBecameResident(this, true, rehydrateNanoseconds)")')
+          path.write_text(text)
+          PY
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check
           git checkout 39368cc23fd98fe7f0abaf2c99406b65b9a905a0 -- .github/workflows/CI.yml

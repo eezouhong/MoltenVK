@@ -7,6 +7,10 @@ on:
     paths:
       - Tests/Metal4CommandBackend/**
       - .github/workflows/metal4-command-backend-fast-e2e.yml
+  pull_request:
+    paths:
+      - Tests/Metal4CommandBackend/**
+      - .github/workflows/metal4-command-backend-fast-e2e.yml
   workflow_dispatch:
 
 concurrency:

@@ -1712,6 +1712,17 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 			releasedPendingCandidate = true;
 		}
 		entry->pipeline = basePipeline;
+		if (impl->device->getShaderLibraryRepository()) {
+			// The input function descriptors only keep the source MTLLibraries
+			// alive while the asynchronous base compile is in flight. Later
+			// specialization starts from entry->pipeline, not these inputs.
+			// Release them after completion so the independent fixed-size base
+			// cache cannot pin an otherwise reclaimable shared shader library.
+			[entry->vertexFunction release];
+			entry->vertexFunction = nil;
+			[entry->fragmentFunction release];
+			entry->fragmentFunction = nil;
+		}
 		entry->failed = basePipeline == nil;
 		entry->compiling = false;
 		entry->compileTaskNs = compilerTaskDuration;
@@ -2780,6 +2791,24 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	// Render pipeline state. Do this as early as possible, to fail fast if pipeline requires a fail on cache-miss.
 	initMTLRenderPipelineState(pCreateInfo, reflectData, pPipelineFB, pVertexSS, pVertexFB, pTessCtlSS, pTessCtlFB, pTessEvalSS, pTessEvalFB, pFragmentSS, pFragmentFB);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (device->getShaderLibraryRepository()) {
+		// These descriptors only bridge shader-function creation to the synchronous
+		// Metal 4 render-pipeline build above. Keeping one descriptor pair on every
+		// live VkPipeline would retain the underlying MTLLibrary and defeat physical
+		// shader-library reclaim. The bounded compiler base cache retains any pair
+		// that it still needs as part of a resident base entry. Keep the legacy
+		// descriptor lifetime unchanged when the repository feature gate is absent.
+		[_metal4VertexFunctionDescriptor release];
+		_metal4VertexFunctionDescriptor = nil;
+		[_metal4FragmentFunctionDescriptor release];
+		_metal4FragmentFunctionDescriptor = nil;
+		_metal4VertexFunctionKey.clear();
+		_metal4FragmentFunctionKey.clear();
+		_metal4VertexPointerFunctionKey.clear();
+		_metal4FragmentPointerFunctionKey.clear();
+	}
+#endif
 	if ( !_hasValidMTLPipelineStates ) { return; }
 
 	// Blending - must ignore allowed bad pColorBlendState pointer if rasterization disabled or no color attachments
@@ -4616,7 +4645,7 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 MVKShaderLibraryCache* MVKPipelineCache::getShaderLibraryCache(MVKShaderModuleKey smKey) {
 	MVKShaderLibraryCache* slCache = _shaderCache[smKey];
 	if ( !slCache ) {
-		slCache = new MVKShaderLibraryCache(this);
+		slCache = new MVKShaderLibraryCache(this, smKey);
 		_shaderCache[smKey] = slCache;
 	}
 	return slCache;

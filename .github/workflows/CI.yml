@@ -8,10 +8,24 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+# Keep only the newest matrix for a branch or pull request. Group push and PR
+# events by the same source branch so they cannot leave duplicate macOS queues.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 # See the following, which includes links to supported macOS versions, including supported Xcode versions
 # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
 jobs:
+  shared_shader_repository_policy:
+    name: Metal 4 shared shader repository policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate ownership, cache-view, and resident-reclaim invariants
+        run: python3 Scripts/test-metal4-shared-shader-repository.py
+
   build:
     strategy:
       matrix:

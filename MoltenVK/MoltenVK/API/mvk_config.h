@@ -42,7 +42,7 @@ extern "C" {
  * For the private MoltenVK functions, include the mvk_private_api.h header.
  */
 
-#define MVK_CONFIGURATION_API_VERSION   39
+#define MVK_CONFIGURATION_API_VERSION   40
 
 #ifdef __cplusplus
 }

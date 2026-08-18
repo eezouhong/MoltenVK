@@ -23,15 +23,40 @@
 #include "MVKCodec.h"
 #include "MVKSmallVector.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
+#include <atomic>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #import <Metal/Metal.h>
 
 class MVKPipelineCache;
 class MVKShaderCacheIterator;
 class MVKShaderLibraryCache;
+class MVKShaderLibraryRepository;
 class MVKShaderModule;
+
+#pragma mark -
+#pragma mark MVKShaderModuleKey
+
+typedef struct MVKShaderModuleKey {
+	std::size_t codeSize;
+	std::size_t codeHash;
+
+	bool operator==(const MVKShaderModuleKey& rhs) const {
+		return ((codeSize == rhs.codeSize) && (codeHash == rhs.codeHash));
+	}
+	MVKShaderModuleKey(std::size_t codeSize, std::size_t codeHash) : codeSize(codeSize), codeHash(codeHash) {}
+	MVKShaderModuleKey() : MVKShaderModuleKey(0, 0) {}
+} MVKShaderModuleKey;
+
+namespace std {
+	template <>
+	struct hash<MVKShaderModuleKey> {
+		std::size_t operator()(const MVKShaderModuleKey& k) const { return k.codeHash; }
+	};
+}
 
 #pragma mark -
 #pragma mark MVKShaderLibrary
@@ -115,6 +140,12 @@ public:
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return _owner->getVulkanAPIObject(); };
 
+	/** Retains one physical-library ownership reference. */
+	void retain();
+
+	/** Releases one physical-library ownership reference. */
+	void release();
+
 	/**
 	 * Sets the entry point function name.
 	 *
@@ -158,17 +189,33 @@ public:
 protected:
 	friend MVKShaderCacheIterator;
 	friend MVKShaderLibraryCache;
+	friend MVKShaderLibraryRepository;
 	friend MVKShaderModule;
 
 	MVKMTLFunction getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 								  VkPipelineCreationFeedback* pShaderFeedback,
-								  MVKShaderModule* shaderModule);
+								  MVKShaderModule* shaderModule,
+								  bool allowLibraryCompile);
+
+	/** Returns whether the expensive Metal library payload is currently resident. */
+	bool isResident() const { return _resident.load(std::memory_order_acquire); }
+
+	/** Returns the repository-wide approximate LRU sequence of the last real use. */
+	uint64_t getLastUseSequence() const { return _lastUseSequence.load(std::memory_order_relaxed); }
+
+	/** Releases the resident payload only if no real use occurred after the LRU snapshot. */
+	bool tryEvictResident(uint64_t expectedLastUseSequence);
+
+	/** Moves a freshly compiled/imported payload into this cold canonical entry. */
+	bool tryAdoptResidentPayload(MVKShaderLibrary* candidate);
 	void handleCompilationError(NSError* err, const char* opDesc);
     MTLFunctionConstant* getFunctionConstant(NSArray<MTLFunctionConstant*>* mtlFCs, NSUInteger mtlFCID);
 	void compileLibrary(const std::string& msl,
 						const std::vector<std::pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef = nullptr);
 	void compressMSL(const std::string& msl);
 	void decompressMSL(std::string& msl);
+	bool ensureResidentLocked(bool allowLibraryCompile);
+	void touch();
 	MVKCompressor<std::string>& getCompressedMSL() { return _compressedMSL; }
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
@@ -176,7 +223,15 @@ protected:
 #endif
 
 	MVKVulkanAPIDeviceObject* _owner;
-	id<MTLLibrary> _mtlLibrary;
+	id<MTLLibrary> _mtlLibrary = nil;
+	MVKShaderLibraryRepository* _repository = nullptr;
+	std::atomic<uint32_t> _referenceCount { 1 };
+	std::atomic<uint64_t> _lastUseSequence { 0 };
+	std::atomic<uint32_t> _activeUseCount { 0 };
+	std::atomic<bool> _resident { false };
+	std::atomic<bool> _repositoryResidentCounted { false };
+	std::atomic<bool> _repositoryTracked { false };
+	std::mutex _accessLock;
 	MVKCompressor<std::string> _compressedMSL;
 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
 
@@ -216,7 +271,8 @@ public:
 									   bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
 									   uint64_t startTime = 0);
 
-	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner) : MVKBaseDeviceObject(owner->getDevice()), _owner(owner) {};
+	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner,
+						  MVKShaderModuleKey shaderModuleKey = {});
 
 	~MVKShaderLibraryCache() override;
 
@@ -236,34 +292,88 @@ protected:
 	void merge(MVKShaderLibraryCache* other);
 
 	MVKVulkanAPIDeviceObject* _owner;
+	MVKShaderModuleKey _shaderModuleKey;
+	MVKShaderLibraryRepository* _repository;
 	MVKSmallVector<std::pair<mvk::SPIRVToMSLConversionConfiguration, MVKShaderLibrary*>> _shaderLibraries;
 };
 
 
 #pragma mark -
-#pragma mark MVKShaderModule
-
-typedef struct MVKShaderModuleKey {
-	std::size_t codeSize;
-	std::size_t codeHash;
-
-	bool operator==(const MVKShaderModuleKey& rhs) const {
-		return ((codeSize == rhs.codeSize) && (codeHash == rhs.codeHash));
-	}
-	MVKShaderModuleKey(std::size_t codeSize, std::size_t codeHash) : codeSize(codeSize), codeHash(codeHash) {}
-	MVKShaderModuleKey() :  MVKShaderModuleKey(0, 0) {}
-} MVKShaderModuleKey;
+#pragma mark MVKShaderLibraryRepository
 
 /**
- * Hash structure implementation for MVKShaderModuleKey in std namespace,
- * so MVKShaderModuleKey can be used as a key in a std::map and std::unordered_map.
+ * Device-owned physical shader-library repository. VkPipelineCache objects keep
+ * independent logical membership lists, while matching shader/config pairs point
+ * at one canonical MVKShaderLibrary allocation.
  */
-namespace std {
-	template <>
-	struct hash<MVKShaderModuleKey> {
-		std::size_t operator()(const MVKShaderModuleKey& k) const { return k.codeHash; }
+class MVKShaderLibraryRepository : public MVKVulkanAPIDeviceObject {
+
+public:
+	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_UNKNOWN; }
+	VkDebugReportObjectTypeEXT getVkDebugReportObjectType() override { return VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT; }
+
+	MVKShaderLibrary* acquire(MVKShaderModuleKey shaderModuleKey,
+							  mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+							  MVKShaderLibrary* candidate = nullptr);
+
+	void release(MVKShaderModuleKey shaderModuleKey,
+					 const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+					 MVKShaderLibrary* library);
+
+	/** Returns a monotonically increasing approximate LRU sequence. */
+	uint64_t nextUseSequence();
+
+	/** Accounts for a cold entry becoming resident and applies the configured budget. */
+	void libraryBecameResident(MVKShaderLibrary* library, bool rehydrated);
+
+	/** Accounts for a resident entry becoming cold. */
+	void libraryBecameCold(MVKShaderLibrary* library);
+
+	/** Evicts coldest resident payloads without removing logical cache membership. */
+	void trimToResidentLimit(MVKShaderLibrary* protectedLibrary = nullptr);
+
+	size_t getResidentLimit() const { return _residentLimit; }
+	size_t getResidentCount() const { return _residentEntryCount.load(std::memory_order_relaxed); }
+
+	/** Creates the experimental repository only when its environment gate is present. */
+	static MVKShaderLibraryRepository* create(MVKDevice* device);
+
+	MVKShaderLibraryRepository(MVKDevice* device, size_t residentLimit);
+	~MVKShaderLibraryRepository() override;
+
+protected:
+	void propagateDebugName() override {}
+
+private:
+	struct Entry {
+		mvk::SPIRVToMSLConversionConfiguration shaderConfig;
+		MVKShaderLibrary* library;
+		uint32_t membershipCount;
 	};
-}
+
+	void untrackResident(MVKShaderLibrary* library);
+
+	std::mutex _lock;
+	std::mutex _trimLock;
+	std::atomic<uint64_t> _nextUseSequence { 0 };
+	std::atomic<size_t> _residentEntryCount { 0 };
+	std::atomic<size_t> _residentPeakCount { 0 };
+	size_t _residentLimit = 0;
+	size_t _residentTrimHighWater = 0;
+	std::atomic<uint64_t> _canonicalPublishCount { 0 };
+	std::atomic<uint64_t> _logicalMembershipCount { 0 };
+	std::atomic<uint64_t> _logicalMembershipPeak { 0 };
+	std::atomic<uint64_t> _dedupeHitCount { 0 };
+	std::atomic<uint64_t> _raceLoserCount { 0 };
+	std::atomic<uint64_t> _residentEvictionCount { 0 };
+	std::atomic<uint64_t> _residentAdoptionCount { 0 };
+	std::atomic<uint64_t> _rehydrateCount { 0 };
+	std::unordered_map<MVKShaderModuleKey, std::vector<Entry>> _entries;
+};
+
+
+#pragma mark -
+#pragma mark MVKShaderModule
 
 /** Represents a Vulkan shader module. */
 class MVKShaderModule : public MVKVulkanAPIDeviceObject {

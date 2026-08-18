@@ -38,6 +38,7 @@
 class MVKInstance;
 class MVKDevice;
 class MVKMetal4CompilerService;
+class MVKShaderLibraryRepository;
 class MVKQueue;
 class MVKQueueFamily;
 class MVKSurface;
@@ -679,6 +680,9 @@ public:
 	/** Returns the optional, device-owned public Metal 4 compiler service. */
 	MVKMetal4CompilerService* getMetal4CompilerService() const { return _metal4CompilerService; }
 
+	/** Returns the optional device-wide physical shader-library repository. */
+	MVKShaderLibraryRepository* getShaderLibraryRepository() const { return _shaderLibraryRepository; }
+
 	/** Returns whether the unified Metal 4 compiler path is active. */
 	bool isMetal4CompilerEnabled() const { return _metal4CompilerService != nullptr; }
 
@@ -1106,6 +1110,7 @@ protected:
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;
 	MVKMetal4CompilerService* _metal4CompilerService = nullptr;
+	MVKShaderLibraryRepository* _shaderLibraryRepository = nullptr;
 	MVKSmallVector<MVKSmallVector<MVKQueue*, kMVKQueueCountPerQueueFamily>, kMVKQueueFamilyCount> _queuesByQueueFamilyIndex;
 	MVKSmallVector<MVKResource*> _resources;
 	MVKSmallVector<MVKBuffer*> _gpuAddressableBuffers;

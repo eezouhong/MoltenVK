@@ -604,6 +604,15 @@ bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence) {
 		return false;
 	}
 
+	uint64_t evictedUncompressedMSLBytes =
+		_compressedMSL._uncompressedSize;
+	for (const auto& item : _specializationVariants) {
+		if (item.second) {
+			evictedUncompressedMSLBytes +=
+				item.second->_compressedMSL._uncompressedSize;
+		}
+	}
+
 	id<MTLLibrary> releasedLibrary = _mtlLibrary;
 	_mtlLibrary = nil;
 	map<vector<pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary*> releasedVariants;
@@ -612,7 +621,11 @@ bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence) {
 	_metal4LibraryContentKey.clear();
 #endif
 	_resident.store(false, memory_order_release);
-	if (_repository) { _repository->libraryBecameCold(this); }
+	if (_repository) {
+		_repository->libraryBecameCold(
+			this,
+			evictedUncompressedMSLBytes);
+	}
 	accessLock.unlock();
 
 	[releasedLibrary release];
@@ -942,7 +955,9 @@ void MVKShaderLibraryRepository::recordRehydrateFailure(uint64_t rehydrateNanose
     updateAtomicMaximum(_rehydrateMaximumNanoseconds, rehydrateNanoseconds);
 }
 
-void MVKShaderLibraryRepository::libraryBecameCold(MVKShaderLibrary* library) {
+void MVKShaderLibraryRepository::libraryBecameCold(
+	MVKShaderLibrary* library,
+	uint64_t evictedUncompressedMSLBytes) {
 	if (!library || library->_repository != this) { return; }
 	bool expected = true;
 	if (library->_repositoryResidentCounted.compare_exchange_strong(
@@ -951,7 +966,7 @@ void MVKShaderLibraryRepository::libraryBecameCold(MVKShaderLibrary* library) {
 		assert(priorCount > 0);
 		_residentEvictionCount.fetch_add(1, memory_order_relaxed);
 		_evictedUncompressedMSLBytes.fetch_add(
-			library->_compressedMSL._uncompressedSize,
+			evictedUncompressedMSLBytes,
 			memory_order_relaxed);
 	}
 }

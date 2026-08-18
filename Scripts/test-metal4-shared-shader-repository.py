@@ -292,8 +292,15 @@ def test_source_policy() -> None:
     assert "try_to_lock" in eviction_body
     assert "_mtlLibrary = nil" in eviction_body
     assert "releasedVariants.swap(_specializationVariants)" in eviction_body
-    assert "_compressedMSL" not in eviction_body
-    assert "libraryBecameCold(this)" in eviction_body
+    assert "evictedUncompressedMSLBytes" in eviction_body
+    require(
+        shader_mm,
+        "item.second->_compressedMSL._uncompressedSize",
+        SHADER_MM,
+    )
+    assert "_compressedMSL.clear" not in eviction_body
+    assert "_compressedMSL =" not in eviction_body
+    assert "_repository->libraryBecameCold(" in eviction_body
 
     # Cold entries must refuse an implicit compile for FAIL_ON_COMPILE_REQUIRED,
     # while the normal path can rehydrate from compressed MSL.

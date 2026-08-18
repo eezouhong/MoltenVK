@@ -349,7 +349,9 @@ public:
 	void recordRehydrateFailure(uint64_t rehydrateNanoseconds);
 
 	/** Accounts for a resident entry becoming cold. */
-	void libraryBecameCold(MVKShaderLibrary* library);
+	void libraryBecameCold(
+		MVKShaderLibrary* library,
+		uint64_t evictedUncompressedMSLBytes);
 
 	/** Evicts coldest resident payloads without removing logical cache membership. */
 	void trimToResidentLimit(MVKShaderLibrary* protectedLibrary = nullptr);

@@ -24,6 +24,20 @@ jobs:
         run: |
           set -euo pipefail
           python3 Scripts/apply-specialization-eviction-accounting-fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Scripts/test-metal4-shared-shader-repository.py')
+          text = path.read_text()
+          old = '    assert "_compressedMSL" not in eviction_body\n'
+          new = (
+              '    assert "_compressedMSL.clear" not in eviction_body\n'
+              '    assert "_compressedMSL =" not in eviction_body\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(
+                  f'cold-payload assertion count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check
           git rm -f Scripts/apply-specialization-eviction-accounting-fix.py

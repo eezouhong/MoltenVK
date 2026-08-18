@@ -53,10 +53,10 @@ jobs:
           PY
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check
-          git checkout 39368cc23fd98fe7f0abaf2c99406b65b9a905a0 -- .github/workflows/CI.yml
           git rm Scripts/apply-cache-memory-diagnostics.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
+          git reset .github/workflows/CI.yml
           git commit -m "diag(metal4): expose cache memory and rehydrate costs"
           git push origin HEAD:codex/shared-shader-library-repository-phase1

@@ -1,0 +1,88 @@
+name: Apply Metal 4 basic render source patch
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/apply-metal4-render-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-render:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reconstruct staged render patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          chunks=(.github/render-source-patch/chunk-*)
+          if (( ${#chunks[@]} == 0 )); then
+            echo "No staged render patch chunks were found" >&2
+            exit 1
+          fi
+          cat "${chunks[@]}" > "$RUNNER_TEMP/render.transport"
+          if base64 --decode "$RUNNER_TEMP/render.transport" > "$RUNNER_TEMP/render.patch" 2>/dev/null && \
+             grep -q '^diff --git ' "$RUNNER_TEMP/render.patch"; then
+            echo "Decoded base64 render patch"
+          else
+            cp "$RUNNER_TEMP/render.transport" "$RUNNER_TEMP/render.patch"
+          fi
+          grep -q '^diff --git ' "$RUNNER_TEMP/render.patch"
+          git apply --check "$RUNNER_TEMP/render.patch"
+
+      - name: Apply render source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index "$RUNNER_TEMP/render.patch"
+          git diff --cached --check
+
+      - name: Run source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          bash -n Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Build macOS and run Vulkan E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./fetchDependencies -v --macos
+          make macos
+          bash Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Build iOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./fetchDependencies -v --ios
+          make ios
+
+      - name: Remove patch transport and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/render-source-patch
+          rm -f .github/workflows/apply-metal4-render-source.yml
+          rm -f .github/workflows/metal4-current-source-snapshot.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(metal4): add basic render command path"
+          git push origin HEAD:metal4/phase1-command-backend-poc

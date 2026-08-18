@@ -22,6 +22,7 @@
 #include "MVKFramebuffer.h"
 #include "MVKRenderPass.h"
 #include "MVKPipeline.h"
+#include "MVKImage.h"
 #include "MVKFoundation.h"
 #include "mvk_datatypes.hpp"
 
@@ -132,16 +133,63 @@ void MVKCmdEndRenderPass::encode(MVKCommandEncoder* cmdEncoder) {
 #pragma mark -
 #pragma mark MVKCmdBeginRendering
 
+static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo) {
+	if (renderingInfo.pNext ||
+		renderingInfo.flags != 0 ||
+		renderingInfo.viewMask != 0 ||
+		renderingInfo.layerCount != 1 ||
+		renderingInfo.colorAttachmentCount != 1 ||
+		!renderingInfo.pColorAttachments ||
+		renderingInfo.renderArea.offset.x != 0 ||
+		renderingInfo.renderArea.offset.y != 0) {
+		return false;
+	}
+
+	if (renderingInfo.pDepthAttachment || renderingInfo.pStencilAttachment) {
+		return false;
+	}
+
+	const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
+	if (color.pNext ||
+		!color.imageView ||
+		color.resolveMode != VK_RESOLVE_MODE_NONE ||
+		color.resolveImageView ||
+		(color.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD &&
+		 color.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
+		 color.loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+		(color.storeOp != VK_ATTACHMENT_STORE_OP_STORE &&
+		 color.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
+		(color.imageLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+		 color.imageLayout != VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL &&
+		 color.imageLayout != VK_IMAGE_LAYOUT_GENERAL)) {
+		return false;
+	}
+
+	auto* imageView = (MVKImageView*)color.imageView;
+	id<MTLTexture> texture = imageView ? imageView->getMTLTexture() : nil;
+	if (!imageView || !texture ||
+		imageView->getPlaneCount() != 1 ||
+		imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		imageView->getMTLTextureType() != MTLTextureType2D ||
+		imageView->getPackedSwizzle() != 0) {
+		return false;
+	}
+
+	return renderingInfo.renderArea.extent.width == texture.width &&
+		renderingInfo.renderArea.extent.height == texture.height;
+}
+
 template <size_t N>
 VkResult MVKCmdBeginRendering<N>::setContent(MVKCommandBuffer* cmdBuff,
 											 const VkRenderingInfo* pRenderingInfo) {
+	_supportsMetal4Encoding = mvkSupportsMetal4RenderingInfo(*pRenderingInfo);
 	_renderingInfo = *pRenderingInfo;
 
 	// Copy attachments content, redirect info pointers to copied content, and remove any stale pNext refs
 	_colorAttachments.assign(_renderingInfo.pColorAttachments,
 							 _renderingInfo.pColorAttachments + _renderingInfo.colorAttachmentCount);
 	_renderingInfo.pColorAttachments = _colorAttachments.data();
-	for (auto caAtt : _colorAttachments) { caAtt.pNext = nullptr; }
+	for (auto& caAtt : _colorAttachments) { caAtt.pNext = nullptr; }
 
 	if (mvkSetOrClear(&_depthAttachment, _renderingInfo.pDepthAttachment)) {
 		_renderingInfo.pDepthAttachment = &_depthAttachment;
@@ -158,6 +206,18 @@ VkResult MVKCmdBeginRendering<N>::setContent(MVKCommandBuffer* cmdBuff,
 template <size_t N>
 void MVKCmdBeginRendering<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->beginRendering(this, &_renderingInfo);
+}
+
+template <size_t N>
+bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	auto* imageView = (MVKImageView*)_renderingInfo.pColorAttachments[0].imageView;
+	return cmdEncoder->useImageView(imageView);
+}
+
+template <size_t N>
+bool MVKCmdBeginRendering<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding && cmdEncoder->beginRendering(_renderingInfo);
 }
 
 template class MVKCmdBeginRendering<1>;
@@ -225,6 +285,10 @@ VkResult MVKCmdEndRendering::setContent(MVKCommandBuffer* cmdBuff) {
 
 void MVKCmdEndRendering::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->endRendering();
+}
+
+bool MVKCmdEndRendering::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->endRendering();
 }
 
 

@@ -98,6 +98,9 @@ public:
 						uint32_t firstInstance);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _vertexCount > 0 && _instanceCount > 0; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 	void encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder);
 
 protected:

@@ -1,5 +1,12 @@
 name: CI
 
+# Keep only the newest build for a branch. Pull-request and push events use the
+# same head branch key so iterative Metal 4 work does not leave stale macOS jobs
+# queued ahead of the current exact SHA.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 # Controls when the action will run.
 on:
   # Triggers the workflow on push or pull request events
@@ -116,7 +123,7 @@ jobs:
 
       - name: Tar Artifacts
         if: success() && matrix.upload_artifacts == true
-        # See: https://github.com/actions/upload-artifact#maintaining-file-permissions-and-case-sensitive-files
+        # See https://github.com/actions/upload-artifact#maintaining-file-permissions-and-case-sensitive-files
         # To reduce artifact size, don't include any stand-alone shader converter binaries.
         run: |
           rm -rf Package/Release/MoltenVKShaderConverter
@@ -204,7 +211,7 @@ jobs:
           removeArtifacts: true
           # If a release is being replaced, omit updating the name and body.
           # Allows for creating a release and filling these in before the workflow runs.
-          # Then, the workflow will populate the release with the artifacts.
+          # Then, the workflow will populate it.
           omitNameDuringUpdate: true
           omitBodyDuringUpdate: true
           # Upload all MoltenVK CI artifacts as release assets.

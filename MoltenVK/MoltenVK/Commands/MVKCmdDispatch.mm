@@ -56,6 +56,15 @@ void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 			   threadsPerThreadgroup: pipeline->getThreadgroupSize()];
 }
 
+bool MVKCmdDispatch::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding();
+}
+
+bool MVKCmdDispatch::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->dispatchThreadgroups(_groupCountX, _groupCountY, _groupCountZ);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdDispatchIndirect

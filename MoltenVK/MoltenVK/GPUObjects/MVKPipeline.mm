@@ -2864,6 +2864,59 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	for (uint32_t stage = kMVKShaderStageVertex; stage < std::size(_stageResources); stage++) {
 		_stageResources[stage].implicitBuffers.ids[MVKImplicitBuffer::PushConstant] = _layout->getPushConstantResourceIndex(static_cast<MVKShaderStage>(stage));
 	}
+
+	auto stageIsDescriptorless = [this](MVKShaderStage stage) {
+		const auto& resources = _stageResources[stage];
+		return resources.resources.allBits.empty() &&
+			resources.implicitBuffers.needed.empty() &&
+			!resources.usesPhysicalStorageBufferAddresses;
+	};
+	const auto* pVI = pCreateInfo->pVertexInputState;
+	const auto* pIA = pCreateInfo->pInputAssemblyState;
+	const auto* pRS = pCreateInfo->pRasterizationState;
+	const auto* pMS = pCreateInfo->pMultisampleState;
+	const auto* pVP = pCreateInfo->pViewportState;
+	bool hasOneDynamicColorAttachment =
+		pCreateInfo->renderPass == VK_NULL_HANDLE &&
+		pRendInfo && pRendInfo->viewMask == 0 &&
+		pRendInfo->colorAttachmentCount == 1 &&
+		pRendInfo->pColorAttachmentFormats &&
+		pRendInfo->pColorAttachmentFormats[0] != VK_FORMAT_UNDEFINED &&
+		pRendInfo->depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
+		pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED;
+	bool hasStrictShaderStages =
+		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
+		!pTessCtlSS && !pTessEvalSS &&
+		stageIsDescriptorless(kMVKShaderStageVertex) &&
+		stageIsDescriptorless(kMVKShaderStageFragment);
+	bool hasNoVertexInput = pVI &&
+		pVI->vertexBindingDescriptionCount == 0 &&
+		pVI->vertexAttributeDescriptionCount == 0 &&
+		_vkVertexBuffers.areAllBitsClear() && _mtlVertexBuffers.areAllBitsClear();
+	bool hasStrictFixedFunction =
+		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
+		!pIA->primitiveRestartEnable &&
+		pRS && !pRS->rasterizerDiscardEnable &&
+		pRS->polygonMode == VK_POLYGON_MODE_FILL &&
+		pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK &&
+		pMS && pMS->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT &&
+		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
+		pVP && pVP->viewportCount == 1 && pVP->scissorCount == 1 &&
+		pVP->pViewports && pVP->pScissors &&
+		_dynamicStateFlags.empty() &&
+		_staticStateData.numViewports == 1 && _staticStateData.numScissors == 1 &&
+		!_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
+		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthTest) &&
+		!_staticStateData.depthStencil.depthWriteEnabled &&
+		!_staticStateData.depthStencil.stencilTestEnabled;
+
+	_supportsMetal4DescriptorlessRenderExecution =
+		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
+		hasOneDynamicColorAttachment && hasStrictShaderStages &&
+		hasNoVertexInput && hasStrictFixedFunction;
+	if (_supportsMetal4DescriptorlessRenderExecution) {
+		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
+	}
 }
 
 // This is executed first during pipeline creation. Do not depend on any internal state here.

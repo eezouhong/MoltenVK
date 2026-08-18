@@ -24,8 +24,919 @@
 #include "MVKFoundation.h"
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
+#include "MVKBuffer.h"
+#include "MVKImage.h"
+#include "MVKPipeline.h"
+#include "mvk_datatypes.hpp"
+#include <atomic>
+#include <cmath>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <condition_variable>
+#include <chrono>
+#include <cstdlib>
 
 using namespace std;
+
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+static constexpr uint32_t kMetal4CommandAllocatorDefaultCount = 4;
+static constexpr uint32_t kMetal4CommandAllocatorMaxCount = 16;
+static constexpr NSUInteger kMetal4CommandResidencyInitialCapacity = 256;
+static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
+static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
+static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
+
+/**
+ * Queue-independent ownership shared by MTL4 feedback and event callbacks.
+ * The state owns the allocator arena, ordering event, and command-backend
+ * residency set, but never dereferences MVKQueue or MVKDevice from a late
+ * callback.
+ */
+struct MVKMetal4CommandQueueState {
+	struct AllocatorSlot {
+		id<MTL4CommandAllocator> allocator = nil;
+		uint32_t inFlightCount = 0;
+		bool encoding = false;
+		bool resetPending = false;
+	};
+
+	struct ResidencyEntry {
+		id<MTLAllocation> allocation = nil;
+		uint32_t inFlightCount = 0;
+	};
+
+	mutex lock;
+	condition_variable probeReady;
+	vector<AllocatorSlot> allocators;
+	unordered_map<uintptr_t, ResidencyEntry> residentAllocations;
+	id<MTLResidencySet> residencySet = nil;
+	id<MTLSharedEvent> orderingEvent = nil;
+	MTLSharedEventListener* orderingListener = nil;
+	atomic<bool> shuttingDown = false;
+	atomic<bool> probeSubmitted = false;
+	atomic<bool> probeCompleted = false;
+	atomic<bool> probeSucceeded = false;
+	atomic<bool> probeAllocatorCompleted = false;
+	atomic<uint64_t> nextSequence = 1;
+	atomic<uint64_t> submittedCount = 0;
+	atomic<uint64_t> completedCount = 0;
+	atomic<uint64_t> realSubmissionCount = 0;
+	atomic<uint64_t> fallbackCount = 0;
+	atomic<uint64_t> failureCount = 0;
+	atomic<uint64_t> bufferCopyCount = 0;
+	atomic<uint64_t> bufferFillCount = 0;
+	atomic<uint64_t> imageCopyCount = 0;
+	atomic<uint64_t> computeDispatchCount = 0;
+	atomic<uint64_t> renderSubmissionCount = 0;
+	atomic<uint64_t> renderPassCount = 0;
+	atomic<uint64_t> drawCount = 0;
+	atomic<uint64_t> barrierCount = 0;
+	string lastError;
+
+	~MVKMetal4CommandQueueState() {
+		for (auto& item : residentAllocations) { [item.second.allocation release]; }
+		for (auto& slot : allocators) { [slot.allocator release]; }
+		[orderingListener release];
+		[orderingEvent release];
+		[residencySet release];
+	}
+
+	bool initialize(id<MTLDevice> mtlDevice,
+					uint32_t allocatorCount,
+					NSString* label,
+					string* failureReason) {
+		lock_guard<mutex> guard(lock);
+
+		MTLResidencySetDescriptor* residencyDescriptor = [MTLResidencySetDescriptor new];
+		residencyDescriptor.label = [label stringByAppendingString:@" Residency"];
+		residencyDescriptor.initialCapacity = kMetal4CommandResidencyInitialCapacity;
+		NSError* error = nil;
+		residencySet = [mtlDevice newResidencySetWithDescriptor:residencyDescriptor error:&error];
+		[residencyDescriptor release];
+		if (!residencySet) {
+			if (failureReason) {
+				*failureReason = error.localizedDescription.UTF8String ?:
+					"could not create Metal 4 command residency set";
+			}
+			return false;
+		}
+		[residencySet commit];
+
+		orderingEvent = [mtlDevice newSharedEvent];
+		orderingListener = [MTLSharedEventListener new];
+		if (!orderingEvent || !orderingListener) {
+			if (failureReason) { *failureReason = "could not create Metal 4 queue ordering event"; }
+			return false;
+		}
+		orderingEvent.label = [label stringByAppendingString:@" Ordering"];
+
+		allocators.resize(allocatorCount);
+		for (size_t idx = 0; idx < allocatorCount; idx++) {
+			MTL4CommandAllocatorDescriptor* descriptor = [MTL4CommandAllocatorDescriptor new];
+			descriptor.label = [NSString stringWithFormat:@"%@ Allocator %zu", label, idx];
+			error = nil;
+			allocators[idx].allocator =
+				[mtlDevice newCommandAllocatorWithDescriptor:descriptor error:&error];
+			[descriptor release];
+			if (!allocators[idx].allocator) {
+				if (failureReason) {
+					*failureReason = error.localizedDescription.UTF8String ?:
+						"could not create Metal 4 command allocator";
+				}
+				return false;
+			}
+		}
+		return true;
+	}
+
+	id<MTLResidencySet> copyResidencySet() {
+		lock_guard<mutex> guard(lock);
+		return [residencySet retain];
+	}
+
+	id<MTLSharedEvent> copyOrderingEvent() {
+		lock_guard<mutex> guard(lock);
+		return [orderingEvent retain];
+	}
+
+	MTLSharedEventListener* copyOrderingListener() {
+		lock_guard<mutex> guard(lock);
+		return [orderingListener retain];
+	}
+
+	uint64_t reserveSequence() {
+		return nextSequence.fetch_add(1, memory_order_relaxed);
+	}
+
+	uint64_t lastSequence() const {
+		uint64_t value = nextSequence.load(memory_order_acquire);
+		return value > 0 ? value - 1 : 0;
+	}
+
+	bool acquireAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator) {
+		lock_guard<mutex> guard(lock);
+		if (shuttingDown.load(memory_order_acquire)) { return false; }
+
+		for (size_t idx = 0; idx < allocators.size(); idx++) {
+			auto& slot = allocators[idx];
+			if (slot.encoding) { continue; }
+			if (slot.resetPending && slot.inFlightCount == 0) {
+				[slot.allocator reset];
+				slot.resetPending = false;
+			}
+			slot.encoding = true;
+			*slotIndex = idx;
+			*allocator = [slot.allocator retain];
+			return true;
+		}
+		return false;
+	}
+
+	void finishEncoding(size_t slotIndex, bool submitted) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex >= allocators.size()) { return; }
+		auto& slot = allocators[slotIndex];
+		slot.encoding = false;
+		if (submitted) {
+			slot.inFlightCount++;
+			submittedCount.fetch_add(1, memory_order_relaxed);
+			return;
+		}
+		if (slot.inFlightCount == 0 && slot.resetPending) {
+			[slot.allocator reset];
+			slot.resetPending = false;
+		}
+	}
+
+	void completeAllocator(size_t slotIndex) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex >= allocators.size()) { return; }
+		auto& slot = allocators[slotIndex];
+		if (slot.inFlightCount > 0) { slot.inFlightCount--; }
+		if (slot.inFlightCount == 0) {
+			if (slot.encoding) {
+				slot.resetPending = true;
+			} else {
+				[slot.allocator reset];
+				slot.resetPending = false;
+			}
+		}
+		completedCount.fetch_add(1, memory_order_relaxed);
+	}
+
+	bool acquireResidency(const vector<id<MTLAllocation>>& allocations) {
+		lock_guard<mutex> guard(lock);
+		if (shuttingDown.load(memory_order_acquire)) { return false; }
+
+		unordered_set<uintptr_t> seen;
+		bool changed = false;
+		for (id<MTLAllocation> allocation : allocations) {
+			if (!allocation) { return false; }
+			uintptr_t key = (uintptr_t)allocation;
+			if (!seen.insert(key).second) { continue; }
+			auto it = residentAllocations.find(key);
+			if (it == residentAllocations.end()) {
+				[residencySet addAllocation:allocation];
+				residentAllocations.emplace(key, ResidencyEntry{[allocation retain], 1});
+				changed = true;
+			} else {
+				it->second.inFlightCount++;
+			}
+		}
+		if (changed) { [residencySet commit]; }
+		return true;
+	}
+
+	void releaseResidency(const vector<id<MTLAllocation>>& allocations) {
+		lock_guard<mutex> guard(lock);
+		unordered_set<uintptr_t> seen;
+		bool changed = false;
+		for (id<MTLAllocation> allocation : allocations) {
+			uintptr_t key = (uintptr_t)allocation;
+			if (!seen.insert(key).second) { continue; }
+			auto it = residentAllocations.find(key);
+			if (it == residentAllocations.end()) { continue; }
+			if (it->second.inFlightCount > 0) { it->second.inFlightCount--; }
+			if (it->second.inFlightCount == 0) {
+				[residencySet removeAllocation:it->second.allocation];
+				[it->second.allocation release];
+				residentAllocations.erase(it);
+				changed = true;
+			}
+		}
+		if (changed) { [residencySet commit]; }
+	}
+
+	bool markProbeStatus(NSError* error, NSString* fallbackReason) {
+		{
+			lock_guard<mutex> guard(lock);
+			if (probeCompleted.load(memory_order_acquire)) { return false; }
+			bool succeeded = error == nil && fallbackReason == nil;
+			probeSucceeded.store(succeeded, memory_order_release);
+			probeCompleted.store(true, memory_order_release);
+			if (!succeeded) {
+				failureCount.fetch_add(1, memory_order_relaxed);
+				if (error) {
+					lastError = error.localizedDescription.UTF8String ?: "unknown Metal 4 commit error";
+				} else {
+					lastError = fallbackReason.UTF8String ?: "unknown Metal 4 probe failure";
+				}
+			}
+		}
+		probeReady.notify_all();
+		return true;
+	}
+
+	void completeProbeAllocator(size_t slotIndex) {
+		if (!probeAllocatorCompleted.exchange(true, memory_order_acq_rel)) {
+			completeAllocator(slotIndex);
+		}
+	}
+
+	void completeProbe(size_t slotIndex, NSError* error) {
+		markProbeStatus(error, nil);
+		completeProbeAllocator(slotIndex);
+	}
+
+	void failProbeBeforeCommit(size_t slotIndex, NSString* reason) {
+		markProbeStatus(nil, reason);
+		completeProbeAllocator(slotIndex);
+	}
+
+	void failProbeInFlight(NSString* reason) {
+		// The queue may have accepted the command buffer. Keep its allocator alive
+		// until real Metal feedback arrives; a bounded leak after device loss is
+		// safer than resetting memory that the GPU may still be reading.
+		markProbeStatus(nil, reason);
+	}
+
+	bool waitForProbe(uint64_t timeoutNs) {
+		unique_lock<mutex> guard(lock);
+		bool completed = probeReady.wait_for(
+			guard,
+			chrono::nanoseconds(timeoutNs),
+			[this] { return probeCompleted.load(memory_order_acquire); });
+		guard.unlock();
+		if (!completed) {
+			failProbeInFlight(@"Metal 4 empty submission probe timed out");
+		}
+		return probeSucceeded.load(memory_order_acquire);
+	}
+
+	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
+	void recordFallback() { fallbackCount.fetch_add(1, memory_order_relaxed); }
+	void recordBufferCopy() { bufferCopyCount.fetch_add(1, memory_order_relaxed); }
+	void recordBufferFill() { bufferFillCount.fetch_add(1, memory_order_relaxed); }
+	void recordImageCopy() { imageCopyCount.fetch_add(1, memory_order_relaxed); }
+	void recordComputeDispatch() { computeDispatchCount.fetch_add(1, memory_order_relaxed); }
+	void recordRenderSubmission() { renderSubmissionCount.fetch_add(1, memory_order_relaxed); }
+	void recordRenderPass() { renderPassCount.fetch_add(1, memory_order_relaxed); }
+	void recordDraw() { drawCount.fetch_add(1, memory_order_relaxed); }
+	void recordBarrier() { barrierCount.fetch_add(1, memory_order_relaxed); }
+
+	void recordFailure(NSString* reason) {
+		lock_guard<mutex> guard(lock);
+		failureCount.fetch_add(1, memory_order_relaxed);
+		lastError = reason.UTF8String ?: "unknown Metal 4 submission error";
+	}
+
+	void hostSignalOrdering(uint64_t sequence) {
+		id<MTLSharedEvent> event = copyOrderingEvent();
+		if (event && event.signaledValue < sequence) { event.signaledValue = sequence; }
+		[event release];
+	}
+
+	void shutdown() {
+		shuttingDown.store(true, memory_order_release);
+		probeReady.notify_all();
+	}
+};
+
+static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stages) {
+	MTLStages mtlStages = 0;
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+						  VK_PIPELINE_STAGE_2_COPY_BIT |
+						  VK_PIPELINE_STAGE_2_BLIT_BIT |
+						  VK_PIPELINE_STAGE_2_CLEAR_BIT |
+						  VK_PIPELINE_STAGE_2_RESOLVE_BIT)) {
+		mtlStages |= MTLStageBlit;
+	}
+	if (mvkIsAnyFlagEnabled(stages, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)) {
+		mtlStages |= MTLStageDispatch;
+	}
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+						  VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+						  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+						  VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT)) {
+		mtlStages |= MTLStageVertex;
+	}
+	if (mvkIsAnyFlagEnabled(stages,
+						  VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+						  VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+						  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+						  VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)) {
+		mtlStages |= MTLStageFragment;
+	}
+	if (!mtlStages && stages) {
+		// Conservatively cover every encoder type currently materialized rather
+		// than dropping ordering for a broader Vulkan stage mask.
+		mtlStages = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit;
+	}
+	return mtlStages;
+}
+
+/** Concrete compute/transfer/render command materializer for the first usable backend slice. */
+class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
+
+public:
+	explicit MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state) :
+		_state(std::move(state)) {}
+
+	struct BufferBinding {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+	};
+	struct ImageBinding {
+		vector<id<MTLTexture>> textures;
+	};
+	struct PendingBarrier {
+		MTLStages afterQueueStages = 0;
+		MTLStages beforeStages = 0;
+		MTL4VisibilityOptions visibilityOptions = MTL4VisibilityOptionNone;
+	};
+	struct ImageViewBinding {
+		id<MTLTexture> texture = nil;
+		NSUInteger level = 0;
+		NSUInteger slice = 0;
+		NSUInteger depthPlane = 0;
+		VkFormat format = VK_FORMAT_UNDEFINED;
+		NSUInteger width = 0;
+		NSUInteger height = 0;
+	};
+
+	~MVKMetal4TransferCommandEncoder() override {
+		endEncoding();
+		for (auto& item : _buffers) { [item.second.buffer release]; }
+		for (auto& item : _images) {
+			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
+		}
+		for (auto& item : _imageViews) { [item.second.texture release]; }
+		for (auto& item : _computePipelines) { [item.second release]; }
+		for (auto& item : _graphicsPipelines) { [item.second release]; }
+	}
+
+	bool useBuffer(MVKBuffer* buffer) override {
+		if (!buffer) { return false; }
+		if (_buffers.count(buffer)) { return true; }
+		id<MTLBuffer> mtlBuffer = buffer->getMTLBuffer();
+		if (!mtlBuffer) { return false; }
+		_buffers.emplace(buffer, BufferBinding{[mtlBuffer retain], buffer->getMTLBufferOffset()});
+		_allocations.push_back((id<MTLAllocation>)mtlBuffer);
+		return true;
+	}
+
+	bool useImage(MVKImage* image) override {
+		if (!image) { return false; }
+		if (_images.count(image)) { return true; }
+		ImageBinding binding;
+		binding.textures.reserve(image->getPlaneCount());
+		for (uint8_t plane = 0; plane < image->getPlaneCount(); plane++) {
+			id<MTLTexture> texture = image->getMTLTexture(plane);
+			if (!texture) {
+				for (id<MTLTexture> retained : binding.textures) { [retained release]; }
+				return false;
+			}
+			binding.textures.push_back([texture retain]);
+			_allocations.push_back((id<MTLAllocation>)texture);
+		}
+		_images.emplace(image, std::move(binding));
+		return true;
+	}
+
+	bool useImageView(MVKImageView* imageView) override {
+		if (!imageView) { return false; }
+		if (_imageViews.count(imageView)) { return true; }
+		if (!useImage(imageView->getImage())) { return false; }
+
+		MTLRenderPassColorAttachmentDescriptor* descriptor =
+			[MTLRenderPassColorAttachmentDescriptor new];
+		imageView->populateMTLRenderPassAttachmentDescriptor(descriptor);
+		id<MTLTexture> texture = descriptor.texture;
+		if (!texture) {
+			[descriptor release];
+			return false;
+		}
+		ImageViewBinding binding;
+		binding.texture = [texture retain];
+		binding.level = descriptor.level;
+		binding.slice = descriptor.slice;
+		binding.depthPlane = descriptor.depthPlane;
+		binding.format = imageView->getVkFormat();
+		binding.width = texture.width;
+		binding.height = texture.height;
+		[descriptor release];
+		_imageViews.emplace(imageView, binding);
+		_allocations.push_back((id<MTLAllocation>)texture);
+		return true;
+	}
+
+	bool useComputePipeline(MVKComputePipeline* pipeline) override {
+		if (!pipeline || !pipeline->supportsMetal4DescriptorlessExecution()) { return false; }
+		if (_computePipelines.count(pipeline)) { return true; }
+		id<MTLComputePipelineState> pipelineState = pipeline->getPipelineState();
+		if (!pipelineState) { return false; }
+		_computePipelines.emplace(pipeline, [pipelineState retain]);
+		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		return true;
+	}
+
+	bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
+		if (!pipeline || !pipeline->supportsMetal4DescriptorlessRenderExecution()) { return false; }
+		if (_graphicsPipelines.count(pipeline)) { return true; }
+		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
+		if (!pipelineState) { return false; }
+		_graphicsPipelines.emplace(pipeline, [pipelineState retain]);
+		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		return true;
+	}
+
+	bool beginEncoding(id<MTL4CommandBuffer> commandBuffer, id<MTLResidencySet> residencySet) {
+		if (!commandBuffer || _commandBuffer) { return false; }
+		_commandBuffer = commandBuffer;
+		[commandBuffer useResidencySet:residencySet];
+		return true;
+	}
+
+	bool copyImage(MVKImage* srcImage,
+				   uint8_t srcPlane,
+				   const VkImageCopy2& region,
+				   MVKImage* dstImage,
+				   uint8_t dstPlane) override {
+		auto src = _images.find(srcImage);
+		auto dst = _images.find(dstImage);
+		if (!ensureComputeEncoder() || src == _images.end() || dst == _images.end() ||
+			srcPlane >= src->second.textures.size() || dstPlane >= dst->second.textures.size()) {
+			return false;
+		}
+
+		id<MTLTexture> srcTexture = src->second.textures[srcPlane];
+		id<MTLTexture> dstTexture = dst->second.textures[dstPlane];
+		uint32_t srcLevel = region.srcSubresource.mipLevel;
+		uint32_t dstLevel = region.dstSubresource.mipLevel;
+		uint32_t srcBaseLayer = region.srcSubresource.baseArrayLayer;
+		uint32_t dstBaseLayer = region.dstSubresource.baseArrayLayer;
+		uint32_t layerCount = region.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS ?
+			srcImage->getLayerCount() - srcBaseLayer : region.srcSubresource.layerCount;
+
+		VkExtent3D srcExtent = srcImage->getExtent3D(srcPlane, srcLevel);
+		VkExtent3D dstExtent = dstImage->getExtent3D(dstPlane, dstLevel);
+		bool src3D = srcImage->getMTLTextureType() == MTLTextureType3D;
+		bool dst3D = dstImage->getMTLTextureType() == MTLTextureType3D;
+		if (mvkVkExtent3DsAreEqual(srcExtent, region.extent) &&
+			mvkVkExtent3DsAreEqual(dstExtent, region.extent) && src3D == dst3D) {
+			[_computeEncoder copyFromTexture:srcTexture
+							 sourceSlice:srcBaseLayer
+							 sourceLevel:srcLevel
+							   toTexture:dstTexture
+					  destinationSlice:dstBaseLayer
+					  destinationLevel:dstLevel
+							 sliceCount:layerCount
+							 levelCount:1];
+			_state->recordImageCopy();
+			return true;
+		}
+
+		MTLOrigin srcOrigin = mvkMTLOriginFromVkOffset3D(region.srcOffset);
+		MTLOrigin dstOrigin = mvkMTLOriginFromVkOffset3D(region.dstOffset);
+		MTLSize copySize = mvkMTLSizeFromVkExtent3D(region.extent);
+		uint32_t iterationCount = layerCount;
+		if (src3D != dst3D) {
+			iterationCount = region.extent.depth;
+			copySize.depth = 1;
+		}
+
+		for (uint32_t layer = 0; layer < iterationCount; layer++) {
+			MTLOrigin layerSrcOrigin = srcOrigin;
+			MTLOrigin layerDstOrigin = dstOrigin;
+			NSUInteger srcSlice = srcBaseLayer + layer;
+			NSUInteger dstSlice = dstBaseLayer + layer;
+			if (src3D && !dst3D) {
+				layerSrcOrigin.z += layer;
+				srcSlice = srcBaseLayer;
+			} else if (!src3D && dst3D) {
+				layerDstOrigin.z += layer;
+				dstSlice = dstBaseLayer;
+			}
+			[_computeEncoder copyFromTexture:srcTexture
+							 sourceSlice:srcSlice
+							 sourceLevel:srcLevel
+							sourceOrigin:layerSrcOrigin
+							  sourceSize:copySize
+							   toTexture:dstTexture
+					  destinationSlice:dstSlice
+					  destinationLevel:dstLevel
+					 destinationOrigin:layerDstOrigin];
+			_state->recordImageCopy();
+		}
+		return true;
+	}
+
+	bool bindComputePipeline(MVKComputePipeline* pipeline) override {
+		auto it = _computePipelines.find(pipeline);
+		if (!ensureComputeEncoder() || it == _computePipelines.end()) { return false; }
+		[_computeEncoder setComputePipelineState:it->second];
+		_boundComputePipeline = pipeline;
+		return true;
+	}
+
+	bool dispatchThreadgroups(uint32_t groupCountX,
+							 uint32_t groupCountY,
+							 uint32_t groupCountZ) override {
+		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
+		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
+					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
+		_state->recordComputeDispatch();
+		return true;
+	}
+
+	bool pipelineBarrier(VkPipelineStageFlags2 srcStages,
+						 VkAccessFlags2 srcAccess,
+						 VkPipelineStageFlags2 dstStages,
+						 VkAccessFlags2 dstAccess) override {
+		// The strict render slice does not claim barriers from inside an active render pass.
+		// Ending that encoder here would silently terminate Vulkan rendering, while an
+		// intra-pass MTL4 barrier cannot legally name transfer/dispatch stages.
+		if (_renderEncoder) { return false; }
+
+		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
+		MTLStages before = mvkMetal4StagesFromVkPipelineStages(dstStages);
+		if (!after) { after = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
+		if (!before) { before = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
+		MTL4VisibilityOptions visibility = MTL4VisibilityOptionNone;
+		VkAccessFlags2 writes = VK_ACCESS_2_MEMORY_WRITE_BIT |
+			VK_ACCESS_2_SHADER_WRITE_BIT |
+			VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+			VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+			VK_ACCESS_2_TRANSFER_WRITE_BIT |
+			VK_ACCESS_2_HOST_WRITE_BIT;
+		if (mvkIsAnyFlagEnabled(srcAccess | dstAccess, writes)) {
+			visibility |= MTL4VisibilityOptionDevice;
+		}
+
+		// A Vulkan barrier may cross Metal encoder classes. Defer it until the next
+		// consuming encoder exists, then issue a consumer queue-stage barrier with a
+		// before-stage mask legal for that encoder. This preserves render<->compute/
+		// transfer ordering without passing render stages to a compute encoder or blit
+		// stages to a render encoder.
+		endComputeEncoding();
+		_pendingBarriers.push_back(PendingBarrier{after, before, visibility});
+		_state->recordBarrier();
+		return true;
+	}
+
+	bool copyBuffer(MVKBuffer* srcBuffer,
+					VkDeviceSize srcOffset,
+					MVKBuffer* dstBuffer,
+					VkDeviceSize dstOffset,
+					VkDeviceSize size) override {
+		auto src = _buffers.find(srcBuffer);
+		auto dst = _buffers.find(dstBuffer);
+		if (!ensureComputeEncoder() || src == _buffers.end() || dst == _buffers.end() || !size) { return false; }
+		[_computeEncoder copyFromBuffer:src->second.buffer
+						 sourceOffset:(src->second.offset + (NSUInteger)srcOffset)
+							 toBuffer:dst->second.buffer
+					destinationOffset:(dst->second.offset + (NSUInteger)dstOffset)
+								 size:(NSUInteger)size];
+		_state->recordBufferCopy();
+		return true;
+	}
+
+	bool fillBuffer(MVKBuffer* dstBuffer,
+					VkDeviceSize dstOffset,
+					VkDeviceSize size,
+					uint8_t value) override {
+		auto dst = _buffers.find(dstBuffer);
+		if (!ensureComputeEncoder() || dst == _buffers.end() || !size) { return false; }
+		[_computeEncoder fillBuffer:dst->second.buffer
+						  range:NSMakeRange(dst->second.offset + (NSUInteger)dstOffset,
+											 (NSUInteger)size)
+						  value:value];
+		_state->recordBufferFill();
+		return true;
+	}
+
+	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
+		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
+			!renderingInfo.pColorAttachments) {
+			return false;
+		}
+		const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
+		auto viewIt = _imageViews.find((MVKImageView*)color.imageView);
+		if (viewIt == _imageViews.end()) { return false; }
+		endComputeEncoding();
+
+		const ImageViewBinding& binding = viewIt->second;
+		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
+		MTLRenderPassColorAttachmentDescriptor* colorDescriptor = descriptor.colorAttachments[0];
+		colorDescriptor.texture = binding.texture;
+		colorDescriptor.level = binding.level;
+		colorDescriptor.slice = binding.slice;
+		colorDescriptor.depthPlane = binding.depthPlane;
+		colorDescriptor.loadAction = mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
+		colorDescriptor.storeAction = mvkMTLStoreActionFromVkAttachmentStoreOpInObj(color.storeOp, false, true, nullptr);
+		colorDescriptor.clearColor = MTLClearColorMake(color.clearValue.color.float32[0],
+												 color.clearValue.color.float32[1],
+												 color.clearValue.color.float32[2],
+												 color.clearValue.color.float32[3]);
+		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
+		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
+		descriptor.renderTargetArrayLength = 1;
+		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
+		[descriptor release];
+		if (!_renderEncoder) { return false; }
+		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+
+		_currentRenderFormat = binding.format;
+		_currentRenderWidth = binding.width;
+		_currentRenderHeight = binding.height;
+		_graphicsPipelineBoundForEncoder = false;
+		_state->recordRenderPass();
+		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+	}
+
+	bool endRendering() override {
+		if (!_renderEncoder) { return false; }
+		endRenderEncoding();
+		return true;
+	}
+
+	bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
+		if (_graphicsPipelines.find(pipeline) == _graphicsPipelines.end()) { return false; }
+		_boundGraphicsPipeline = pipeline;
+		return !_renderEncoder || applyGraphicsPipeline();
+	}
+
+	bool draw(uint32_t firstVertex,
+			  uint32_t vertexCount,
+			  uint32_t firstInstance,
+			  uint32_t instanceCount) override {
+		if (!_renderEncoder || !_boundGraphicsPipeline || !_graphicsPipelineBoundForEncoder ||
+			!vertexCount || !instanceCount) {
+			return false;
+		}
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
+						 vertexStart:firstVertex
+						 vertexCount:vertexCount
+					   instanceCount:instanceCount
+						baseInstance:firstInstance];
+		_state->recordDraw();
+		_renderWork = true;
+		return true;
+	}
+
+	void endEncoding() {
+		endRenderEncoding();
+		endComputeEncoding();
+	}
+
+	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
+	bool hasRenderWork() const { return _renderWork; }
+
+private:
+	bool ensureComputeEncoder() {
+		if (!_commandBuffer || _renderEncoder) { return false; }
+		if (_computeEncoder) { return true; }
+		_computeEncoder = [[_commandBuffer computeCommandEncoder] retain];
+		if (!_computeEncoder) { return false; }
+		applyPendingBarriers(_computeEncoder, MTLStageDispatch | MTLStageBlit);
+		return true;
+	}
+
+	void applyPendingBarriers(id<MTL4CommandEncoder> encoder, MTLStages supportedStages) {
+		for (auto it = _pendingBarriers.begin(); it != _pendingBarriers.end();) {
+			MTLStages before = it->beforeStages & supportedStages;
+			if (!before) {
+				++it;
+				continue;
+			}
+			[encoder barrierAfterQueueStages:it->afterQueueStages
+							 beforeStages:before
+						visibilityOptions:it->visibilityOptions];
+			it->beforeStages &= ~before;
+			if (it->beforeStages) {
+				++it;
+			} else {
+				it = _pendingBarriers.erase(it);
+			}
+		}
+	}
+
+	void endComputeEncoding() {
+		if (!_computeEncoder) { return; }
+		[_computeEncoder endEncoding];
+		[_computeEncoder release];
+		_computeEncoder = nil;
+		_boundComputePipeline = nullptr;
+	}
+
+	void endRenderEncoding() {
+		if (!_renderEncoder) { return; }
+		[_renderEncoder endEncoding];
+		[_renderEncoder release];
+		_renderEncoder = nil;
+		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = 0;
+		_currentRenderHeight = 0;
+		_graphicsPipelineBoundForEncoder = false;
+	}
+
+	bool applyGraphicsPipeline() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
+		if (it == _graphicsPipelines.end() ||
+			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat) {
+			return false;
+		}
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		const VkViewport& viewport = _boundGraphicsPipeline->getViewports()[0];
+		const VkRect2D& scissor = _boundGraphicsPipeline->getScissors()[0];
+		if (stateData.numViewports != 1 || stateData.numScissors != 1 ||
+			scissor.offset.x < 0 || scissor.offset.y < 0 ||
+			(uint64_t)scissor.offset.x + scissor.extent.width > _currentRenderWidth ||
+			(uint64_t)scissor.offset.y + scissor.extent.height > _currentRenderHeight) {
+			return false;
+		}
+		[_renderEncoder setRenderPipelineState:it->second];
+		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(viewport)];
+		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(scissor)];
+		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
+		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
+		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
+		_graphicsPipelineBoundForEncoder = true;
+		return true;
+	}
+
+	shared_ptr<MVKMetal4CommandQueueState> _state;
+	unordered_map<MVKBuffer*, BufferBinding> _buffers;
+	unordered_map<MVKImage*, ImageBinding> _images;
+	unordered_map<MVKImageView*, ImageViewBinding> _imageViews;
+	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
+	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	vector<PendingBarrier> _pendingBarriers;
+	vector<id<MTLAllocation>> _allocations;
+	id<MTL4CommandBuffer> _commandBuffer = nil;
+	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
+	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
+	MVKComputePipeline* _boundComputePipeline = nullptr;
+	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
+	VkFormat _currentRenderFormat = VK_FORMAT_UNDEFINED;
+	NSUInteger _currentRenderWidth = 0;
+	NSUInteger _currentRenderHeight = 0;
+	bool _graphicsPipelineBoundForEncoder = false;
+	bool _renderWork = false;
+};
+
+/** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
+struct MVKMetal4SubmissionCompletion {
+	mutex lock;
+	MVKQueueCommandBufferSubmission* submission = nullptr;
+	MVKQueue* queue = nullptr;
+	shared_ptr<MVKMetal4CommandQueueState> state;
+	vector<id<MTLAllocation>> allocations;
+	size_t allocatorIndex = 0;
+	uint64_t sequence = 0;
+	uint64_t startTime = 0;
+	NSError* feedbackError = nil;
+	bool schedulingComplete = false;
+	bool completionRequested = false;
+	bool completed = false;
+
+	MVKMetal4SubmissionCompletion(MVKQueueCommandBufferSubmission* mvkSubmission,
+								  MVKQueue* mvkQueue,
+								  shared_ptr<MVKMetal4CommandQueueState> sharedState,
+								  const vector<id<MTLAllocation>>& residentAllocations,
+								  size_t slotIndex,
+								  uint64_t orderValue,
+								  uint64_t gpuStartTime) :
+		submission(mvkSubmission),
+		queue(mvkQueue),
+		state(std::move(sharedState)),
+		allocations(residentAllocations),
+		allocatorIndex(slotIndex),
+		sequence(orderValue),
+		startTime(gpuStartTime) {
+		queue->retain();
+	}
+
+	~MVKMetal4SubmissionCompletion() {
+		[feedbackError release];
+		queue->release();
+	}
+
+	void receiveFeedback(id<MTL4CommitFeedback> feedback) {
+		NSError* error = [feedback.error retain];
+		{
+			lock_guard<mutex> guard(lock);
+			[feedbackError release];
+			feedbackError = error;
+		}
+		if (error) {
+			state->recordFailure(error.localizedDescription);
+			queue->reportResult(VK_ERROR_DEVICE_LOST,
+							MVK_CONFIG_LOG_LEVEL_ERROR,
+							"Metal 4 Vulkan submission failed: %s",
+							error.localizedDescription.UTF8String ?: "unknown error");
+			queue->getDevice()->markLost(false);
+		}
+
+		// Apple invokes commit feedback after the workload completes. It is the
+		// authoritative lifetime boundary for allocators, residency, and Vulkan
+		// fence/semaphore completion. Host-signaling here also repairs ordering if
+		// an exception occurred after commit but before queue signalEvent().
+		state->hostSignalOrdering(sequence);
+		complete();
+	}
+
+	void finalize(MVKQueueCommandBufferSubmission* completedSubmission) {
+		state->completeAllocator(allocatorIndex);
+		state->releaseResidency(allocations);
+		queue->addPerformanceInterval(queue->getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
+		completedSubmission->finish();
+	}
+
+	void complete() {
+		MVKQueueCommandBufferSubmission* completedSubmission = nullptr;
+		{
+			lock_guard<mutex> guard(lock);
+			completionRequested = true;
+			if (!schedulingComplete || completed) { return; }
+			completed = true;
+			completedSubmission = submission;
+			submission = nullptr;
+		}
+		finalize(completedSubmission);
+	}
+
+	void markSchedulingComplete() {
+		MVKQueueCommandBufferSubmission* completedSubmission = nullptr;
+		{
+			lock_guard<mutex> guard(lock);
+			schedulingComplete = true;
+			if (!completionRequested || completed) { return; }
+			completed = true;
+			completedSubmission = submission;
+			submission = nullptr;
+		}
+		finalize(completedSubmission);
+	}
+};
+#endif
 
 
 #pragma mark -
@@ -62,7 +973,10 @@ MVKQueueFamily::~MVKQueueFamily() {
 #pragma mark -
 #pragma mark MVKQueue
 
-void MVKQueue::propagateDebugName() { setMetalObjectLabel(_mtlQueue, _debugName); }
+void MVKQueue::propagateDebugName() {
+	setMetalObjectLabel(_mtlQueue, _debugName);
+	// MTL4CommandQueue.label is fixed by MTL4CommandQueueDescriptor at creation.
+}
 
 
 #pragma mark Queue submissions
@@ -157,6 +1071,7 @@ VkResult MVKQueue::waitIdle(MVKCommandUse cmdUse) {
 	}
 	@autoreleasepool {
 		auto* mtlCmdBuff = getMTLCommandBuffer(cmdUse);
+		encodeMetal4OrderingWait(mtlCmdBuff, getLastMetal4SubmissionSequence() + 1);
 		[mtlCmdBuff commit];
 		[mtlCmdBuff waitUntilCompleted];
 	}
@@ -182,6 +1097,60 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 
 	if ( !mtlCmdBuff ) { reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "%s could not be acquired.", mtlCmdBuffLabel.UTF8String); }
 	return mtlCmdBuff;
+}
+
+bool MVKQueue::isMetal4CommandSubmissionReady() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	return state && state->probeCompleted.load(memory_order_acquire) &&
+		state->probeSucceeded.load(memory_order_acquire);
+#else
+	return false;
+#endif
+}
+
+uint64_t MVKQueue::reserveMetal4SubmissionSequence() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	return state ? state->reserveSequence() : 0;
+#else
+	return 0;
+#endif
+}
+
+uint64_t MVKQueue::getLastMetal4SubmissionSequence() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	return state ? state->lastSequence() : 0;
+#else
+	return 0;
+#endif
+}
+
+void MVKQueue::encodeMetal4OrderingWait(id<MTLCommandBuffer> commandBuffer, uint64_t sequence) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	if (!state || !commandBuffer || sequence <= 1) { return; }
+	id<MTLSharedEvent> event = state->copyOrderingEvent();
+	[commandBuffer encodeWaitForEvent:event value:sequence - 1];
+	[event release];
+#else
+	(void)commandBuffer;
+	(void)sequence;
+#endif
+}
+
+void MVKQueue::encodeMetal4OrderingSignal(id<MTLCommandBuffer> commandBuffer, uint64_t sequence) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto state = _metal4CommandState;
+	if (!state || !commandBuffer || !sequence) { return; }
+	id<MTLSharedEvent> event = state->copyOrderingEvent();
+	[commandBuffer encodeSignalEvent:event value:sequence];
+	[event release];
+#else
+	(void)commandBuffer;
+	(void)sequence;
+#endif
 }
 
 NSString* MVKQueue::getMTLCommandBufferLabel(MVKCommandUse cmdUse) {
@@ -291,6 +1260,7 @@ MVKQueue::MVKQueue(MVKDevice* device, MVKQueueFamily* queueFamily, uint32_t inde
 	initName();
 	initExecQueue();
 	initMTLCommandQueue();
+	initMTL4CommandQueue();
 }
 
 void MVKQueue::initName() {
@@ -339,10 +1309,262 @@ void MVKQueue::initMTLCommandQueue() {
 	_submissionCaptureScope->beginScope();	// Allow Xcode to capture the first frame if desired.
 }
 
+bool MVKQueue::validateMTL4CommandObjects() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		id<MTLDevice> mtlDevice = getMTLDevice();
+		MTL4CommandAllocatorDescriptor* descriptor = [MTL4CommandAllocatorDescriptor new];
+		descriptor.label = [NSString stringWithFormat:@"%s Metal 4 object probe allocator", getName().c_str()];
+		NSError* error = nil;
+		id<MTL4CommandAllocator> allocator =
+			[mtlDevice newCommandAllocatorWithDescriptor:descriptor error:&error];
+		[descriptor release];
+		id<MTL4CommandBuffer> commandBuffer = [mtlDevice newCommandBuffer];
+		bool valid = allocator && commandBuffer;
+		if (valid) {
+			@try {
+				commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 command object probe", getName().c_str()];
+				[commandBuffer beginCommandBufferWithAllocator:allocator];
+				[commandBuffer endCommandBuffer];
+			} @catch (NSException*) {
+				valid = false;
+			}
+		}
+		[commandBuffer release];
+		[allocator release];
+		return valid;
+	}
+#endif
+	return false;
+}
+
+bool MVKQueue::startMTL4CommandSubmissionProbe() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (!_mtl4Queue || !_metal4CommandState) { return false; }
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		auto state = _metal4CommandState;
+		size_t slotIndex = 0;
+		id<MTL4CommandAllocator> allocator = nil;
+		if (!state->acquireAllocator(&slotIndex, &allocator)) { return false; }
+
+		id<MTL4CommandBuffer> commandBuffer = [getMTLDevice() newCommandBuffer];
+		if (!commandBuffer) {
+			state->finishEncoding(slotIndex, false);
+			state->failProbeBeforeCommit(slotIndex, @"MTL4CommandBuffer creation returned nil");
+			[allocator release];
+			return false;
+		}
+
+		@try {
+			commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 empty submission probe", getName().c_str()];
+			[commandBuffer beginCommandBufferWithAllocator:allocator];
+			[commandBuffer endCommandBuffer];
+		} @catch (NSException* exception) {
+			state->finishEncoding(slotIndex, false);
+			state->failProbeBeforeCommit(slotIndex, exception.reason);
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		state->finishEncoding(slotIndex, true);
+		state->probeSubmitted.store(true, memory_order_release);
+
+		MTL4CommitOptions* options = [MTL4CommitOptions new];
+		if (!options) {
+			state->failProbeBeforeCommit(slotIndex, @"Could not create MTL4CommitOptions");
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		[options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+			state->completeProbe(slotIndex, feedback.error);
+		}];
+
+		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
+		@try {
+			[_mtl4Queue commit:commandBuffers count:1 options:options];
+		} @catch (NSException* exception) {
+			state->failProbeInFlight(exception.reason);
+			[options release];
+			[commandBuffer release];
+			[allocator release];
+			return false;
+		}
+
+		double timeoutMs = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_COMMAND_VALIDATION_TIMEOUT_MS",
+			kMetal4CommandValidationDefaultTimeoutMs);
+		if (!isfinite(timeoutMs)) { timeoutMs = kMetal4CommandValidationDefaultTimeoutMs; }
+		timeoutMs = max(kMetal4CommandValidationMinimumTimeoutMs,
+						min(kMetal4CommandValidationMaximumTimeoutMs, timeoutMs));
+		bool succeeded = state->waitForProbe((uint64_t)(timeoutMs * 1000000.0));
+
+		[options release];
+		[commandBuffer release];
+		[allocator release];
+		return succeeded;
+	}
+#endif
+	return false;
+}
+
+// Creates the independent Metal 4 queue, command-backend residency set, allocator arena,
+// total-order event, and bounded empty commit validation. Real Vulkan copy/fill submissions
+// are selected only after this function returns successfully.
+void MVKQueue::initMTL4CommandQueue() {
+	_metal4CommandBackendRequested = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_BACKEND", 0.0) != 0.0;
+	if (!_metal4CommandBackendRequested) { return; }
+
+#if MVK_USE_METAL_PRIVATE_API
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend disabled in Metal private-API builds.");
+	return;
+#endif
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (getMVKConfig().useMetalPrivateAPI) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend disabled because Metal private APIs are active.");
+		return;
+	}
+	bool supportsMetal4Family = getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4;
+	bool validationOverride =
+		mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_VALIDATION", 0.0) != 0.0;
+	if ((!supportsMetal4Family && !validationOverride) || !mvkOSVersionIsAtLeast(26.0)) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend requested but unavailable on this OS or GPU.");
+		return;
+	}
+	if (!supportsMetal4Family) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command validation override bypassed only the GPU-family advertisement; public factories and the bounded commit probe must still pass.");
+	}
+	if (!getMetalFeatures().residencySets) {
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend requested but residency sets are unavailable.");
+		return;
+	}
+
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		id<MTLDevice> mtlDevice = getMTLDevice();
+		if (![mtlDevice respondsToSelector:@selector(newMTL4CommandQueueWithDescriptor:error:)] ||
+			![mtlDevice respondsToSelector:@selector(newCommandAllocatorWithDescriptor:error:)] ||
+			![mtlDevice respondsToSelector:@selector(newCommandBuffer)] ||
+			![mtlDevice respondsToSelector:@selector(newResidencySetWithDescriptor:error:)]) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command backend requested but required command or residency factories are unavailable.");
+			return;
+		}
+
+		NSString* queueLabel = [NSString stringWithFormat:@"%s MTL4CommandQueue", getName().c_str()];
+		MTL4CommandQueueDescriptor* queueDescriptor = [MTL4CommandQueueDescriptor new];
+		queueDescriptor.label = queueLabel;
+		NSError* error = nil;
+		_mtl4Queue = [mtlDevice newMTL4CommandQueueWithDescriptor:queueDescriptor error:&error];
+		[queueDescriptor release];
+		if (!_mtl4Queue) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Could not create the Metal 4 command queue for Vulkan queue %u-%u: %s",
+							  _queueFamily->getIndex(), _index,
+							  error.localizedDescription.UTF8String ?: "unknown error");
+			return;
+		}
+
+		if (!validateMTL4CommandObjects()) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command object validation failed for Vulkan queue %u-%u; retaining the legacy backend.",
+							  _queueFamily->getIndex(), _index);
+			[_mtl4Queue release];
+			_mtl4Queue = nil;
+			return;
+		}
+
+		double configuredAllocatorCount = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_COMMAND_ALLOCATOR_COUNT",
+			(double)kMetal4CommandAllocatorDefaultCount);
+		uint32_t allocatorCount = kMetal4CommandAllocatorDefaultCount;
+		if (isfinite(configuredAllocatorCount) && configuredAllocatorCount >= 1.0 &&
+			configuredAllocatorCount <= (double)kMetal4CommandAllocatorMaxCount) {
+			allocatorCount = (uint32_t)configuredAllocatorCount;
+		}
+
+		_metal4CommandState = make_shared<MVKMetal4CommandQueueState>();
+		string failureReason;
+		if (!_metal4CommandState->initialize(mtlDevice, allocatorCount, queueLabel, &failureReason)) {
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Could not create the Metal 4 queue state for Vulkan queue %u-%u; retaining the legacy backend: %s",
+							  _queueFamily->getIndex(), _index, failureReason.c_str());
+			_metal4CommandState.reset();
+			[_mtl4Queue release];
+			_mtl4Queue = nil;
+			return;
+		}
+
+		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
+		[_mtl4Queue addResidencySet:residencySet];
+		[residencySet release];
+
+		if (!startMTL4CommandSubmissionProbe()) {
+			string reason;
+			{
+				lock_guard<mutex> guard(_metal4CommandState->lock);
+				reason = _metal4CommandState->lastError;
+			}
+			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command queue validation failed for Vulkan queue %u-%u; retaining the legacy backend: %s",
+							  _queueFamily->getIndex(), _index, reason.c_str());
+			id<MTLResidencySet> failedResidencySet = _metal4CommandState->copyResidencySet();
+			[_mtl4Queue removeResidencySet:failedResidencySet];
+			[failedResidencySet release];
+			_metal4CommandState->shutdown();
+			[_mtl4Queue release];
+			_mtl4Queue = nil;
+			_metal4CommandState.reset();
+			return;
+		}
+
+		_metal4CommandBackendReady = true;
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 Vulkan transfer backend ready for queue %u-%u with %u allocators; unsupported submissions fall back before encoding.",
+						  _queueFamily->getIndex(), _index, allocatorCount);
+		return;
+	}
+#endif
+
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+					  "Metal 4 command backend requested but excluded from this MoltenVK target.");
+}
+
 MVKQueue::~MVKQueue() {
 	destroyExecQueue();
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (_metal4CommandState) {
+		_device->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command backend summary: real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
+			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->fallbackCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->failureCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferCopyCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferFillCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->imageCopyCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed));
+		_metal4CommandState->shutdown();
+		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
+		if (_mtl4Queue && residencySet) { [_mtl4Queue removeResidencySet:residencySet]; }
+		[residencySet release];
+	}
+	[_mtl4Queue release];
+	_metal4CommandState.reset();
+#endif
 
 	[_mtlCmdBuffLabelBeginCommandBuffer release];
 	[_mtlCmdBuffLabelQueueSubmit release];
@@ -372,6 +1594,20 @@ void MVKSemaphoreSubmitInfo::encodeWait(id<MTLCommandBuffer> mtlCmdBuff) {
 void MVKSemaphoreSubmitInfo::encodeSignal(id<MTLCommandBuffer> mtlCmdBuff) {
 	if (_semaphore) { _semaphore->encodeSignal(mtlCmdBuff, value); }
 }
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+bool MVKSemaphoreSubmitInfo::supportsMetal4QueueEncoding() const {
+	return !_semaphore || _semaphore->supportsMetal4QueueEncoding();
+}
+
+void MVKSemaphoreSubmitInfo::encodeMetal4Wait(id<MTL4CommandQueue> queue) {
+	if (_semaphore) { _semaphore->encodeMetal4Wait(queue, value); }
+}
+
+void MVKSemaphoreSubmitInfo::encodeMetal4Signal(id<MTL4CommandQueue> queue) {
+	if (_semaphore) { _semaphore->encodeMetal4Signal(queue, value); }
+}
+#endif
 
 MVKSemaphoreSubmitInfo::MVKSemaphoreSubmitInfo(const VkSemaphoreSubmitInfo& semaphoreSubmitInfo) :
 	_semaphore((MVKSemaphore*)semaphoreSubmitInfo.semaphore),
@@ -464,6 +1700,11 @@ MVKQueueSubmission::~MVKQueueSubmission() {
 VkResult MVKQueueCommandBufferSubmission::execute() {
 
 	_queue->_submissionCaptureScope->beginScope();
+	_submissionSequence = _queue->reserveMetal4SubmissionSequence();
+
+	bool handledByMetal4 = false;
+	VkResult metal4Result = executeMetal4(&handledByMetal4);
+	if (handledByMetal4) { return metal4Result; }
 
 	// If using encoded semaphore waiting, do so now.
 	for (auto& ws : _waitSemaphores) { ws.encodeWait(getActiveMTLCommandBuffer()); }
@@ -482,6 +1723,219 @@ VkResult MVKQueueCommandBufferSubmission::execute() {
 	return commitActiveMTLCommandBuffer(true);
 }
 
+bool MVKQueueCommandBufferSubmission::supportsMetal4Semaphores() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	for (const auto& wait : _waitSemaphores) {
+		if (!wait.supportsMetal4QueueEncoding()) { return false; }
+	}
+	for (const auto& signal : _signalSemaphores) {
+		if (!signal.supportsMetal4QueueEncoding()) { return false; }
+	}
+	return true;
+#else
+	return false;
+#endif
+}
+
+VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
+	if (handled) { *handled = false; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (!handled ||
+		_commandUse != kMVKCommandUseQueueSubmit ||
+		!_queue->isMetal4CommandBackendReady() ||
+		!_queue->isMetal4CommandSubmissionReady()) {
+		return VK_SUCCESS;
+	}
+
+	auto state = _queue->_metal4CommandState;
+	id<MTL4CommandQueue> commandQueue = _queue->_mtl4Queue;
+	if (!state || !commandQueue ||
+		!supportsMetal4Semaphores() ||
+		!supportsMetal4CommandBuffers()) {
+		if (state) { state->recordFallback(); }
+		return VK_SUCCESS;
+	}
+
+	MVKMetal4TransferCommandEncoder encoder(state);
+	if (!prepareMetal4CommandBuffers(&encoder)) {
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	const auto& allocations = encoder.getAllocations();
+	if (!state->acquireResidency(allocations)) {
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	size_t allocatorIndex = 0;
+	id<MTL4CommandAllocator> allocator = nil;
+	if (!state->acquireAllocator(&allocatorIndex, &allocator)) {
+		state->releaseResidency(allocations);
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	id<MTL4CommandBuffer> commandBuffer = [getMTLDevice() newCommandBuffer];
+	id<MTLResidencySet> residencySet = state->copyResidencySet();
+	MTL4CommitOptions* options = [MTL4CommitOptions new];
+	if (!commandBuffer || !residencySet || !options) {
+		state->finishEncoding(allocatorIndex, false);
+		state->releaseResidency(allocations);
+		[options release];
+		[residencySet release];
+		[commandBuffer release];
+		[allocator release];
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	bool claimedCommandBuffers = false;
+	bool commandBufferEnded = false;
+	@try {
+		commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 Vulkan transfer submission %llu",
+													 _queue->getName().c_str(),
+													 (unsigned long long)_submissionSequence];
+		[commandBuffer beginCommandBufferWithAllocator:allocator];
+		if (!encoder.beginEncoding(commandBuffer, residencySet)) {
+			@throw [NSException exceptionWithName:@"MVKMetal4EncoderCreation"
+									 reason:@"Could not create MTL4ComputeCommandEncoder"
+								   userInfo:nil];
+		}
+		if (!beginMetal4CommandBuffers()) {
+			@throw [NSException exceptionWithName:@"MVKMetal4CommandClaim"
+									 reason:@"Could not claim every Vulkan command buffer"
+								   userInfo:nil];
+		}
+		claimedCommandBuffers = true;
+		if (!encodeMetal4CommandBuffers(&encoder)) {
+			@throw [NSException exceptionWithName:@"MVKMetal4CommandEncoding"
+									 reason:@"Metal 4 command materialization failed"
+								   userInfo:nil];
+		}
+		encoder.endEncoding();
+		[commandBuffer endCommandBuffer];
+		commandBufferEnded = true;
+	} @catch (NSException*) {
+		if (claimedCommandBuffers) { endMetal4CommandBuffers(false); }
+		state->finishEncoding(allocatorIndex, false);
+		state->releaseResidency(allocations);
+		[options release];
+		[residencySet release];
+		[commandBuffer release];
+		[allocator release];
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	if (!commandBufferEnded) {
+		if (claimedCommandBuffers) { endMetal4CommandBuffers(false); }
+		state->finishEncoding(allocatorIndex, false);
+		state->releaseResidency(allocations);
+		[options release];
+		[residencySet release];
+		[commandBuffer release];
+		[allocator release];
+		state->recordFallback();
+		return VK_SUCCESS;
+	}
+
+	uint64_t startTime = getPerformanceTimestamp();
+	auto completion = make_shared<MVKMetal4SubmissionCompletion>(
+		this,
+		_queue,
+		state,
+		allocations,
+		allocatorIndex,
+		_submissionSequence,
+		startTime);
+
+	[options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+		completion->receiveFeedback(feedback);
+	}];
+
+	id<MTLSharedEvent> orderingEvent = state->copyOrderingEvent();
+	bool allocatorInFlight = false;
+	bool commitAttempted = false;
+	VkResult result = getConfigurationResult();
+	@try {
+		if (_submissionSequence > 1) {
+			[commandQueue waitForEvent:orderingEvent value:_submissionSequence - 1];
+		}
+		for (auto& wait : _waitSemaphores) { wait.encodeMetal4Wait(commandQueue); }
+
+		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
+		state->finishEncoding(allocatorIndex, true);
+		allocatorInFlight = true;
+		commitAttempted = true;
+		[commandQueue commit:commandBuffers count:1 options:options];
+		endMetal4CommandBuffers(true);
+		claimedCommandBuffers = false;
+		state->recordRealSubmission();
+		if (encoder.hasRenderWork()) { state->recordRenderSubmission(); }
+
+		for (auto& signal : _signalSemaphores) { signal.encodeMetal4Signal(commandQueue); }
+		[commandQueue signalEvent:orderingEvent value:_submissionSequence];
+
+		if (state->realSubmissionCount.load(memory_order_relaxed) == 1) {
+			_queue->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Executed first Vulkan submission on the Metal 4 transfer backend (queue %u-%u, sequence %llu).",
+							  _queue->_queueFamily->getIndex(), _queue->_index,
+							  (unsigned long long)_submissionSequence);
+		}
+	} @catch (NSException* exception) {
+		if (!commitAttempted) {
+			if (claimedCommandBuffers) {
+				endMetal4CommandBuffers(false);
+				claimedCommandBuffers = false;
+			}
+			if (allocatorInFlight) {
+				state->completeAllocator(allocatorIndex);
+			} else {
+				state->finishEncoding(allocatorIndex, false);
+			}
+			state->releaseResidency(allocations);
+			state->recordFallback();
+			[orderingEvent release];
+			[options release];
+			[residencySet release];
+			[commandBuffer release];
+			[allocator release];
+			*handled = false;
+			return VK_SUCCESS;
+		}
+
+		if (claimedCommandBuffers) {
+			endMetal4CommandBuffers(true);
+			claimedCommandBuffers = false;
+		}
+		state->recordFailure(exception.reason);
+		setConfigurationResult(VK_ERROR_DEVICE_LOST);
+		result = VK_ERROR_DEVICE_LOST;
+		_queue->reportResult(VK_ERROR_DEVICE_LOST,
+							 MVK_CONFIG_LOG_LEVEL_ERROR,
+							 "Metal 4 Vulkan queue commit became ambiguous: %s",
+							 exception.reason.UTF8String ?: "unknown exception");
+		_queue->getDevice()->markLost(false);
+		// Do not host-signal ordering or release allocator/residency here. The
+		// command queue may have accepted the workload before throwing. Real
+		// commit feedback is the only safe release boundary.
+	}
+
+	[orderingEvent release];
+	[options release];
+	[residencySet release];
+	[commandBuffer release];
+	[allocator release];
+
+	*handled = true;
+	completion->markSchedulingComplete();
+	return result;
+#else
+	return VK_SUCCESS;
+#endif
+}
+
 // Returns the active MTLCommandBuffer, lazily retrieving it from the queue if needed.
 id<MTLCommandBuffer> MVKQueueCommandBufferSubmission::getActiveMTLCommandBuffer() {
 	if ( !_activeMTLCommandBuffer ) {
@@ -498,12 +1952,26 @@ id<MTLCommandBuffer> MVKQueueCommandBufferSubmission::getActiveMTLCommandBuffer(
 }
 
 // Commits the current active MTLCommandBuffer, if it exists, and sets a new active MTLCommandBuffer.
-void MVKQueueCommandBufferSubmission::setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff) {
+void MVKQueueCommandBufferSubmission::setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff, bool isPrefilled) {
 
 	if (_activeMTLCommandBuffer) { commitActiveMTLCommandBuffer(); }
 
+	// A prefilled command buffer already contains encoders, so a wait inserted now
+	// would be too late. Commit an empty bridge on the legacy queue first; implicit
+	// queue order then places all prefilled work after the hybrid-backend wait.
+	if (isPrefilled && _submissionSequence && !_legacyOrderingWaitEncoded) {
+		id<MTLCommandBuffer> bridge = _queue->getMTLCommandBuffer(_commandUse);
+		_queue->encodeMetal4OrderingWait(bridge, _submissionSequence);
+		[bridge commit];
+		_legacyOrderingWaitEncoded = true;
+	}
+
 	_activeMTLCommandBuffer = [mtlCmdBuff retain];		// retained to handle prefilled
 	[_activeMTLCommandBuffer enqueue];
+	if (!isPrefilled && _submissionSequence && !_legacyOrderingWaitEncoded) {
+		_queue->encodeMetal4OrderingWait(_activeMTLCommandBuffer, _submissionSequence);
+		_legacyOrderingWaitEncoded = true;
+	}
 }
 
 // Commits and releases the currently active MTLCommandBuffer, optionally signalling
@@ -545,9 +2013,18 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 	id<MTLCommandBuffer> mtlCmdBuff = signalCompletion ? getActiveMTLCommandBuffer() : _activeMTLCommandBuffer;
 	_activeMTLCommandBuffer = nil;
 
+	if (signalCompletion) {
+		_queue->encodeMetal4OrderingSignal(mtlCmdBuff, _submissionSequence);
+	}
+
 	uint64_t startTime = getPerformanceTimestamp();
 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
 		addPerformanceInterval(getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (mtlCB.status == MTLCommandBufferStatusError && _queue->_metal4CommandState) {
+			_queue->_metal4CommandState->hostSignalOrdering(_submissionSequence);
+		}
+#endif
 		if (signalCompletion) { this->finish(); }	// Must be the last thing the completetion callback does.
 	}];
 
@@ -558,7 +2035,14 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 
 	// If we need to signal completion, but an error occurred and the MTLCommandBuffer
 	// was not created, call the finish() function directly.
-	if (signalCompletion && !mtlCmdBuff) { finish(); }
+	if (signalCompletion && !mtlCmdBuff) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (_queue->_metal4CommandState) {
+			_queue->_metal4CommandState->hostSignalOrdering(_submissionSequence);
+		}
+#endif
+		finish();
+	}
 
 	return rslt;
 }
@@ -671,6 +2155,61 @@ void MVKQueueFullCommandBufferSubmission<N>::submitCommandBuffers() {
 	addPerformanceInterval(getPerformanceStats().queue.submitCommandBuffers, startTime);
 }
 
+
+template <size_t N>
+bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers() const {
+	for (const auto& cbInfo : _cmdBuffers) {
+		if (!cbInfo.commandBuffer || !cbInfo.commandBuffer->supportsMetal4Encoding()) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKQueueFullCommandBufferSubmission<N>::prepareMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) {
+	for (auto& cbInfo : _cmdBuffers) {
+		if (!cbInfo.commandBuffer->prepareMetal4Encoding(encoder)) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKQueueFullCommandBufferSubmission<N>::beginMetal4CommandBuffers() {
+	_metal4PreviousExecutionState.clear();
+	_metal4PreviousExecutionState.reserve(_cmdBuffers.size());
+	for (auto& cbInfo : _cmdBuffers) {
+		bool previousWasExecuted = false;
+		if (!cbInfo.commandBuffer->beginMetal4Execution(&previousWasExecuted)) {
+			for (size_t idx = 0; idx < _metal4PreviousExecutionState.size(); idx++) {
+				_cmdBuffers[idx].commandBuffer->endMetal4Execution(
+					_metal4PreviousExecutionState[idx] != 0,
+					false);
+			}
+			_metal4PreviousExecutionState.clear();
+			return false;
+		}
+		_metal4PreviousExecutionState.push_back(previousWasExecuted ? 1 : 0);
+	}
+	return true;
+}
+
+template <size_t N>
+void MVKQueueFullCommandBufferSubmission<N>::endMetal4CommandBuffers(bool committed) {
+	for (size_t idx = 0; idx < _metal4PreviousExecutionState.size(); idx++) {
+		_cmdBuffers[idx].commandBuffer->endMetal4Execution(
+			_metal4PreviousExecutionState[idx] != 0,
+			committed);
+	}
+	_metal4PreviousExecutionState.clear();
+}
+
+template <size_t N>
+bool MVKQueueFullCommandBufferSubmission<N>::encodeMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) {
+	for (auto& cbInfo : _cmdBuffers) {
+		if (!cbInfo.commandBuffer->encodeMetal4(encoder)) { return false; }
+	}
+	return true;
+}
+
 template <size_t N>
 MVKQueueFullCommandBufferSubmission<N>::MVKQueueFullCommandBufferSubmission(MVKQueue* queue,
 																			const VkSubmitInfo2* pSubmit,
@@ -713,10 +2252,13 @@ MVKQueueFullCommandBufferSubmission<N>::MVKQueueFullCommandBufferSubmission(MVKQ
 // If the semaphores are not encodable, wait on them inline after presenting.
 // The semaphores know what to do.
 VkResult MVKQueuePresentSurfaceSubmission::execute() {
+	_submissionSequence = _queue->reserveMetal4SubmissionSequence();
+
 	// MTLCommandBuffer retain references to avoid rare case where objects are destroyed too early.
 	// Although testing could not determine which objects were being lost, queue present MTLCommandBuffers
 	// are used only once per frame, and retain so few objects, that blanket retention is still performant.
 	id<MTLCommandBuffer> mtlCmdBuff = _queue->getMTLCommandBuffer(kMVKCommandUseQueuePresent, true);
+	_queue->encodeMetal4OrderingWait(mtlCmdBuff, _submissionSequence);
 
 	for (auto& ws : _waitSemaphores) {
 		ws.encodeWait(mtlCmdBuff);	// Encoded semaphore waits
@@ -737,15 +2279,28 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 	}
 
 	if ( !mtlCmdBuff ) { setConfigurationResult(VK_ERROR_OUT_OF_POOL_MEMORY); }	// Check after images may set error.
+	_queue->encodeMetal4OrderingSignal(mtlCmdBuff, _submissionSequence);
 
 	// Add completion callback to the MTLCommandBuffer to call finish(), 
 	// or if the MTLCommandBuffer could not be created, call finish() directly.
 	// Retrieve the result first, because finish() will destroy this instance.
 	VkResult rslt = getConfigurationResult();
 	if (mtlCmdBuff) {
-		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { this->finish(); }];
+		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			if (mtlCB.status == MTLCommandBufferStatusError && _queue->_metal4CommandState) {
+				_queue->_metal4CommandState->hostSignalOrdering(_submissionSequence);
+			}
+#endif
+			this->finish();
+		}];
 		[mtlCmdBuff commit];
 	} else {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (_queue->_metal4CommandState) {
+			_queue->_metal4CommandState->hostSignalOrdering(_submissionSequence);
+		}
+#endif
 		finish();
 	}
 	return rslt;
@@ -850,4 +2405,3 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 		setConfigurationResult(scRslt);
 	}
 }
-

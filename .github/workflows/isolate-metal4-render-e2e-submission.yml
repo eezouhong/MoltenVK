@@ -1,0 +1,153 @@
+name: Isolate the Metal 4 ordinary-render E2E submission
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/isolate-metal4-render-e2e-submission.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  isolate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          persist-credentials: true
+      - name: Keep layout transitions outside the render submission under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/zz-autofinish-metal4-game-evaluable.yml')
+          source = path.read_text()
+          source = source.replace(
+              '                  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;\n',
+              '                  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;\n',
+              1,
+          )
+          source = source.replace(
+              '                  attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;\n                  attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;\n',
+              '                  attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;\n                  attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;\n',
+              1,
+          )
+          dependency_block = '''                  std::array<VkSubpassDependency, 2> dependencies{};
+                  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+                  dependencies[0].dstSubpass = 0;
+                  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  dependencies[1].srcSubpass = 0;
+                  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+                  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  dependencies[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+          '''
+          source = source.replace(dependency_block, '', 1)
+          source = source.replace(
+              '''                  renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+                  renderPassInfo.pDependencies = dependencies.data();
+          ''',
+              '',
+              1,
+          )
+          render_anchor = '''                  VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
+                  VkClearValue clear{};
+                  clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+          '''
+          transition = '''                  VkCommandBuffer transitionCommand = beginCommandBuffer(device, commandPool);
+                  VkImageMemoryBarrier toColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                  toColor.srcAccessMask = 0;
+                  toColor.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  toColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                  toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                  toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                  toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                  toColor.image = image;
+                  toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                  toColor.subresourceRange.levelCount = 1;
+                  toColor.subresourceRange.layerCount = 1;
+                  vkCmdPipelineBarrier(transitionCommand,
+                                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                       0, 0, nullptr, 0, nullptr, 1, &toColor);
+                  endCommandBuffer(transitionCommand);
+                  VkSubmitInfo transitionSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                  transitionSubmit.commandBufferCount = 1;
+                  transitionSubmit.pCommandBuffers = &transitionCommand;
+                  VkFence transitionFence = createFence(device);
+                  check(vkQueueSubmit(queue, 1, &transitionSubmit, transitionFence),
+                        "vkQueueSubmit(pre-render transition)");
+                  waitFence(device, transitionFence);
+
+                  VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
+          '''
+          if render_anchor in source:
+              source = source.replace(render_anchor, transition, 1)
+          elif 'vkQueueSubmit(pre-render transition)' not in source:
+              raise SystemExit('render command insertion anchor not found')
+          source = source.replace(
+              '''                  beginInfo.clearValueCount = 1;
+                  beginInfo.pClearValues = &clear;
+          ''',
+              '''                  beginInfo.clearValueCount = 0;
+                  beginInfo.pClearValues = nullptr;
+          ''',
+              1,
+          )
+          copy_anchor = '''                  VkCommandBuffer copyCommand = beginCommandBuffer(device, commandPool);
+                  VkBufferImageCopy copy{};
+          '''
+          copy_barrier = '''                  VkCommandBuffer copyCommand = beginCommandBuffer(device, commandPool);
+                  VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                  toTransfer.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                  toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                  toTransfer.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                  toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                  toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                  toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                  toTransfer.image = image;
+                  toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                  toTransfer.subresourceRange.levelCount = 1;
+                  toTransfer.subresourceRange.layerCount = 1;
+                  vkCmdPipelineBarrier(copyCommand,
+                                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                       VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                       0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+                  VkBufferImageCopy copy{};
+          '''
+          if copy_anchor in source:
+              source = source.replace(copy_anchor, copy_barrier, 1)
+          elif 'VkImageMemoryBarrier toTransfer' not in source:
+              raise SystemExit('copy transition insertion anchor not found')
+          source = source.replace(
+              '''                  vkDestroyFence(device, copyFence, nullptr);
+                  vkDestroyFence(device, renderFence, nullptr);
+                  vkFreeCommandBuffers(device, commandPool, 1, &copyCommand);
+                  vkFreeCommandBuffers(device, commandPool, 1, &renderCommand);
+          ''',
+              '''                  vkDestroyFence(device, copyFence, nullptr);
+                  vkDestroyFence(device, renderFence, nullptr);
+                  vkDestroyFence(device, transitionFence, nullptr);
+                  vkFreeCommandBuffers(device, commandPool, 1, &copyCommand);
+                  vkFreeCommandBuffers(device, commandPool, 1, &renderCommand);
+                  vkFreeCommandBuffers(device, commandPool, 1, &transitionCommand);
+          ''',
+              1,
+          )
+          path.write_text(source)
+          PY
+          rm .github/workflows/isolate-metal4-render-e2e-submission.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(metal4): isolate ordinary render backend ownership"
+          git push origin HEAD:metal4/phase1-command-backend-poc

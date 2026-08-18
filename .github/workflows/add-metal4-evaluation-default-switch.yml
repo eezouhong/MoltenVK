@@ -1,0 +1,94 @@
+name: Add Metal 4 evaluation default switch
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/add-metal4-evaluation-default-switch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  add-switch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Add compile-time default without changing normal behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm")
+          source = path.read_text()
+          marker = "MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT"
+          if marker not in source:
+              anchor = '#include "mvk_datatypes.hpp"\n'
+              if anchor not in source:
+                  # Fall back to the end of the leading include block.
+                  lines = source.splitlines(keepends=True)
+                  insert_at = 0
+                  for index, line in enumerate(lines):
+                      if line.startswith("#include"):
+                          insert_at = index + 1
+                  if insert_at == 0:
+                      raise SystemExit("MVKQueue.mm include block was not found")
+                  block = '''\n#ifndef MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0\n#endif\n\n#if MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n__attribute__((constructor)) static void mvkEnableMetal4CommandBackendEvaluationDefault() {\n\t// Evaluation packages are drop-in: preserve an explicit process override,\n\t// otherwise enable the private backend before the first Vulkan object exists.\n\tif (!getenv("MVK_CONFIG_METAL4_COMMAND_BACKEND")) {\n\t\tsetenv("MVK_CONFIG_METAL4_COMMAND_BACKEND", "1", 0);\n\t}\n}\n#endif\n\n'''
+                  lines.insert(insert_at, block)
+                  source = "".join(lines)
+              else:
+                  block = '''#include "mvk_datatypes.hpp"\n\n#ifndef MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0\n#endif\n\n#if MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\n__attribute__((constructor)) static void mvkEnableMetal4CommandBackendEvaluationDefault() {\n\t// Evaluation packages are drop-in: preserve an explicit process override,\n\t// otherwise enable the private backend before the first Vulkan object exists.\n\tif (!getenv("MVK_CONFIG_METAL4_COMMAND_BACKEND")) {\n\t\tsetenv("MVK_CONFIG_METAL4_COMMAND_BACKEND", "1", 0);\n\t}\n}\n#endif\n'''
+                  source = source.replace(anchor, block, 1)
+              path.write_text(source)
+          PY
+
+      - name: Add source-contract coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("Scripts/test-metal4-command-backend-phase1.py")
+          source = path.read_text()
+          token = "MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT"
+          if token not in source:
+              insertion = '''\n    require(\n        queue_mm,\n        r"#define\\s+MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT\\s+0",\n        "normal MoltenVK builds must keep the Metal 4 command backend default-off",\n    )\n    require(\n        queue_mm,\n        r"MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT[\\s\\S]*?getenv\\(\\\"MVK_CONFIG_METAL4_COMMAND_BACKEND\\\"\\)[\\s\\S]*?setenv\\(\\\"MVK_CONFIG_METAL4_COMMAND_BACKEND\\\",\\s*\\\"1\\\",\\s*0\\)",\n        "drop-in evaluation default must preserve an explicit runtime override",\n    )\n'''
+              success_marker = '    print("PASS: usable Metal 4 Phase 1C compute/transfer backend source contract")'
+              if success_marker not in source:
+                  raise SystemExit("source-contract success marker not found")
+              source = source.replace(success_marker, insertion + "\n" + success_marker, 1)
+              path.write_text(source)
+          PY
+
+      - name: Validate normal default and tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          test "$(grep -R -c '^#define MVK_CONFIG_METAL4_COMMAND_BACKEND_DEFAULT 0$' MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm)" -eq 1
+          git diff --check
+
+      - name: Commit default switch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/add-metal4-evaluation-default-switch.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(metal4): add drop-in evaluation default switch"
+          git push origin HEAD:metal4/phase1-command-backend-poc

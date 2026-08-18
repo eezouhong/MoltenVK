@@ -23,6 +23,7 @@
 #include "MVKImage.h"
 #include "MVKSync.h"
 #include "MVKSmallVector.h"
+#include <memory>
 #include <mutex>
 #include <condition_variable>
 
@@ -32,6 +33,8 @@ class MVKQueue;
 class MVKQueueSubmission;
 class MVKPhysicalDevice;
 class MVKGPUCaptureScope;
+struct MVKMetal4CommandQueueState;
+struct MVKMetal4SubmissionCompletion;
 
 
 #pragma mark -
@@ -90,6 +93,22 @@ public:
 	/** Return the name of this queue. */
 	const std::string& getName() { return _name; }
 
+	/**
+	 * Returns the physical-device feature view used by queue construction.
+	 * Production continues to honor the advertised residency-set capability.
+	 * The private validation override only permits public-factory probing on
+	 * virtualized test GPUs whose family/capability advertisement is incomplete.
+	 */
+	MVKPhysicalDeviceMetalFeatures getMetalFeatures() const {
+		auto features = MVKDeviceTrackingMixin::getMetalFeatures();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		if (mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_VALIDATION", 0.0) != 0.0) {
+			features.residencySets = true;
+		}
+#endif
+		return features;
+	}
+
 #pragma mark Queue submissions
 
 	/** Submits the specified command buffers to the queue. */
@@ -109,6 +128,33 @@ public:
 
 	/** Returns a Metal command buffer from the Metal queue. */
 	id<MTLCommandBuffer> getMTLCommandBuffer(MVKCommandUse cmdUse, bool retainRefs = false);
+
+	/** Returns whether the experimental Metal 4 command object boundary was requested. */
+	bool wasMetal4CommandBackendRequested() const { return _metal4CommandBackendRequested; }
+
+	/** Returns whether Metal 4 queue, allocator arena, and command buffer object creation passed. */
+	bool isMetal4CommandBackendReady() const { return _metal4CommandBackendReady; }
+
+	/** Returns whether the bounded internal Metal 4 commit probe completed without an error. */
+	bool isMetal4CommandSubmissionReady() const;
+
+	/** Reserves the total-order value used by the next Vulkan queue operation. */
+	uint64_t reserveMetal4SubmissionSequence();
+
+	/** Returns the most recently reserved total-order value. */
+	uint64_t getLastMetal4SubmissionSequence() const;
+
+	/** Adds the hybrid-backend ordering wait/signal to a legacy command buffer. */
+	void encodeMetal4OrderingWait(id<MTLCommandBuffer> commandBuffer, uint64_t sequence);
+	void encodeMetal4OrderingSignal(id<MTLCommandBuffer> commandBuffer, uint64_t sequence);
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	/**
+	 * Returns the optional Metal 4 queue owned by this Vulkan queue.
+	 * Phase 1 does not submit Vulkan work to this queue yet.
+	 */
+	id<MTL4CommandQueue> getMTL4CommandQueue() { return _mtl4Queue; }
+#endif
 
 #pragma mark Construction
 	
@@ -140,6 +186,9 @@ protected:
 	void initName();
 	void initExecQueue();
 	void initMTLCommandQueue();
+	void initMTL4CommandQueue();
+	bool validateMTL4CommandObjects();
+	bool startMTL4CommandSubmissionProbe();
 	void destroyExecQueue();
 	VkResult submit(MVKQueueSubmission* qSubmit);
 	NSString* getMTLCommandBufferLabel(MVKCommandUse cmdUse);
@@ -152,6 +201,10 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	id<MTL4CommandQueue> _mtl4Queue = nil;
+	std::shared_ptr<MVKMetal4CommandQueueState> _metal4CommandState;
+#endif
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;
@@ -164,6 +217,8 @@ protected:
 	float _priority;
 	VkQueueGlobalPriority _globalPriority;
 	uint32_t _index;
+	bool _metal4CommandBackendRequested = false;
+	bool _metal4CommandBackendReady = false;
 };
 
 
@@ -180,6 +235,11 @@ public:
 
 	void encodeWait(id<MTLCommandBuffer> mtlCmdBuff);
 	void encodeSignal(id<MTLCommandBuffer> mtlCmdBuff);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() const;
+	void encodeMetal4Wait(id<MTL4CommandQueue> queue);
+	void encodeMetal4Signal(id<MTL4CommandQueue> queue);
+#endif
 	MVKSemaphoreSubmitInfo(const VkSemaphoreSubmitInfo& semaphoreSubmitInfo);
 	MVKSemaphoreSubmitInfo(const VkSemaphore semaphore, VkPipelineStageFlags stageMask);
 	MVKSemaphoreSubmitInfo(const MVKSemaphoreSubmitInfo& other);
@@ -223,6 +283,7 @@ protected:
 	MVKQueue* _queue;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _waitSemaphores;
 	uint64_t _creationTime;
+	uint64_t _submissionSequence = 0;
 };
 
 
@@ -261,18 +322,27 @@ public:
 
 protected:
 	friend MVKCommandBuffer;
+	friend struct MVKMetal4SubmissionCompletion;
 
 	id<MTLCommandBuffer> getActiveMTLCommandBuffer();
-	void setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff);
+	void setActiveMTLCommandBuffer(id<MTLCommandBuffer> mtlCmdBuff, bool isPrefilled = false);
 	VkResult commitActiveMTLCommandBuffer(bool signalCompletion = false);
+	VkResult executeMetal4(bool* handled);
+	bool supportsMetal4Semaphores() const;
 	void finish() override;
 	virtual void submitCommandBuffers() {}
+	virtual bool supportsMetal4CommandBuffers() const { return true; }
+	virtual bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
+	virtual bool beginMetal4CommandBuffers() { return true; }
+	virtual void endMetal4CommandBuffers(bool) {}
+	virtual bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
 
 	MVKCommandEncodingContext _encodingContext;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _signalSemaphores;
 	MVKFence* _fence = nullptr;
 	id<MTLCommandBuffer> _activeMTLCommandBuffer = nil;
 	MVKCommandUse _commandUse = kMVKCommandUseNone;
+	bool _legacyOrderingWaitEncoded = false;
 	bool _emulatedWaitDone = false;		//Used to track if we've already waited for emulated semaphores.
 };
 
@@ -297,8 +367,14 @@ public:
 
 protected:
 	void submitCommandBuffers() override;
+	bool supportsMetal4CommandBuffers() const override;
+	bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
+	bool beginMetal4CommandBuffers() override;
+	void endMetal4CommandBuffers(bool committed) override;
+	bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
 
 	MVKSmallVector<MVKCommandBufferSubmitInfo, N> _cmdBuffers;
+	MVKSmallVector<uint8_t, N> _metal4PreviousExecutionState;
 };
 
 

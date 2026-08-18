@@ -1,0 +1,405 @@
+name: Add and verify Metal 4 ordinary render E2E
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/add-metal4-render-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render-e2e:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install SPIR-V compiler when render smoke is absent
+        if: ${{ !contains(hashFiles('Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp'), '') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! grep -q 'RENDER_OK' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp; then
+            brew install glslang
+          fi
+
+      - name: Generate and insert descriptorless render smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_file=Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          if grep -q 'RENDER_OK' "$test_file"; then
+            echo "Render smoke already present"
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/metal4-render.vert" <<'GLSL'
+          #version 450
+          vec2 positions[3] = vec2[](
+              vec2(-0.80, -0.80),
+              vec2( 0.80, -0.80),
+              vec2( 0.00,  0.80)
+          );
+          void main() {
+              gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+          }
+          GLSL
+          cat > "$RUNNER_TEMP/metal4-render.frag" <<'GLSL'
+          #version 450
+          layout(location = 0) out vec4 outColor;
+          void main() {
+              outColor = vec4(0.25, 0.50, 0.75, 1.0);
+          }
+          GLSL
+          glslangValidator -V --target-env vulkan1.1 -S vert -o "$RUNNER_TEMP/metal4-render.vert.spv" "$RUNNER_TEMP/metal4-render.vert"
+          glslangValidator -V --target-env vulkan1.1 -S frag -o "$RUNNER_TEMP/metal4-render.frag.spv" "$RUNNER_TEMP/metal4-render.frag"
+
+          VERT_SPV="$RUNNER_TEMP/metal4-render.vert.spv" \
+          FRAG_SPV="$RUNNER_TEMP/metal4-render.frag.spv" \
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import struct
+          from pathlib import Path
+
+          path = Path("Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp")
+          source = path.read_text()
+
+          def words(name: str) -> str:
+              data = Path(os.environ[name]).read_bytes()
+              if len(data) % 4:
+                  raise SystemExit(f"{name} is not word aligned")
+              values = struct.unpack(f"<{len(data) // 4}I", data)
+              rows = []
+              for start in range(0, len(values), 8):
+                  rows.append("        " + ", ".join(f"0x{value:08x}u" for value in values[start:start + 8]) + ",")
+              return "\n".join(rows)
+
+          vert = words("VERT_SPV")
+          frag = words("FRAG_SPV")
+          helper = f'''
+          VkShaderModule createShaderModule(VkDevice device, const uint32_t* words, size_t byteCount) {{
+              VkShaderModuleCreateInfo createInfo{{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO}};
+              createInfo.codeSize = byteCount;
+              createInfo.pCode = words;
+              VkShaderModule module = VK_NULL_HANDLE;
+              check(vkCreateShaderModule(device, &createInfo, nullptr, &module), "vkCreateShaderModule(render)");
+              return module;
+          }}
+
+          void runOrdinaryRenderSmoke(VkPhysicalDevice physicalDevice,
+                                      VkDevice device,
+                                      VkQueue queue,
+                                      VkCommandPool commandPool) {{
+              constexpr uint32_t kWidth = 64;
+              constexpr uint32_t kHeight = 64;
+              constexpr VkDeviceSize kReadbackBytes = kWidth * kHeight * 4;
+              static const uint32_t kVertexShader[] = {{
+          {vert}
+              }};
+              static const uint32_t kFragmentShader[] = {{
+          {frag}
+              }};
+
+              VkImage image = VK_NULL_HANDLE;
+              VkDeviceMemory imageMemory = VK_NULL_HANDLE;
+              VkImageCreateInfo imageInfo{{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}};
+              imageInfo.imageType = VK_IMAGE_TYPE_2D;
+              imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+              imageInfo.extent = {{kWidth, kHeight, 1}};
+              imageInfo.mipLevels = 1;
+              imageInfo.arrayLayers = 1;
+              imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+              imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+              imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+              imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+              imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+              check(vkCreateImage(device, &imageInfo, nullptr, &image), "vkCreateImage(render)");
+
+              VkMemoryRequirements imageRequirements{{}};
+              vkGetImageMemoryRequirements(device, image, &imageRequirements);
+              VkPhysicalDeviceMemoryProperties memoryProperties{{}};
+              vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+              uint32_t imageMemoryType = chooseMemoryType(
+                  memoryProperties,
+                  imageRequirements.memoryTypeBits,
+                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                  0,
+                  nullptr);
+              VkMemoryAllocateInfo imageAllocation{{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}};
+              imageAllocation.allocationSize = imageRequirements.size;
+              imageAllocation.memoryTypeIndex = imageMemoryType;
+              check(vkAllocateMemory(device, &imageAllocation, nullptr, &imageMemory), "vkAllocateMemory(render image)");
+              check(vkBindImageMemory(device, image, imageMemory, 0), "vkBindImageMemory(render image)");
+
+              VkImageViewCreateInfo viewInfo{{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}};
+              viewInfo.image = image;
+              viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+              viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+              viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+              viewInfo.subresourceRange.levelCount = 1;
+              viewInfo.subresourceRange.layerCount = 1;
+              VkImageView imageView = VK_NULL_HANDLE;
+              check(vkCreateImageView(device, &viewInfo, nullptr, &imageView), "vkCreateImageView(render)");
+
+              VkAttachmentDescription attachment{{}};
+              attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+              attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+              attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+              attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+              attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+              attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+              attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+              attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+              VkAttachmentReference colorReference{{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+              VkSubpassDescription subpass{{}};
+              subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+              subpass.colorAttachmentCount = 1;
+              subpass.pColorAttachments = &colorReference;
+              VkSubpassDependency dependency{{}};
+              dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+              dependency.dstSubpass = 0;
+              dependency.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+              dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+              dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+              VkRenderPassCreateInfo renderPassInfo{{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO}};
+              renderPassInfo.attachmentCount = 1;
+              renderPassInfo.pAttachments = &attachment;
+              renderPassInfo.subpassCount = 1;
+              renderPassInfo.pSubpasses = &subpass;
+              renderPassInfo.dependencyCount = 1;
+              renderPassInfo.pDependencies = &dependency;
+              VkRenderPass renderPass = VK_NULL_HANDLE;
+              check(vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass), "vkCreateRenderPass");
+
+              VkFramebufferCreateInfo framebufferInfo{{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}};
+              framebufferInfo.renderPass = renderPass;
+              framebufferInfo.attachmentCount = 1;
+              framebufferInfo.pAttachments = &imageView;
+              framebufferInfo.width = kWidth;
+              framebufferInfo.height = kHeight;
+              framebufferInfo.layers = 1;
+              VkFramebuffer framebuffer = VK_NULL_HANDLE;
+              check(vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffer), "vkCreateFramebuffer");
+
+              VkShaderModule vertexModule = createShaderModule(device, kVertexShader, sizeof(kVertexShader));
+              VkShaderModule fragmentModule = createShaderModule(device, kFragmentShader, sizeof(kFragmentShader));
+              VkPipelineShaderStageCreateInfo shaderStages[2]{{}};
+              shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+              shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+              shaderStages[0].module = vertexModule;
+              shaderStages[0].pName = "main";
+              shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+              shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+              shaderStages[1].module = fragmentModule;
+              shaderStages[1].pName = "main";
+
+              VkPipelineLayoutCreateInfo layoutInfo{{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}};
+              VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+              check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout), "vkCreatePipelineLayout(render)");
+
+              VkPipelineVertexInputStateCreateInfo vertexInput{{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}};
+              VkPipelineInputAssemblyStateCreateInfo inputAssembly{{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}};
+              inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+              VkViewport viewport{{0.0f, 0.0f, static_cast<float>(kWidth), static_cast<float>(kHeight), 0.0f, 1.0f}};
+              VkRect2D scissor{{{{0, 0}}, {{kWidth, kHeight}}}};
+              VkPipelineViewportStateCreateInfo viewportState{{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}};
+              viewportState.viewportCount = 1;
+              viewportState.pViewports = &viewport;
+              viewportState.scissorCount = 1;
+              viewportState.pScissors = &scissor;
+              VkPipelineRasterizationStateCreateInfo rasterization{{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}};
+              rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+              rasterization.cullMode = VK_CULL_MODE_NONE;
+              rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+              rasterization.lineWidth = 1.0f;
+              VkPipelineMultisampleStateCreateInfo multisample{{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}};
+              multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+              VkPipelineColorBlendAttachmentState colorBlendAttachment{{}};
+              colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+              VkPipelineColorBlendStateCreateInfo colorBlend{{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}};
+              colorBlend.attachmentCount = 1;
+              colorBlend.pAttachments = &colorBlendAttachment;
+              VkGraphicsPipelineCreateInfo pipelineInfo{{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}};
+              pipelineInfo.stageCount = 2;
+              pipelineInfo.pStages = shaderStages;
+              pipelineInfo.pVertexInputState = &vertexInput;
+              pipelineInfo.pInputAssemblyState = &inputAssembly;
+              pipelineInfo.pViewportState = &viewportState;
+              pipelineInfo.pRasterizationState = &rasterization;
+              pipelineInfo.pMultisampleState = &multisample;
+              pipelineInfo.pColorBlendState = &colorBlend;
+              pipelineInfo.layout = pipelineLayout;
+              pipelineInfo.renderPass = renderPass;
+              pipelineInfo.subpass = 0;
+              VkPipeline pipeline = VK_NULL_HANDLE;
+              check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
+                    "vkCreateGraphicsPipelines(render)");
+
+              VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
+              VkClearValue clearValue{{{{0.0f, 0.0f, 0.0f, 1.0f}}}};
+              VkRenderPassBeginInfo beginInfo{{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO}};
+              beginInfo.renderPass = renderPass;
+              beginInfo.framebuffer = framebuffer;
+              beginInfo.renderArea.extent = {{kWidth, kHeight}};
+              beginInfo.clearValueCount = 1;
+              beginInfo.pClearValues = &clearValue;
+              vkCmdBeginRenderPass(renderCommand, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+              vkCmdBindPipeline(renderCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+              vkCmdDraw(renderCommand, 3, 1, 0, 0);
+              vkCmdEndRenderPass(renderCommand);
+              endCommandBuffer(renderCommand);
+              VkSubmitInfo renderSubmit{{VK_STRUCTURE_TYPE_SUBMIT_INFO}};
+              renderSubmit.commandBufferCount = 1;
+              renderSubmit.pCommandBuffers = &renderCommand;
+              VkFence renderFence = createFence(device);
+              check(vkQueueSubmit(queue, 1, &renderSubmit, renderFence), "vkQueueSubmit(render)");
+              waitFence(device, renderFence);
+
+              Buffer readback = createBuffer(physicalDevice, device, kReadbackBytes);
+              VkCommandBuffer readbackCommand = beginCommandBuffer(device, commandPool);
+              VkBufferImageCopy copy{{}};
+              copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+              copy.imageSubresource.layerCount = 1;
+              copy.imageExtent = {{kWidth, kHeight, 1}};
+              vkCmdCopyImageToBuffer(readbackCommand, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                     readback.buffer, 1, &copy);
+              endCommandBuffer(readbackCommand);
+              VkSubmitInfo readbackSubmit{{VK_STRUCTURE_TYPE_SUBMIT_INFO}};
+              readbackSubmit.commandBufferCount = 1;
+              readbackSubmit.pCommandBuffers = &readbackCommand;
+              VkFence readbackFence = createFence(device);
+              check(vkQueueSubmit(queue, 1, &readbackSubmit, readbackFence), "vkQueueSubmit(render readback)");
+              waitFence(device, readbackFence);
+
+              void* mapped = nullptr;
+              check(vkMapMemory(device, readback.memory, 0, kReadbackBytes, 0, &mapped), "vkMapMemory(render readback)");
+              if (!readback.coherent) {{
+                  VkMappedMemoryRange range{{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}};
+                  range.memory = readback.memory;
+                  range.offset = 0;
+                  range.size = VK_WHOLE_SIZE;
+                  check(vkInvalidateMappedMemoryRanges(device, 1, &range), "vkInvalidateMappedMemoryRanges(render)");
+              }}
+              const auto* bytes = static_cast<const uint8_t*>(mapped);
+              size_t center = (static_cast<size_t>(kHeight / 2) * kWidth + kWidth / 2) * 4;
+              bool colorMatches = bytes[center + 0] >= 60 && bytes[center + 0] <= 68 &&
+                                  bytes[center + 1] >= 124 && bytes[center + 1] <= 132 &&
+                                  bytes[center + 2] >= 187 && bytes[center + 2] <= 195 &&
+                                  bytes[center + 3] >= 250;
+              vkUnmapMemory(device, readback.memory);
+              if (!colorMatches) {{ fail("Rendered center pixel did not match the fragment shader output"); }}
+              std::cout << "RENDER_OK" << std::endl;
+
+              vkDestroyFence(device, readbackFence, nullptr);
+              vkDestroyFence(device, renderFence, nullptr);
+              vkFreeCommandBuffers(device, commandPool, 1, &readbackCommand);
+              vkFreeCommandBuffers(device, commandPool, 1, &renderCommand);
+              readback.destroy();
+              vkDestroyPipeline(device, pipeline, nullptr);
+              vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+              vkDestroyShaderModule(device, fragmentModule, nullptr);
+              vkDestroyShaderModule(device, vertexModule, nullptr);
+              vkDestroyFramebuffer(device, framebuffer, nullptr);
+              vkDestroyRenderPass(device, renderPass, nullptr);
+              vkDestroyImageView(device, imageView, nullptr);
+              vkDestroyImage(device, image, nullptr);
+              vkFreeMemory(device, imageMemory, nullptr);
+          }}
+          '''
+
+          main_pos = source.find("int main(")
+          if main_pos < 0:
+              raise SystemExit("main function was not found")
+          namespace_close = source.rfind("}  // namespace", 0, main_pos)
+          if namespace_close < 0:
+              namespace_close = source.rfind("}", 0, main_pos)
+          if namespace_close < 0:
+              raise SystemExit("namespace insertion point was not found")
+          source = source[:namespace_close] + helper + "\n" + source[namespace_close:]
+
+          cleanup_anchor = "vkDestroyCommandPool(device, commandPool, nullptr);"
+          if cleanup_anchor not in source:
+              raise SystemExit("command-pool cleanup anchor was not found")
+          call = "        runOrdinaryRenderSmoke(physicalDevice, device, queue, commandPool);\n\n"
+          source = source.replace(cleanup_anchor, call + "        " + cleanup_anchor, 1)
+          path.write_text(source)
+          PY
+
+      - name: Require render telemetry in E2E gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("Tests/Metal4CommandBackend/run-macos.sh")
+          source = path.read_text()
+          source = source.replace("grep -q 'IMAGE_DATA_OK' \"${BUILD_DIR}/legacy.log\"", "grep -q 'IMAGE_DATA_OK' \"${BUILD_DIR}/legacy.log\"\ngrep -q 'RENDER_OK' \"${BUILD_DIR}/legacy.log\"")
+          source = source.replace("grep -q 'IMAGE_DATA_OK' \"${BUILD_DIR}/metal4.log\"", "grep -q 'IMAGE_DATA_OK' \"${BUILD_DIR}/metal4.log\"\ngrep -q 'RENDER_OK' \"${BUILD_DIR}/metal4.log\"")
+          if "render_passes=" not in source:
+              anchor = "grep -Eq 'barriers=[1-9][0-9]*' \"${BUILD_DIR}/metal4.log\""
+              if anchor not in source:
+                  raise SystemExit("Metal 4 counter gate anchor not found")
+              source = source.replace(
+                  anchor,
+                  anchor + "\ngrep -Eq 'render_passes=[1-9][0-9]*' \"${BUILD_DIR}/metal4.log\"\ngrep -Eq 'draws=[1-9][0-9]*' \"${BUILD_DIR}/metal4.log\"",
+                  1,
+              )
+          path.write_text(source)
+          PY
+
+      - name: Run source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/test-metal4-base-cache-policy.py
+          python3 Scripts/test-metal4-flexible-pipeline.py
+          python3 Scripts/test-metal4-command-backend-phase1.py
+          grep -q 'vkCmdDraw' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          grep -q 'RENDER_OK' Tests/Metal4CommandBackend/metal4_transfer_e2e.cpp
+          bash -n Tests/Metal4CommandBackend/run-macos.sh
+          git diff --check
+
+      - name: Fetch macOS dependencies
+        run: ./fetchDependencies -v --macos
+
+      - name: Build macOS package
+        run: make macos
+
+      - name: Run exact compute image and render E2E
+        run: bash Tests/Metal4CommandBackend/run-macos.sh
+
+      - name: Fetch iOS dependencies
+        run: ./fetchDependencies -v --ios
+
+      - name: Build iOS package
+        run: make ios
+
+      - name: Commit verified render smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/add-metal4-render-e2e.yml
+          rm -f .github/workflows/finalize-metal4-game-evaluable.yml
+          rm -f .github/workflows/apply-metal4-render-source.yml
+          rm -f .github/workflows/install-metal4-game-evaluation.yml
+          rm -f .github/workflows/add-metal4-evaluation-default-switch.yml
+          rm -rf .github/render-source-patch
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --cached --quiet; then
+            git commit -m "test(metal4): prove ordinary render submission end to end"
+            git push origin HEAD:metal4/phase1-command-backend-poc
+          fi

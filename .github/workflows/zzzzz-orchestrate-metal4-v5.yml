@@ -1,0 +1,216 @@
+name: Orchestrate definitive Metal 4 game acceptance v5
+
+on:
+  push:
+    branches:
+      - metal4/phase1-command-backend-poc
+    paths:
+      - ".github/workflows/zzzzz-orchestrate-metal4-v5.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: orchestrate-metal4-game-acceptance-v4
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  orchestrate:
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      BRANCH: metal4/phase1-command-backend-poc
+      GH_TOKEN: ${{ github.token }}
+      TARGET_WORKFLOW: zz-autofinish-metal4-game-evaluable.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: metal4/phase1-command-backend-poc
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reset after previous branch writers settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 120
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+      - name: Detect an existing verified result
+        id: ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f metal4-game-readiness.json ]] && python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('metal4-game-readiness.json').read_text())
+          e = d['vulkanE2E']
+          assert d['macOSBuild'] == 'pass' and d['iOSBuild'] == 'pass'
+          assert e['legacyControl'] == 'pass'
+          assert e['metal4Compute'] == 'pass'
+          assert e['metal4Image'] == 'pass'
+          assert e['metal4OrdinaryRender'] == 'pass'
+          assert e['backendFailures'] == 0
+          PY
+          then echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Execute the v4 normalization logic directly
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEXTRACT'
+          from pathlib import Path
+          import textwrap
+
+          orchestrator = Path('.github/workflows/zzzz-orchestrate-metal4-v4.yml')
+          if not orchestrator.is_file():
+              raise SystemExit('v4 normalization source is missing')
+          text = orchestrator.read_text()
+          step = text.index('      - name: Normalize source and the definitive acceptance workflow\n')
+          start_marker = "          python3 - <<'PY'\n"
+          start = text.index(start_marker, step) + len(start_marker)
+          end = text.index('\n          PY\n', start)
+          code = textwrap.dedent(text[start:end])
+          exec(compile(code, str(orchestrator) + ':normalizer', 'exec'), {})
+          PYEXTRACT
+
+          git add -A
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "ci(metal4): normalize definitive game acceptance v5"
+            git push origin HEAD:$BRANCH
+          fi
+
+      - name: Snapshot workflow-dispatch run IDs
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$TARGET_WORKFLOW/runs?branch=$BRANCH&event=workflow_dispatch&per_page=100" \
+            | jq -r '.workflow_runs[].id' | sort -n > "$RUNNER_TEMP/before-run-ids.txt"
+
+      - name: Dispatch definitive acceptance through the REST API
+        if: steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$TARGET_WORKFLOW/dispatches" \
+            -d "$(jq -nc --arg ref "$BRANCH" '{ref:$ref}')"
+
+      - name: Identify and wait for the dispatched run
+        if: steps.ready.outputs.exists != 'true'
+        id: run
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 7200))
+          run_id=""
+          while [[ -z "$run_id" ]]; do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$TARGET_WORKFLOW/runs?branch=$BRANCH&event=workflow_dispatch&per_page=100" \
+              -o "$RUNNER_TEMP/current-runs.json"
+            jq -r '.workflow_runs[].id' "$RUNNER_TEMP/current-runs.json" | sort -n > "$RUNNER_TEMP/current-run-ids.txt"
+            run_id="$(comm -13 "$RUNNER_TEMP/before-run-ids.txt" "$RUNNER_TEMP/current-run-ids.txt" | tail -n 1)"
+            if (( SECONDS >= deadline )); then
+              echo 'Dispatched acceptance run did not appear' >&2
+              exit 1
+            fi
+            [[ -n "$run_id" ]] || sleep 10
+          done
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+          while :; do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+              -o "$RUNNER_TEMP/run.json"
+            status="$(jq -r '.status' "$RUNNER_TEMP/run.json")"
+            if [[ "$status" == completed ]]; then break; fi
+            if (( SECONDS >= deadline )); then
+              echo 'Definitive acceptance timed out' >&2
+              exit 1
+            fi
+            sleep 20
+          done
+          conclusion="$(jq -r '.conclusion' "$RUNNER_TEMP/run.json")"
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          [[ "$conclusion" == success ]]
+
+      - name: Commit exact failure logs
+        if: failure() && steps.run.outputs.run_id != ''
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.run.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+          mkdir -p Diagnostics "$RUNNER_TEMP/run-logs"
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/logs" \
+            -o "$RUNNER_TEMP/logs.zip"
+          unzip -q "$RUNNER_TEMP/logs.zip" -d "$RUNNER_TEMP/run-logs"
+          output="Diagnostics/metal4-v5-failure-$RUN_ID.txt"
+          {
+            echo "run_id=$RUN_ID"
+            echo "head_sha=$(jq -r '.head_sha' "$RUNNER_TEMP/run.json" 2>/dev/null || true)"
+            echo
+            echo '===== ERRORS ====='
+            grep -RinE 'error:|fatal:|failed|failure|Process completed with exit code|Traceback|AssertionError|not found|undefined|undeclared' \
+              "$RUNNER_TEMP/run-logs" | tail -n 800 || true
+            echo
+            echo '===== FAILED LOG TAILS ====='
+            while IFS= read -r -d '' log; do
+              if grep -Eqi 'error:|fatal:|failed|failure|Process completed with exit code|Traceback|AssertionError' "$log"; then
+                echo
+                echo "--- ${log#$RUNNER_TEMP/run-logs/} ---"
+                tail -n 220 "$log"
+              fi
+            done < <(find "$RUNNER_TEMP/run-logs" -type f -print0)
+          } > "$output"
+          rm -f .github/workflows/zzzz-orchestrate-metal4-v4.yml
+          rm -f .github/workflows/zzzzz-orchestrate-metal4-v5.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "diagnostics(metal4): record definitive v5 failure $RUN_ID"
+          git push origin HEAD:$BRANCH
+
+      - name: Verify published readiness
+        if: success() && steps.ready.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git show "origin/$BRANCH:metal4-game-readiness.json" > "$RUNNER_TEMP/readiness.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path(os.environ['MANIFEST']).read_text())
+          assert len(d['testedSourceSha']) == 40
+          assert d['macOSBuild'] == 'pass' and d['iOSBuild'] == 'pass'
+          assert d['vulkanE2E'] == {
+              'legacyControl': 'pass',
+              'metal4Compute': 'pass',
+              'metal4Image': 'pass',
+              'metal4OrdinaryRender': 'pass',
+              'backendFailures': 0,
+          }
+          PY
+        env:
+          MANIFEST: ${{ runner.temp }}/readiness.json

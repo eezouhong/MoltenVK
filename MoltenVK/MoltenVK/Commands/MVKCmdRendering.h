@@ -152,6 +152,9 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -160,6 +163,7 @@ protected:
 	MVKSmallVector<VkRenderingAttachmentInfo, N> _colorAttachments;
 	VkRenderingAttachmentInfo _depthAttachment;
 	VkRenderingAttachmentInfo _stencilAttachment;
+	bool _supportsMetal4Encoding = false;
 };
 
 // Concrete template class implementations.
@@ -218,6 +222,10 @@ public:
 	VkResult setContent(MVKCommandBuffer* cmdBuff);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override { return cmdEncoder != nullptr; }
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

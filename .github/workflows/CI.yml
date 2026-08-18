@@ -46,6 +46,9 @@ jobs:
           text = text.replace(
               'function_body.index("libraryBecameResident(this, true)")',
               'function_body.index("libraryBecameResident(this, true, rehydrateNanoseconds)")')
+          text = text.replace(
+              'function_body = shader_mm[function_start : function_start + 9000]',
+              'function_body = shader_mm[function_start : function_start + 14000]')
           path.write_text(text)
           PY
           python3 Scripts/test-metal4-shared-shader-repository.py

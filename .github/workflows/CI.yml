@@ -24,6 +24,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Scripts/test-metal4-shared-shader-repository.py')
+          text = path.read_text()
+          old = '''    require(
+              shader_mm,
+              "Metal 4 shared shader-library repository summary:",
+              SHADER_MM,
+          )
+          '''
+          new = '    require(shader_mm, "Metal 4 shared shader-library repository summary:", SHADER_MM)\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'policy summary anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 Scripts/apply-cache-memory-diagnostics.py
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check

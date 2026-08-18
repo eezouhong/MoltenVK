@@ -300,6 +300,11 @@ def test_source_policy() -> None:
     ensure = shader_mm.index("bool MVKShaderLibrary::ensureResidentLocked")
     ensure_body = shader_mm[ensure : ensure + 600]
     assert "if (!allowLibraryCompile) { return false; }" in ensure_body
+    require(
+        shader_mm,
+        "if (!wasResident && allowLibraryCompile)",
+        SHADER_MM,
+    )
     assert "decompressMSL(msl)" in ensure_body
     assert "compileLibrary(msl)" in ensure_body
     require(

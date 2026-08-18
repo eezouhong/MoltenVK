@@ -282,7 +282,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 	if (_repository) { accessLock.lock(); }
 	bool wasResident = isResident();
 	if (_repository) {
-		if (!wasResident) { rehydrateStartedAt = mvkGetTimestamp(); }
+		if (!wasResident && allowLibraryCompile) { rehydrateStartedAt = mvkGetTimestamp(); }
 		if (!ensureResidentLocked(allowLibraryCompile)) {
 			if (rehydrateStartedAt) {
 				_repository->recordRehydrateFailure(

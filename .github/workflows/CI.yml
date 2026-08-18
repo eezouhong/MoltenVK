@@ -28,16 +28,12 @@ jobs:
           from pathlib import Path
           path = Path('Scripts/test-metal4-shared-shader-repository.py')
           text = path.read_text()
-          old = '''    require(
-              shader_mm,
-              "Metal 4 shared shader-library repository summary:",
-              SHADER_MM,
-          )
-          '''
-          new = '    require(shader_mm, "Metal 4 shared shader-library repository summary:", SHADER_MM)\n'
-          if text.count(old) != 1:
-              raise SystemExit(f'policy summary anchor count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          marker = '"Metal 4 shared shader-library repository summary:"'
+          marker_pos = text.index(marker)
+          start = text.rfind('    require(', 0, marker_pos)
+          end = text.index('    )', marker_pos) + len('    )')
+          replacement = '    require(shader_mm, "Metal 4 shared shader-library repository summary:", SHADER_MM)'
+          path.write_text(text[:start] + replacement + text[end:])
           PY
           python3 Scripts/apply-cache-memory-diagnostics.py
           python3 Scripts/test-metal4-shared-shader-repository.py

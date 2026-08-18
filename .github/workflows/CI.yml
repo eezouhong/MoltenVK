@@ -28,15 +28,21 @@ jobs:
           from pathlib import Path
           path = Path('Scripts/test-metal4-shared-shader-repository.py')
           text = path.read_text()
-          old = '    assert "_compressedMSL" not in eviction_body\n'
-          new = (
-              '    assert "_compressedMSL.clear" not in eviction_body\n'
-              '    assert "_compressedMSL =" not in eviction_body\n'
-          )
-          if text.count(old) != 1:
-              raise SystemExit(
-                  f'cold-payload assertion count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          replacements = {
+              '    assert "_compressedMSL" not in eviction_body\n': (
+                  '    assert "_compressedMSL.clear" not in eviction_body\n'
+                  '    assert "_compressedMSL =" not in eviction_body\n'
+              ),
+              '    assert "libraryBecameCold(this)" in eviction_body\n': (
+                  '    assert "_repository->libraryBecameCold(" in eviction_body\n'
+              ),
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(
+                      f'policy replacement count={text.count(old)} for {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
           PY
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check

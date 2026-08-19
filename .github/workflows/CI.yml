@@ -5,37 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  materialize-metal4-device-concurrency:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/shared-shader-library-repository-phase1
-          fetch-depth: 0
-      - name: Use device-selected Metal 4 compiler width
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 Scripts/apply-metal4-device-concurrency.py
-          python3 Scripts/test-metal4-flexible-pipeline.py
-          git diff --check
-          git rm -f Scripts/apply-metal4-device-concurrency.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git reset .github/workflows/CI.yml
-          git commit -m "perf(metal4): use device compiler concurrency"
-          git push origin HEAD:codex/shared-shader-library-repository-phase1
-
   shared_shader_repository_policy:
     name: Metal 4 shared shader repository policy
     runs-on: ubuntu-latest

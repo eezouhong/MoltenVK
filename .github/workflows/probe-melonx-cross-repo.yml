@@ -1,0 +1,22 @@
+name: Probe MeloNX cross-repo access
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/probe-melonx-cross-repo.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe MeloNX repository access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/eezouhong/MeloNX-pending-access-sync-gate.git" \
+            refs/heads/codex/metal4-shared-shader-repository

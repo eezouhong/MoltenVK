@@ -1,1 +1,1 @@
-[private-source](https://raw.githubusercontent.com/eezouhong/MeloNX-pending-access-sync-gate/codex/metal4-shared-shader-repository/.github/workflows/materialize-pr60-cache-scheduling.yml?token=AIEAN3PQJ3YL5T5Q3IC3ZTDKQ7PWLAA)
+temporary trigger for PR3 lock-order source fix

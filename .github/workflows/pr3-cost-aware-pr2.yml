@@ -41,7 +41,8 @@ jobs:
           marker = '    assert "tryGetEvictionSnapshot(snapshot)" in trim_body\n'
           if marker in t and 'retained_collect = trim_body.index' not in t:
               t = t.replace(marker, marker + '    retained_collect = trim_body.index("retainedLibraries.push_back(library)")\n    snapshot_call = trim_body.index("tryGetEvictionSnapshot(snapshot)")\n    assert retained_collect < snapshot_call\n', 1)
-              test.write_text(t)
+          t = t.replace('    assert "candidate.library->release()" in trim_body\n', '    assert "for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }" in trim_body\n')
+          test.write_text(t)
           PY
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check

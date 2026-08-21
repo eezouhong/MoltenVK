@@ -146,6 +146,14 @@ struct MVKShaderLibraryMemorySnapshot {
     uint64_t estimatedHostBytes = 0;
 };
 
+/** Stable snapshot used by repository cost-aware resident eviction. */
+struct MVKShaderLibraryEvictionSnapshot {
+    uint64_t lastUseSequence = 0;
+    uint64_t reclaimableUncompressedMSLBytes = 0;
+    uint64_t lastRehydrateNanoseconds = 0;
+    uint64_t rehydrateProtectedUntilSequence = 0;
+};
+
 class MVKShaderLibrary : public MVKBaseDeviceObject {
 
 public:
@@ -219,8 +227,11 @@ protected:
 	/** Returns the repository-wide approximate LRU sequence of the last real use. */
 	uint64_t getLastUseSequence() const { return _lastUseSequence.load(std::memory_order_relaxed); }
 
-	/** Releases the resident payload only if no real use occurred after the LRU snapshot. */
-	bool tryEvictResident(uint64_t expectedLastUseSequence);
+	/** Captures cost-aware eviction inputs without waiting on an active library. */
+	bool tryGetEvictionSnapshot(MVKShaderLibraryEvictionSnapshot& snapshot);
+
+	/** Releases the resident payload only if the snapshot is still valid and unprotected. */
+	bool tryEvictResident(const MVKShaderLibraryEvictionSnapshot& snapshot, uint64_t currentUseSequence);
 
 	/** Moves a freshly compiled/imported payload into this cold canonical entry. */
 	bool tryAdoptResidentPayload(MVKShaderLibrary* candidate);
@@ -243,6 +254,8 @@ protected:
 	MVKShaderLibraryRepository* _repository = nullptr;
 	std::atomic<uint32_t> _referenceCount { 1 };
 	std::atomic<uint64_t> _lastUseSequence { 0 };
+	std::atomic<uint64_t> _lastRehydrateNanoseconds { 0 };
+	std::atomic<uint64_t> _rehydrateProtectedUntilSequence { 0 };
 	std::atomic<uint32_t> _activeUseCount { 0 };
 	std::atomic<bool> _resident { false };
 	std::atomic<bool> _repositoryResidentCounted { false };
@@ -399,6 +412,10 @@ private:
 	std::atomic<uint64_t> _rehydrateFailureCount { 0 };
 	std::atomic<uint64_t> _rehydrateTotalNanoseconds { 0 };
 	std::atomic<uint64_t> _rehydrateMaximumNanoseconds { 0 };
+	std::atomic<uint64_t> _costAwareCandidateCount { 0 };
+	std::atomic<uint64_t> _costAwareEvictionCount { 0 };
+	std::atomic<uint64_t> _rehydrateProtectionSkipCount { 0 };
+	std::atomic<uint64_t> _unknownRehydrateCostCandidateCount { 0 };
 	std::atomic<uint64_t> _trimCycleCount { 0 };
 	std::atomic<uint64_t> _trimBusyCount { 0 };
 	std::atomic<uint64_t> _trimCandidateCount { 0 };

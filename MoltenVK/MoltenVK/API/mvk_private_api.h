@@ -44,7 +44,7 @@ typedef unsigned long MTLArgumentBuffersTier;
  */
 
 
-#define MVK_PRIVATE_API_VERSION   45
+#define MVK_PRIVATE_API_VERSION   46
 
 
 #pragma mark -
@@ -388,6 +388,10 @@ typedef struct {
     uint64_t raceLoserCount;
     uint64_t residentAdoptionCount;
     uint64_t snapshotSkippedShaderLibraryCount;
+    uint64_t costAwareCandidateCount;
+    uint64_t costAwareEvictionCount;
+    uint64_t rehydrateProtectionSkipCount;
+    uint64_t unknownRehydrateCostCandidateCount;
 } MVKMetal4ShaderLibraryRepositoryStatistics;
 
 

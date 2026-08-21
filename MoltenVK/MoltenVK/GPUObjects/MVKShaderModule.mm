@@ -561,6 +561,32 @@ void MVKShaderLibrary::touch() {
 	}
 }
 
+bool MVKShaderLibrary::tryGetEvictionSnapshot(MVKShaderLibraryEvictionSnapshot& snapshot) {
+	unique_lock<mutex> accessLock(_accessLock, try_to_lock);
+	if (!accessLock.owns_lock() ||
+		!_mtlLibrary ||
+		!isResident() ||
+		_activeUseCount.load(memory_order_acquire) != 0) {
+		return false;
+	}
+
+	snapshot = {};
+	snapshot.lastUseSequence = getLastUseSequence();
+	snapshot.lastRehydrateNanoseconds =
+		_lastRehydrateNanoseconds.load(memory_order_relaxed);
+	snapshot.rehydrateProtectedUntilSequence =
+		_rehydrateProtectedUntilSequence.load(memory_order_relaxed);
+	snapshot.reclaimableUncompressedMSLBytes =
+		_compressedMSL._uncompressedSize;
+	for (const auto& item : _specializationVariants) {
+		if (item.second) {
+			snapshot.reclaimableUncompressedMSLBytes +=
+				item.second->_compressedMSL._uncompressedSize;
+		}
+	}
+	return true;
+}
+
 bool MVKShaderLibrary::tryAdoptResidentPayload(MVKShaderLibrary* candidate) {
 	if (!candidate ||
 		candidate == this ||
@@ -594,13 +620,18 @@ bool MVKShaderLibrary::tryAdoptResidentPayload(MVKShaderLibrary* candidate) {
 	return true;
 }
 
-bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence) {
+bool MVKShaderLibrary::tryEvictResident(
+	const MVKShaderLibraryEvictionSnapshot& snapshot,
+	uint64_t currentUseSequence) {
 	unique_lock<mutex> accessLock(_accessLock, try_to_lock);
 	if (!accessLock.owns_lock() ||
 		!_mtlLibrary ||
 		!isResident() ||
 		_activeUseCount.load(memory_order_acquire) != 0 ||
-		getLastUseSequence() != expectedLastUseSequence) {
+		getLastUseSequence() != snapshot.lastUseSequence ||
+		_rehydrateProtectedUntilSequence.load(memory_order_relaxed) !=
+			snapshot.rehydrateProtectedUntilSequence ||
+		currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
 		return false;
 	}
 
@@ -872,6 +903,10 @@ void MVKShaderLibraryRepository::getMemoryStatistics(
     pStats->rehydrateFailureCount = _rehydrateFailureCount.load(memory_order_relaxed);
     pStats->rehydrateTotalNanoseconds = _rehydrateTotalNanoseconds.load(memory_order_relaxed);
     pStats->rehydrateMaximumNanoseconds = _rehydrateMaximumNanoseconds.load(memory_order_relaxed);
+    pStats->costAwareCandidateCount = _costAwareCandidateCount.load(memory_order_relaxed);
+    pStats->costAwareEvictionCount = _costAwareEvictionCount.load(memory_order_relaxed);
+    pStats->rehydrateProtectionSkipCount = _rehydrateProtectionSkipCount.load(memory_order_relaxed);
+    pStats->unknownRehydrateCostCandidateCount = _unknownRehydrateCostCandidateCount.load(memory_order_relaxed);
     pStats->dedupeHitCount = _dedupeHitCount.load(memory_order_relaxed);
     pStats->raceLoserCount = _raceLoserCount.load(memory_order_relaxed);
     pStats->residentAdoptionCount = _residentAdoptionCount.load(memory_order_relaxed);
@@ -933,6 +968,16 @@ void MVKShaderLibraryRepository::libraryBecameResident(
 	if (!library || library->_repository != this || !library->isResident()) { return; }
 	{
 		lock_guard<mutex> lock(_lock);
+		uint64_t currentUseSequence =
+			_nextUseSequence.load(memory_order_relaxed);
+		library->_rehydrateProtectedUntilSequence.store(
+			currentUseSequence + 256,
+			memory_order_relaxed);
+		if (rehydrated && rehydrateNanoseconds != 0) {
+			library->_lastRehydrateNanoseconds.store(
+				rehydrateNanoseconds,
+				memory_order_relaxed);
+		}
 		if (!library->_repositoryTracked.load(memory_order_acquire)) { return; }
 		bool expected = false;
 		if (library->_repositoryResidentCounted.compare_exchange_strong(
@@ -989,8 +1034,11 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 		return;
 	}
 
+	constexpr uint64_t kUnknownRehydrateCostNanoseconds = 16'000'000;
+	uint64_t currentUseSequence = _nextUseSequence.load(memory_order_relaxed);
 	struct Candidate {
-		uint64_t lastUseSequence;
+		uint64_t score;
+		MVKShaderLibraryEvictionSnapshot snapshot;
 		MVKShaderLibrary* library;
 	};
 	vector<Candidate> candidates;
@@ -1004,23 +1052,54 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 					!library->_repositoryResidentCounted.load(memory_order_acquire)) {
 					continue;
 				}
+
+				MVKShaderLibraryEvictionSnapshot snapshot;
+				if (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+				if (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+					_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+					continue;
+				}
+
+				uint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+					? currentUseSequence - snapshot.lastUseSequence
+					: 0;
+				uint64_t benefitPages = min<uint64_t>(
+					snapshot.reclaimableUncompressedMSLBytes / 4096,
+					65535);
+				uint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+				if (rehydrateCost == 0) {
+					rehydrateCost = kUnknownRehydrateCostNanoseconds;
+					_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+				}
+				uint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+				uint64_t score =
+					(min<uint64_t>(coldness, 65535) * 4) +
+					(benefitPages * 2) +
+					(65535 - costMicros);
+
 				library->retain();
-				candidates.push_back({ library->getLastUseSequence(), library });
+				candidates.push_back({ score, snapshot, library });
 			}
 		}
 	}
 
 	_trimCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
+	_costAwareCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
 
 	sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
-		return left.lastUseSequence < right.lastUseSequence;
+		if (left.score != right.score) { return left.score > right.score; }
+		if (left.snapshot.lastUseSequence != right.snapshot.lastUseSequence) {
+			return left.snapshot.lastUseSequence < right.snapshot.lastUseSequence;
+		}
+		return left.snapshot.reclaimableUncompressedMSLBytes >
+			right.snapshot.reclaimableUncompressedMSLBytes;
 	});
 
 	for (const Candidate& candidate : candidates) {
 		if (_residentEntryCount.load(memory_order_relaxed) <= _residentLimit) { break; }
-		// A library used after the snapshot is no longer an eviction candidate.
-		if (candidate.library->getLastUseSequence() != candidate.lastUseSequence) { continue; }
-		candidate.library->tryEvictResident(candidate.lastUseSequence);
+		if (candidate.library->tryEvictResident(candidate.snapshot, currentUseSequence)) {
+			_costAwareEvictionCount.fetch_add(1, memory_order_relaxed);
+		}
 	}
 
 	for (const Candidate& candidate : candidates) { candidate.library->release(); }

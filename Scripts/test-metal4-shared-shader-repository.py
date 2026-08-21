@@ -129,6 +129,9 @@ def test_source_policy() -> None:
     require(shader_h, "std::atomic<uint64_t> _lastUseSequence", SHADER_H)
     require(shader_h, "std::atomic<uint32_t> _activeUseCount", SHADER_H)
     require(shader_h, "std::atomic<uint64_t> _residentAdoptionCount", SHADER_H)
+    require(shader_h, "_lastRehydrateNanoseconds", SHADER_H)
+    require(shader_h, "_rehydrateProtectedUntilSequence", SHADER_H)
+    require(shader_h, "MVKShaderLibraryEvictionSnapshot", SHADER_H)
     require(shader_h, "std::mutex _accessLock", SHADER_H)
 
     # Repository activation is part of the native MoltenVK configuration ABI.
@@ -184,9 +187,15 @@ def test_source_policy() -> None:
     require(private_api_h, "MVKMetal4ShaderLibraryRepositoryStatistics", PRIVATE_API_H)
     require(private_api_h, "vkGetPipelineCacheMemoryStatisticsMVK", PRIVATE_API_H)
     require(private_api_h, "vkGetMetal4ShaderLibraryRepositoryStatisticsMVK", PRIVATE_API_H)
+    assert private_api_h.index("snapshotSkippedShaderLibraryCount") < private_api_h.index("costAwareCandidateCount")
+    assert private_api_h.index("costAwareCandidateCount") < private_api_h.index("unknownRehydrateCostCandidateCount")
     require(shader_h, "tryGetMemorySnapshot", SHADER_H)
     require(shader_h, "getMemoryStatistics(MVKMetal4ShaderLibraryRepositoryStatistics", SHADER_H)
     require(shader_mm, "rehydrateTotalNanoseconds", SHADER_MM)
+    require(shader_mm, "costAwareCandidateCount", SHADER_MM)
+    require(shader_mm, "rehydrateProtectionSkipCount", SHADER_MM)
+    require(shader_mm, "currentUseSequence + 256", SHADER_MM)
+    require(shader_mm, "kUnknownRehydrateCostNanoseconds", SHADER_MM)
     require(shader_mm, "evictedUncompressedMSLBytes", SHADER_MM)
     require(shader_mm, "deviceCurrentAllocatedBytes", SHADER_MM)
 
@@ -287,7 +296,7 @@ def test_source_policy() -> None:
 
     # Sharing introduces cross-cache concurrency. Resident eviction must use
     # a non-blocking library lock and release only the hot Metal payload.
-    eviction = shader_mm.index("bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence)")
+    eviction = shader_mm.index("bool MVKShaderLibrary::tryEvictResident(")
     eviction_body = shader_mm[eviction : eviction + 1300]
     assert "try_to_lock" in eviction_body
     assert "_mtlLibrary = nil" in eviction_body
@@ -359,19 +368,27 @@ def test_source_policy() -> None:
     # repository is locked, then performs non-blocking Metal release outside
     # that lock, preserving independent logical cache views.
     trim = shader_mm.index("void MVKShaderLibraryRepository::trimToResidentLimit")
-    trim_body = shader_mm[trim : trim + 3000]
+    trim_end = shader_mm.index(
+        "\nMVKShaderLibrary* MVKShaderLibraryRepository::acquire(", trim
+    )
+    trim_body = shader_mm[trim:trim_end]
     assert "_residentTrimHighWater" in trim_body
     lock_end = trim_body.index("sort(candidates.begin()")
-    evict_call = trim_body.index("candidate.library->tryEvictResident(candidate.lastUseSequence)")
-    assert lock_end < evict_call
-    assert "getLastUseSequence()" in trim_body
-    assert "tryEvictResident(candidate.lastUseSequence)" in trim_body
-    eviction_start = shader_mm.index(
-        "bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence)"
+    evict_call = trim_body.index(
+        "candidate.library->tryEvictResident(candidate.snapshot, currentUseSequence)"
     )
-    eviction_guard = shader_mm[eviction_start : eviction_start + 700]
+    assert lock_end < evict_call
+    assert "tryGetEvictionSnapshot(snapshot)" in trim_body
+    assert "rehydrateProtectedUntilSequence" in trim_body
+    assert "kUnknownRehydrateCostNanoseconds" in trim_body
+    assert "_costAwareCandidateCount" in trim_body
+    eviction_start = shader_mm.index(
+        "bool MVKShaderLibrary::tryEvictResident("
+    )
+    eviction_guard = shader_mm[eviction_start : eviction_start + 1400]
     assert "_activeUseCount.load(memory_order_acquire) != 0" in eviction_guard
-    assert "getLastUseSequence() != expectedLastUseSequence" in eviction_guard
+    assert "getLastUseSequence() != snapshot.lastUseSequence" in eviction_guard
+    assert "currentUseSequence < snapshot.rehydrateProtectedUntilSequence" in eviction_guard
     assert "library->retain()" in trim_body
     assert "candidate.library->release()" in trim_body
     acquire_start = shader_mm.index("MVKShaderLibrary* MVKShaderLibraryRepository::acquire(")

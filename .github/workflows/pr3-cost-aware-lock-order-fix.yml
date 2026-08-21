@@ -1,0 +1,155 @@
+name: PR3 cost-aware lock order fix
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/pr3-cost-aware-lock-order-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/shared-shader-library-repository-phase1
+          fetch-depth: 0
+
+      - name: Fix repository/library lock ordering
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          mm = Path('MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm')
+          text = mm.read_text()
+          start = text.index('void MVKShaderLibraryRepository::trimToResidentLimit(')
+          end = text.index('\nMVKShaderLibrary* MVKShaderLibraryRepository::acquire(', start)
+          replacement = r'''void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protectedLibrary) {
+\tif (_residentLimit == 0 ||
+\t\t_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
+\t\treturn;
+\t}
+
+\tuint64_t trimStartedAt = mvkGetTimestamp();
+\t_trimCycleCount.fetch_add(1, memory_order_relaxed);
+\tunique_lock<mutex> trimLock(_trimLock, try_to_lock);
+\tif (!trimLock.owns_lock() ||
+\t\t_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
+\t\t_trimBusyCount.fetch_add(1, memory_order_relaxed);
+\t\tuint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
+\t\t_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
+\t\tupdateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
+\t\treturn;
+\t}
+
+\tconstexpr uint64_t kUnknownRehydrateCostNanoseconds = 16'000'000;
+\tuint64_t currentUseSequence = _nextUseSequence.load(memory_order_relaxed);
+\tstruct Candidate {
+\t\tuint64_t score;
+\t\tMVKShaderLibraryEvictionSnapshot snapshot;
+\t\tMVKShaderLibrary* library;
+\t};
+
+\t// Repository ownership is protected only while collecting stable references.
+\t// Do not acquire a library access lock while holding _lock: rehydrate/adoption
+\t// legitimately takes _accessLock first and then reports residency to the repository.
+\tvector<MVKShaderLibrary*> retainedLibraries;
+\t{
+\t\tlock_guard<mutex> lock(_lock);
+\t\tfor (auto& moduleEntries : _entries) {
+\t\t\tfor (Entry& entry : moduleEntries.second) {
+\t\t\t\tMVKShaderLibrary* library = entry.library;
+\t\t\t\tif (library == protectedLibrary ||
+\t\t\t\t\t!library->isResident() ||
+\t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
+\t\t\t\t\tcontinue;
+\t\t\t\t}
+\t\t\t\tlibrary->retain();
+\t\t\t\tretainedLibraries.push_back(library);
+\t\t\t}
+\t\t}
+\t}
+
+\tvector<Candidate> candidates;
+\tcandidates.reserve(retainedLibraries.size());
+\tfor (MVKShaderLibrary* library : retainedLibraries) {
+\t\tMVKShaderLibraryEvictionSnapshot snapshot;
+\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+\t\t\tcontinue;
+\t\t}
+
+\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+\t\t\t? currentUseSequence - snapshot.lastUseSequence
+\t\t\t: 0;
+\t\tuint64_t benefitPages = min<uint64_t>(
+\t\t\tsnapshot.reclaimableUncompressedMSLBytes / 4096,
+\t\t\t65535);
+\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+\t\tif (rehydrateCost == 0) {
+\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
+\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+\t\t}
+\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+\t\tuint64_t score =
+\t\t\t(min<uint64_t>(coldness, 65535) * 4) +
+\t\t\t(benefitPages * 2) +
+\t\t\t(65535 - costMicros);
+\t\tcandidates.push_back({ score, snapshot, library });
+\t}
+
+\t_trimCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
+\t_costAwareCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
+
+\tsort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+\t\tif (left.score != right.score) { return left.score > right.score; }
+\t\tif (left.snapshot.lastUseSequence != right.snapshot.lastUseSequence) {
+\t\t\treturn left.snapshot.lastUseSequence < right.snapshot.lastUseSequence;
+\t\t}
+\t\treturn left.snapshot.reclaimableUncompressedMSLBytes >
+\t\t\tright.snapshot.reclaimableUncompressedMSLBytes;
+\t});
+
+\tfor (const Candidate& candidate : candidates) {
+\t\tif (_residentEntryCount.load(memory_order_relaxed) <= _residentLimit) { break; }
+\t\tif (candidate.library->tryEvictResident(candidate.snapshot, currentUseSequence)) {
+\t\t\t_costAwareEvictionCount.fetch_add(1, memory_order_relaxed);
+\t\t}
+\t}
+
+\tfor (MVKShaderLibrary* library : retainedLibraries) { library->release(); }
+\tuint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
+\t_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
+\tupdateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
+}
+'''.replace('\\t', '\t')
+          mm.write_text(text[:start] + replacement + text[end:])
+
+          test = Path('Scripts/test-metal4-shared-shader-repository.py')
+          text = test.read_text()
+          marker = '    assert "tryGetEvictionSnapshot(snapshot)" in trim_body\n'
+          guard = '''    assert "tryGetEvictionSnapshot(snapshot)" in trim_body\n    repository_collect_end = trim_body.index("vector<Candidate> candidates;")\n    snapshot_call = trim_body.index("tryGetEvictionSnapshot(snapshot)")\n    assert repository_collect_end < snapshot_call\n    assert "retainedLibraries.push_back(library)" in trim_body\n    assert "for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }" in trim_body\n'''
+          if marker not in text:
+              raise SystemExit('cost-aware source gate marker missing')
+          test.write_text(text.replace(marker, guard, 1))
+          PY
+
+          python3 Scripts/test-metal4-shared-shader-repository.py
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add MoltenVK Scripts
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'fix(metal4): avoid repository shader-library lock inversion'
+          git pull --rebase origin codex/shared-shader-library-repository-phase1
+          git push origin HEAD:codex/shared-shader-library-repository-phase1

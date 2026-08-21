@@ -379,6 +379,9 @@ def test_source_policy() -> None:
     )
     assert lock_end < evict_call
     assert "tryGetEvictionSnapshot(snapshot)" in trim_body
+    retained_collect = trim_body.index("retainedLibraries.push_back(library)")
+    snapshot_call = trim_body.index("tryGetEvictionSnapshot(snapshot)")
+    assert retained_collect < snapshot_call
     assert "rehydrateProtectedUntilSequence" in trim_body
     assert "kUnknownRehydrateCostNanoseconds" in trim_body
     assert "_costAwareCandidateCount" in trim_body
@@ -390,7 +393,7 @@ def test_source_policy() -> None:
     assert "getLastUseSequence() != snapshot.lastUseSequence" in eviction_guard
     assert "currentUseSequence < snapshot.rehydrateProtectedUntilSequence" in eviction_guard
     assert "library->retain()" in trim_body
-    assert "candidate.library->release()" in trim_body
+    assert "for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }" in trim_body
     acquire_start = shader_mm.index("MVKShaderLibrary* MVKShaderLibraryRepository::acquire(")
     acquire_end = shader_mm.index("void MVKShaderLibraryRepository::release(", acquire_start)
     acquire_body = shader_mm[acquire_start:acquire_end]

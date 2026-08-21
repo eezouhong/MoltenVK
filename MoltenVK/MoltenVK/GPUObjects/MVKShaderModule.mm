@@ -1041,7 +1041,7 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 		MVKShaderLibraryEvictionSnapshot snapshot;
 		MVKShaderLibrary* library;
 	};
-	vector<Candidate> candidates;
+	vector<MVKShaderLibrary*> retainedLibraries;
 	{
 		lock_guard<mutex> lock(_lock);
 		for (auto& moduleEntries : _entries) {
@@ -1052,35 +1052,32 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 					!library->_repositoryResidentCounted.load(memory_order_acquire)) {
 					continue;
 				}
-
-				MVKShaderLibraryEvictionSnapshot snapshot;
-				if (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
-				if (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
-					_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
-					continue;
-				}
-
-				uint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
-					? currentUseSequence - snapshot.lastUseSequence
-					: 0;
-				uint64_t benefitPages = min<uint64_t>(
-					snapshot.reclaimableUncompressedMSLBytes / 4096,
-					65535);
-				uint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
-				if (rehydrateCost == 0) {
-					rehydrateCost = kUnknownRehydrateCostNanoseconds;
-					_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
-				}
-				uint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
-				uint64_t score =
-					(min<uint64_t>(coldness, 65535) * 4) +
-					(benefitPages * 2) +
-					(65535 - costMicros);
-
 				library->retain();
-				candidates.push_back({ score, snapshot, library });
+				retainedLibraries.push_back(library);
 			}
 		}
+	}
+
+	vector<Candidate> candidates;
+	candidates.reserve(retainedLibraries.size());
+	for (MVKShaderLibrary* library : retainedLibraries) {
+		MVKShaderLibraryEvictionSnapshot snapshot;
+		if (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+		if (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+			_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+			continue;
+		}
+		uint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+			? currentUseSequence - snapshot.lastUseSequence : 0;
+		uint64_t benefitPages = min<uint64_t>(snapshot.reclaimableUncompressedMSLBytes / 4096, 65535);
+		uint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+		if (rehydrateCost == 0) {
+			rehydrateCost = kUnknownRehydrateCostNanoseconds;
+			_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+		}
+		uint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+		uint64_t score = (min<uint64_t>(coldness, 65535) * 4) + (benefitPages * 2) + (65535 - costMicros);
+		candidates.push_back({ score, snapshot, library });
 	}
 
 	_trimCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
@@ -1102,7 +1099,7 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 		}
 	}
 
-	for (const Candidate& candidate : candidates) { candidate.library->release(); }
+	for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }
 	uint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
 	_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
 	updateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);

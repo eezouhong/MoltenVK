@@ -1,17 +1,16 @@
-name: PR3 cost-aware source materialize once
+name: PR3 source fix once
 
 on:
   push:
     branches:
       - codex/shared-shader-library-repository-phase1
-    paths:
-      - .github/workflows/pr3-cost-aware-materialize-once.yml
 
 permissions:
   contents: write
 
 jobs:
   materialize:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,339 +18,125 @@ jobs:
         with:
           ref: codex/shared-shader-library-repository-phase1
           fetch-depth: 0
-
-      - name: Apply cost-aware repository policy
+      - name: Apply lock-order-safe trim
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
-          def replace_once(path, old, new):
-              text = path.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')
-              path.write_text(text.replace(old, new, 1))
-
-          h = Path('MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h')
           mm = Path('MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm')
-          api = Path('MoltenVK/MoltenVK/API/mvk_private_api.h')
-          test = Path('Scripts/test-metal4-shared-shader-repository.py')
-
-          replace_once(h,
-          '''struct MVKShaderLibraryMemorySnapshot {
-              uint64_t shaderLibraryCount = 0;
-              uint64_t residentShaderLibraryCount = 0;
-              uint64_t specializationVariantCount = 0;
-              uint64_t compressedMSLBytes = 0;
-              uint64_t uncompressedMSLBytes = 0;
-              uint64_t residentUncompressedMSLBytes = 0;
-              uint64_t estimatedHostBytes = 0;
-          };
-          ''',
-          '''struct MVKShaderLibraryMemorySnapshot {
-              uint64_t shaderLibraryCount = 0;
-              uint64_t residentShaderLibraryCount = 0;
-              uint64_t specializationVariantCount = 0;
-              uint64_t compressedMSLBytes = 0;
-              uint64_t uncompressedMSLBytes = 0;
-              uint64_t residentUncompressedMSLBytes = 0;
-              uint64_t estimatedHostBytes = 0;
-          };
-
-          /** Stable snapshot used by repository cost-aware resident eviction. */
-          struct MVKShaderLibraryEvictionSnapshot {
-              uint64_t lastUseSequence = 0;
-              uint64_t reclaimableUncompressedMSLBytes = 0;
-              uint64_t lastRehydrateNanoseconds = 0;
-              uint64_t rehydrateProtectedUntilSequence = 0;
-          };
-          ''')
-
-          replace_once(h,
-          '''\t/** Returns the repository-wide approximate LRU sequence of the last real use. */
-          \tuint64_t getLastUseSequence() const { return _lastUseSequence.load(std::memory_order_relaxed); }
-
-          \t/** Releases the resident payload only if no real use occurred after the LRU snapshot. */
-          \tbool tryEvictResident(uint64_t expectedLastUseSequence);
-          ''',
-          '''\t/** Returns the repository-wide approximate LRU sequence of the last real use. */
-          \tuint64_t getLastUseSequence() const { return _lastUseSequence.load(std::memory_order_relaxed); }
-
-          \t/** Captures cost-aware eviction inputs without waiting on an active library. */
-          \tbool tryGetEvictionSnapshot(MVKShaderLibraryEvictionSnapshot& snapshot);
-
-          \t/** Releases the resident payload only if the snapshot is still valid and unprotected. */
-          \tbool tryEvictResident(const MVKShaderLibraryEvictionSnapshot& snapshot, uint64_t currentUseSequence);
-          ''')
-
-          replace_once(h,
-          '''\tstd::atomic<uint64_t> _lastUseSequence { 0 };
-          \tstd::atomic<uint32_t> _activeUseCount { 0 };
-          \tstd::atomic<bool> _resident { false };
-          ''',
-          '''\tstd::atomic<uint64_t> _lastUseSequence { 0 };
-          \tstd::atomic<uint64_t> _lastRehydrateNanoseconds { 0 };
-          \tstd::atomic<uint64_t> _rehydrateProtectedUntilSequence { 0 };
-          \tstd::atomic<uint32_t> _activeUseCount { 0 };
-          \tstd::atomic<bool> _resident { false };
-          ''')
-
-          replace_once(h,
-          '''\tstd::atomic<uint64_t> _rehydrateMaximumNanoseconds { 0 };
-          \tstd::atomic<uint64_t> _trimCycleCount { 0 };
-          ''',
-          '''\tstd::atomic<uint64_t> _rehydrateMaximumNanoseconds { 0 };
-          \tstd::atomic<uint64_t> _costAwareCandidateCount { 0 };
-          \tstd::atomic<uint64_t> _costAwareEvictionCount { 0 };
-          \tstd::atomic<uint64_t> _rehydrateProtectionSkipCount { 0 };
-          \tstd::atomic<uint64_t> _unknownRehydrateCostCandidateCount { 0 };
-          \tstd::atomic<uint64_t> _trimCycleCount { 0 };
-          ''')
-
-          replace_once(mm,
-          '''void MVKShaderLibrary::touch() {
-          \tif (_repository) {
-          \t\t_lastUseSequence.store(_repository->nextUseSequence(), memory_order_relaxed);
-          \t}
-          }
-
-          bool MVKShaderLibrary::tryAdoptResidentPayload(MVKShaderLibrary* candidate) {
-          ''',
-          '''void MVKShaderLibrary::touch() {
-          \tif (_repository) {
-          \t\t_lastUseSequence.store(_repository->nextUseSequence(), memory_order_relaxed);
-          \t}
-          }
-
-          bool MVKShaderLibrary::tryGetEvictionSnapshot(MVKShaderLibraryEvictionSnapshot& snapshot) {
-          \tunique_lock<mutex> accessLock(_accessLock, try_to_lock);
-          \tif (!accessLock.owns_lock() ||
-          \t\t!_mtlLibrary ||
-          \t\t!isResident() ||
-          \t\t_activeUseCount.load(memory_order_acquire) != 0) {
-          \t\treturn false;
-          \t}
-
-          \tsnapshot = {};
-          \tsnapshot.lastUseSequence = getLastUseSequence();
-          \tsnapshot.lastRehydrateNanoseconds =
-          \t\t_lastRehydrateNanoseconds.load(memory_order_relaxed);
-          \tsnapshot.rehydrateProtectedUntilSequence =
-          \t\t_rehydrateProtectedUntilSequence.load(memory_order_relaxed);
-          \tsnapshot.reclaimableUncompressedMSLBytes =
-          \t\t_compressedMSL._uncompressedSize;
-          \tfor (const auto& item : _specializationVariants) {
-          \t\tif (item.second) {
-          \t\t\tsnapshot.reclaimableUncompressedMSLBytes +=
-          \t\t\t\titem.second->_compressedMSL._uncompressedSize;
-          \t\t}
-          \t}
-          \treturn true;
-          }
-
-          bool MVKShaderLibrary::tryAdoptResidentPayload(MVKShaderLibrary* candidate) {
-          ''')
-
-          old_evict_start = '''bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence) {
-          \tunique_lock<mutex> accessLock(_accessLock, try_to_lock);
-          \tif (!accessLock.owns_lock() ||
-          \t\t!_mtlLibrary ||
-          \t\t!isResident() ||
-          \t\t_activeUseCount.load(memory_order_acquire) != 0 ||
-          \t\tgetLastUseSequence() != expectedLastUseSequence) {
-          \t\treturn false;
-          \t}
-          '''
-          new_evict_start = '''bool MVKShaderLibrary::tryEvictResident(
-          \tconst MVKShaderLibraryEvictionSnapshot& snapshot,
-          \tuint64_t currentUseSequence) {
-          \tunique_lock<mutex> accessLock(_accessLock, try_to_lock);
-          \tif (!accessLock.owns_lock() ||
-          \t\t!_mtlLibrary ||
-          \t\t!isResident() ||
-          \t\t_activeUseCount.load(memory_order_acquire) != 0 ||
-          \t\tgetLastUseSequence() != snapshot.lastUseSequence ||
-          \t\t_rehydrateProtectedUntilSequence.load(memory_order_relaxed) !=
-          \t\t\tsnapshot.rehydrateProtectedUntilSequence ||
-          \t\tcurrentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
-          \t\treturn false;
-          \t}
-          '''
-          replace_once(mm, old_evict_start, new_evict_start)
-
-          replace_once(mm,
-          '''\tif (!library || library->_repository != this || !library->isResident()) { return; }
-          \t{
-          \t\tlock_guard<mutex> lock(_lock);
-          ''',
-          '''\tif (!library || library->_repository != this || !library->isResident()) { return; }
-          \t{
-          \t\tlock_guard<mutex> lock(_lock);
-          \t\tuint64_t currentUseSequence =
-          \t\t\t_nextUseSequence.load(memory_order_relaxed);
-          \t\tlibrary->_rehydrateProtectedUntilSequence.store(
-          \t\t\tcurrentUseSequence + 256,
-          \t\t\tmemory_order_relaxed);
-          \t\tif (rehydrated && rehydrateNanoseconds != 0) {
-          \t\t\tlibrary->_lastRehydrateNanoseconds.store(
-          \t\t\t\trehydrateNanoseconds,
-          \t\t\t\tmemory_order_relaxed);
-          \t\t}
-          ''')
-
-          trim_start = mm.read_text().index('void MVKShaderLibraryRepository::trimToResidentLimit(')
-          acquire_start = mm.read_text().index('\nMVKShaderLibrary* MVKShaderLibraryRepository::acquire(', trim_start)
           text = mm.read_text()
-          old_trim = text[trim_start:acquire_start]
-          new_trim = r'''void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protectedLibrary) {
-          \tif (_residentLimit == 0 ||
-          \t\t_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
-          \t\treturn;
-          \t}
+          start = text.index('void MVKShaderLibraryRepository::trimToResidentLimit(')
+          end = text.index('\nMVKShaderLibrary* MVKShaderLibraryRepository::acquire(', start)
+          body = text[start:end]
+          if 'vector<MVKShaderLibrary*> retainedLibraries;' not in body:
+              old_loop = '''\tvector<Candidate> candidates;
+\t{
+\t\tlock_guard<mutex> lock(_lock);
+\t\tfor (auto& moduleEntries : _entries) {
+\t\t\tfor (Entry& entry : moduleEntries.second) {
+\t\t\t\tMVKShaderLibrary* library = entry.library;
+\t\t\t\tif (library == protectedLibrary ||
+\t\t\t\t\t!library->isResident() ||
+\t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
+\t\t\t\t\tcontinue;
+\t\t\t\t}
 
-          \tuint64_t trimStartedAt = mvkGetTimestamp();
-          \t_trimCycleCount.fetch_add(1, memory_order_relaxed);
-          \tunique_lock<mutex> trimLock(_trimLock, try_to_lock);
-          \tif (!trimLock.owns_lock() ||
-          \t\t_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
-          \t\t_trimBusyCount.fetch_add(1, memory_order_relaxed);
-          \t\tuint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
-          \t\t_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
-          \t\tupdateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
-          \t\treturn;
-          \t}
+\t\t\t\tMVKShaderLibraryEvictionSnapshot snapshot;
+\t\t\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+\t\t\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+\t\t\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+\t\t\t\t\tcontinue;
+\t\t\t\t}
 
-          \tconstexpr uint64_t kUnknownRehydrateCostNanoseconds = 16'000'000;
-          \tuint64_t currentUseSequence = _nextUseSequence.load(memory_order_relaxed);
-          \tstruct Candidate {
-          \t\tuint64_t score;
-          \t\tMVKShaderLibraryEvictionSnapshot snapshot;
-          \t\tMVKShaderLibrary* library;
-          \t};
-          \tvector<Candidate> candidates;
-          \t{
-          \t\tlock_guard<mutex> lock(_lock);
-          \t\tfor (auto& moduleEntries : _entries) {
-          \t\t\tfor (Entry& entry : moduleEntries.second) {
-          \t\t\t\tMVKShaderLibrary* library = entry.library;
-          \t\t\t\tif (library == protectedLibrary ||
-          \t\t\t\t\t!library->isResident() ||
-          \t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
-          \t\t\t\t\tcontinue;
-          \t\t\t\t}
+\t\t\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+\t\t\t\t\t? currentUseSequence - snapshot.lastUseSequence
+\t\t\t\t\t: 0;
+\t\t\t\tuint64_t benefitPages = min<uint64_t>(
+\t\t\t\t\tsnapshot.reclaimableUncompressedMSLBytes / 4096,
+\t\t\t\t\t65535);
+\t\t\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+\t\t\t\tif (rehydrateCost == 0) {
+\t\t\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
+\t\t\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+\t\t\t\t}
+\t\t\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+\t\t\t\tuint64_t score =
+\t\t\t\t\t(min<uint64_t>(coldness, 65535) * 4) +
+\t\t\t\t\t(benefitPages * 2) +
+\t\t\t\t\t(65535 - costMicros);
 
-          \t\t\t\tMVKShaderLibraryEvictionSnapshot snapshot;
-          \t\t\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
-          \t\t\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
-          \t\t\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
-          \t\t\t\t\tcontinue;
-          \t\t\t\t}
+\t\t\t\tlibrary->retain();
+\t\t\t\tcandidates.push_back({ score, snapshot, library });
+\t\t\t}
+\t\t}
+\t}
+'''
+              new_loop = '''\tvector<MVKShaderLibrary*> retainedLibraries;
+\t{
+\t\tlock_guard<mutex> lock(_lock);
+\t\tfor (auto& moduleEntries : _entries) {
+\t\t\tfor (Entry& entry : moduleEntries.second) {
+\t\t\t\tMVKShaderLibrary* library = entry.library;
+\t\t\t\tif (library == protectedLibrary ||
+\t\t\t\t\t!library->isResident() ||
+\t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
+\t\t\t\t\tcontinue;
+\t\t\t\t}
+\t\t\t\tlibrary->retain();
+\t\t\t\tretainedLibraries.push_back(library);
+\t\t\t}
+\t\t}
+\t}
 
-          \t\t\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
-          \t\t\t\t\t? currentUseSequence - snapshot.lastUseSequence
-          \t\t\t\t\t: 0;
-          \t\t\t\tuint64_t benefitPages = min<uint64_t>(
-          \t\t\t\t\tsnapshot.reclaimableUncompressedMSLBytes / 4096,
-          \t\t\t\t\t65535);
-          \t\t\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
-          \t\t\t\tif (rehydrateCost == 0) {
-          \t\t\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
-          \t\t\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
-          \t\t\t\t}
-          \t\t\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
-          \t\t\t\tuint64_t score =
-          \t\t\t\t\t(min<uint64_t>(coldness, 65535) * 4) +
-          \t\t\t\t\t(benefitPages * 2) +
-          \t\t\t\t\t(65535 - costMicros);
+\tvector<Candidate> candidates;
+\tcandidates.reserve(retainedLibraries.size());
+\tfor (MVKShaderLibrary* library : retainedLibraries) {
+\t\tMVKShaderLibraryEvictionSnapshot snapshot;
+\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+\t\t\tcontinue;
+\t\t}
+\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+\t\t\t? currentUseSequence - snapshot.lastUseSequence : 0;
+\t\tuint64_t benefitPages = min<uint64_t>(snapshot.reclaimableUncompressedMSLBytes / 4096, 65535);
+\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+\t\tif (rehydrateCost == 0) {
+\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
+\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+\t\t}
+\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+\t\tuint64_t score = (min<uint64_t>(coldness, 65535) * 4) + (benefitPages * 2) + (65535 - costMicros);
+\t\tcandidates.push_back({ score, snapshot, library });
+\t}
+'''
+              if old_loop not in body:
+                  raise SystemExit('expected cost-aware trim body not found')
+              body = body.replace(old_loop, new_loop, 1)
+              body = body.replace(
+                  'for (const Candidate& candidate : candidates) { candidate.library->release(); }',
+                  'for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }',
+                  1)
+              mm.write_text(text[:start] + body + text[end:])
 
-          \t\t\t\tlibrary->retain();
-          \t\t\t\tcandidates.push_back({ score, snapshot, library });
-          \t\t\t}
-          \t\t}
-          \t}
-
-          \t_trimCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
-          \t_costAwareCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
-
-          \tsort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
-          \t\tif (left.score != right.score) { return left.score > right.score; }
-          \t\tif (left.snapshot.lastUseSequence != right.snapshot.lastUseSequence) {
-          \t\t\treturn left.snapshot.lastUseSequence < right.snapshot.lastUseSequence;
-          \t\t}
-          \t\treturn left.snapshot.reclaimableUncompressedMSLBytes >
-          \t\t\tright.snapshot.reclaimableUncompressedMSLBytes;
-          \t});
-
-          \tfor (const Candidate& candidate : candidates) {
-          \t\tif (_residentEntryCount.load(memory_order_relaxed) <= _residentLimit) { break; }
-          \t\tif (candidate.library->tryEvictResident(candidate.snapshot, currentUseSequence)) {
-          \t\t\t_costAwareEvictionCount.fetch_add(1, memory_order_relaxed);
-          \t\t}
-          \t}
-
-          \tfor (const Candidate& candidate : candidates) { candidate.library->release(); }
-          \tuint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
-          \t_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
-          \tupdateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
-          }
-          '''.replace('\\t', '\t')
-          mm.write_text(text[:trim_start] + new_trim + text[acquire_start:])
-
-          replace_once(mm,
-          '''    pStats->rehydrateMaximumNanoseconds = _rehydrateMaximumNanoseconds.load(memory_order_relaxed);
-              pStats->dedupeHitCount = _dedupeHitCount.load(memory_order_relaxed);
-          ''',
-          '''    pStats->rehydrateMaximumNanoseconds = _rehydrateMaximumNanoseconds.load(memory_order_relaxed);
-              pStats->costAwareCandidateCount = _costAwareCandidateCount.load(memory_order_relaxed);
-              pStats->costAwareEvictionCount = _costAwareEvictionCount.load(memory_order_relaxed);
-              pStats->rehydrateProtectionSkipCount = _rehydrateProtectionSkipCount.load(memory_order_relaxed);
-              pStats->unknownRehydrateCostCandidateCount = _unknownRehydrateCostCandidateCount.load(memory_order_relaxed);
-              pStats->dedupeHitCount = _dedupeHitCount.load(memory_order_relaxed);
-          ''')
-
-          replace_once(api,
-          '#define MVK_PRIVATE_API_VERSION   45',
-          '#define MVK_PRIVATE_API_VERSION   46')
-          replace_once(api,
-          '''    uint64_t rehydrateMaximumNanoseconds;
-              uint64_t dedupeHitCount;
-          ''',
-          '''    uint64_t rehydrateMaximumNanoseconds;
-              uint64_t costAwareCandidateCount;
-              uint64_t costAwareEvictionCount;
-              uint64_t rehydrateProtectionSkipCount;
-              uint64_t unknownRehydrateCostCandidateCount;
-              uint64_t dedupeHitCount;
-          ''')
-
+          test = Path('Scripts/test-metal4-shared-shader-repository.py')
           t = test.read_text()
-          t = t.replace(
-              'eviction = shader_mm.index("bool MVKShaderLibrary::tryEvictResident(uint64_t expectedLastUseSequence)")',
-              'eviction = shader_mm.index("bool MVKShaderLibrary::tryEvictResident(")')
-          marker = '    require(shader_h, "std::atomic<uint64_t> _residentAdoptionCount", SHADER_H)\n'
-          addition = '''    require(shader_h, "std::atomic<uint64_t> _residentAdoptionCount", SHADER_H)\n    require(shader_h, "_lastRehydrateNanoseconds", SHADER_H)\n    require(shader_h, "_rehydrateProtectedUntilSequence", SHADER_H)\n    require(shader_h, "MVKShaderLibraryEvictionSnapshot", SHADER_H)\n'''
-          if marker not in t:
-              raise SystemExit('test marker missing')
-          t = t.replace(marker, addition, 1)
-          marker2 = '    require(shader_mm, "rehydrateTotalNanoseconds", SHADER_MM)\n'
-          addition2 = '''    require(shader_mm, "rehydrateTotalNanoseconds", SHADER_MM)\n    require(shader_mm, "costAwareCandidateCount", SHADER_MM)\n    require(shader_mm, "rehydrateProtectionSkipCount", SHADER_MM)\n    require(shader_mm, "currentUseSequence + 256", SHADER_MM)\n    require(shader_mm, "kUnknownRehydrateCostNanoseconds", SHADER_MM)\n'''
-          if marker2 not in t:
-              raise SystemExit('test telemetry marker missing')
-          t = t.replace(marker2, addition2, 1)
-          test.write_text(t)
+          marker = '    assert "tryGetEvictionSnapshot(snapshot)" in trim_body\n'
+          if marker in t and 'retained_collect = trim_body.index' not in t:
+              t = t.replace(marker, marker + '    retained_collect = trim_body.index("retainedLibraries.push_back(library)")\n    snapshot_call = trim_body.index("tryGetEvictionSnapshot(snapshot)")\n    assert retained_collect < snapshot_call\n', 1)
+              test.write_text(t)
           PY
-
           python3 Scripts/test-metal4-shared-shader-repository.py
           git diff --check
-
-      - name: Commit ordinary source
+      - name: Commit source fix
         shell: bash
         run: |
           set -euo pipefail
           git add MoltenVK Scripts
+          if git diff --cached --quiet; then exit 0; fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'perf(metal4): make repository eviction cost aware'
+          git commit -m 'fix(metal4): avoid repository shader-library lock inversion'
+          git pull --rebase origin codex/shared-shader-library-repository-phase1
           git push origin HEAD:codex/shared-shader-library-repository-phase1

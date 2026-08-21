@@ -5,146 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  source_lock_order_fix:
-    name: One-shot repository lock-order source fix
-    runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/shared-shader-library-repository-phase1
-          fetch-depth: 0
-      - name: Move cost snapshot outside repository lock
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          mm = Path('MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm')
-          text = mm.read_text()
-          start = text.index('void MVKShaderLibraryRepository::trimToResidentLimit(')
-          end = text.index('\nMVKShaderLibrary* MVKShaderLibraryRepository::acquire(', start)
-          body = text[start:end]
-          if 'vector<MVKShaderLibrary*> retainedLibraries;' not in body:
-              old_loop = '''\tvector<Candidate> candidates;
-\t{
-\t\tlock_guard<mutex> lock(_lock);
-\t\tfor (auto& moduleEntries : _entries) {
-\t\t\tfor (Entry& entry : moduleEntries.second) {
-\t\t\t\tMVKShaderLibrary* library = entry.library;
-\t\t\t\tif (library == protectedLibrary ||
-\t\t\t\t\t!library->isResident() ||
-\t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
-\t\t\t\t\tcontinue;
-\t\t\t\t}
-
-\t\t\t\tMVKShaderLibraryEvictionSnapshot snapshot;
-\t\t\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
-\t\t\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
-\t\t\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
-\t\t\t\t\tcontinue;
-\t\t\t\t}
-
-\t\t\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
-\t\t\t\t\t? currentUseSequence - snapshot.lastUseSequence
-\t\t\t\t\t: 0;
-\t\t\t\tuint64_t benefitPages = min<uint64_t>(
-\t\t\t\t\tsnapshot.reclaimableUncompressedMSLBytes / 4096,
-\t\t\t\t\t65535);
-\t\t\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
-\t\t\t\tif (rehydrateCost == 0) {
-\t\t\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
-\t\t\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
-\t\t\t\t}
-\t\t\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
-\t\t\t\tuint64_t score =
-\t\t\t\t\t(min<uint64_t>(coldness, 65535) * 4) +
-\t\t\t\t\t(benefitPages * 2) +
-\t\t\t\t\t(65535 - costMicros);
-
-\t\t\t\tlibrary->retain();
-\t\t\t\tcandidates.push_back({ score, snapshot, library });
-\t\t\t}
-\t\t}
-\t}
-'''
-              new_loop = '''\tvector<MVKShaderLibrary*> retainedLibraries;
-\t{
-\t\tlock_guard<mutex> lock(_lock);
-\t\tfor (auto& moduleEntries : _entries) {
-\t\t\tfor (Entry& entry : moduleEntries.second) {
-\t\t\t\tMVKShaderLibrary* library = entry.library;
-\t\t\t\tif (library == protectedLibrary ||
-\t\t\t\t\t!library->isResident() ||
-\t\t\t\t\t!library->_repositoryResidentCounted.load(memory_order_acquire)) {
-\t\t\t\t\tcontinue;
-\t\t\t\t}
-\t\t\t\tlibrary->retain();
-\t\t\t\tretainedLibraries.push_back(library);
-\t\t\t}
-\t\t}
-\t}
-
-\tvector<Candidate> candidates;
-\tcandidates.reserve(retainedLibraries.size());
-\tfor (MVKShaderLibrary* library : retainedLibraries) {
-\t\tMVKShaderLibraryEvictionSnapshot snapshot;
-\t\tif (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
-\t\tif (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
-\t\t\t_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
-\t\t\tcontinue;
-\t\t}
-\t\tuint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
-\t\t\t? currentUseSequence - snapshot.lastUseSequence : 0;
-\t\tuint64_t benefitPages = min<uint64_t>(snapshot.reclaimableUncompressedMSLBytes / 4096, 65535);
-\t\tuint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
-\t\tif (rehydrateCost == 0) {
-\t\t\trehydrateCost = kUnknownRehydrateCostNanoseconds;
-\t\t\t_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
-\t\t}
-\t\tuint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
-\t\tuint64_t score = (min<uint64_t>(coldness, 65535) * 4) + (benefitPages * 2) + (65535 - costMicros);
-\t\tcandidates.push_back({ score, snapshot, library });
-\t}
-'''
-              if old_loop not in body:
-                  raise SystemExit('expected cost-aware trim body not found')
-              body = body.replace(old_loop, new_loop, 1)
-              body = body.replace(
-                  'for (const Candidate& candidate : candidates) { candidate.library->release(); }',
-                  'for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }',
-                  1)
-              mm.write_text(text[:start] + body + text[end:])
-
-          test = Path('Scripts/test-metal4-shared-shader-repository.py')
-          t = test.read_text()
-          marker = '    assert "tryGetEvictionSnapshot(snapshot)" in trim_body\n'
-          if marker in t and 'retained_collect = trim_body.index' not in t:
-              t = t.replace(marker, marker + '    retained_collect = trim_body.index("retainedLibraries.push_back(library)")\n    snapshot_call = trim_body.index("tryGetEvictionSnapshot(snapshot)")\n    assert retained_collect < snapshot_call\n', 1)
-              test.write_text(t)
-          PY
-          python3 Scripts/test-metal4-shared-shader-repository.py
-          git diff --check
-      - name: Commit source fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git add MoltenVK Scripts
-          if git diff --cached --quiet; then exit 0; fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'fix(metal4): avoid repository shader-library lock inversion'
-          git pull --rebase origin codex/shared-shader-library-repository-phase1
-          git push origin HEAD:codex/shared-shader-library-repository-phase1
-
   shared_shader_repository_policy:
     name: Metal 4 shared shader repository policy
     runs-on: ubuntu-latest
@@ -173,22 +38,29 @@ jobs:
             upload_artifacts: true
             select_xcode: false
             private_api: true
+
     name: MoltenVK (Xcode ${{ matrix.xcode }} - ${{ matrix.platform }}${{ matrix.private_api && '-privateapi' || '' }})
     runs-on: ${{ matrix.os }}
+
     env:
       XCODE_DEV_PATH: "/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer"
       ARTIFACT_TYPE: ${{ matrix.platform }}${{ matrix.private_api && '-privateapi' || '' }}
       BUILD_ARGUMENTS: ${{ matrix.platform }} ${{ matrix.private_api && 'MVK_USE_METAL_PRIVATE_API=1' || '' }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: List available Xcode versions
         run: ls /Applications | grep Xcode
+
       - name: Select Xcode version
         if: matrix.select_xcode == true
         run: sudo xcode-select -switch "${XCODE_DEV_PATH}"
+
       - name: Prep
         id: prep
         run: |
@@ -196,6 +68,7 @@ jobs:
           echo "${XCODE_VERSION}"
           XCODE_VERSION="$(echo "${XCODE_VERSION}" | tr '\t\r\n ' '_')"
           echo "XCODE_VERSION=${XCODE_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Dependencies
         id: cache-dependencies
         if: success() && !(github.event_name == 'push' && contains(github.ref, 'refs/tags/'))
@@ -205,28 +78,35 @@ jobs:
             External/build
             !External/build/Intermediates
           key: ${{ runner.os }}-${{ steps.prep.outputs.XCODE_VERSION }}-${{ matrix.platform }}-${{ hashFiles('fetchDependencies','ExternalRevisions/**','ExternalDependencies.xcodeproj/**','Scripts/**') }}
+
       - name: Fetch Dependencies (Use Built Cache)
         if: steps.cache-dependencies.outputs.cache-hit == 'true'
         run: ./fetchDependencies -v --none
+
       - name: Fetch Dependencies
         if: steps.cache-dependencies.outputs.cache-hit != 'true'
         run: ./fetchDependencies -v --${{ matrix.platform }}
+
       - name: Output Dependency Build Logs on Failure
         if: failure()
         run: cat dependenciesbuild.log
+
       - name: Build MoltenVK
         run: make ${BUILD_ARGUMENTS}
+
       - name: Output MoltenVK Build Logs on Failure
         if: failure()
         run: |
           if [ -f xcodebuild.log ]; then
             cat xcodebuild.log
           fi
+
       - name: Tar Artifacts
         if: success() && matrix.upload_artifacts == true
         run: |
           rm -rf Package/Release/MoltenVKShaderConverter
           tar -C Package -s/Release/MoltenVK/ -cvf "MoltenVK-${ARTIFACT_TYPE}.tar" Release/
+
       - name: Upload Artifacts
         if: success() && matrix.upload_artifacts == true
         uses: actions/upload-artifact@v4
@@ -240,21 +120,27 @@ jobs:
       matrix:
         os: ["macos-latest"]
         config: [Debug, Release]
+
     name: MoltenVK (CMake - ${{ matrix.config }})
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Dependencies
         run: |
           brew install ccache
           echo 'CACHE_PATH=~/Library/Caches/ccache' >> "$GITHUB_ENV"
+
       - uses: SimenB/github-actions-cpu-cores@v2.0.0
         id: cpu-cores
+
       - name: Cache Build
         uses: actions/cache@v4
         with:
           path: ${{ env.CACHE_PATH }}
           key: ${{ runner.os }}-${{ matrix.config }}-cache
+
       - name: Prepare ccache
         run: |
           ccache --max-size=1.0G
@@ -262,11 +148,13 @@ jobs:
           ccache --show-config
           ccache --show-stats
           ccache --zero-stats
+
       - name: Configure
         run: |
           mkdir -p build
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+
       - name: Build
         run: |
           cmake --build build -j ${{ steps.cpu-cores.outputs.count }}

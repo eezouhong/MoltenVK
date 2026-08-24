@@ -394,6 +394,9 @@ typedef struct {
     uint64_t unknownRehydrateCostCandidateCount;
 } MVKMetal4ShaderLibraryRepositoryStatistics;
 
+/** Opaque one-shot generation returned by shader-library capture begin. */
+typedef uint64_t MVKPipelineCacheShaderLibraryCaptureToken;
+
 
 #pragma mark -
 #pragma mark Function types
@@ -402,7 +405,10 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignor
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
+typedef VkResult (VKAPI_PTR *PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK)(MVKPipelineCacheShaderLibraryCaptureToken captureToken);
 typedef VkResult (VKAPI_PTR *PFN_vkAdoptPipelineCacheShaderLibrariesMVK)(VkPipeline pipeline, VkPipelineCache destinationPipelineCache, uint32_t* pAdoptedShaderLibraryCount);
+typedef VkResult (VKAPI_PTR *PFN_vkDiscardPipelineCacheShaderLibrariesMVK)(VkPipeline pipeline, uint32_t* pDiscardedShaderLibraryCount);
 
 
 #pragma mark -
@@ -486,18 +492,39 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
     size_t*                                    pStatsSize);
 
 /**
+ * Arms exact shader-library contribution capture for the next single Pipeline
+ * created on this thread from sourcePipelineCache. Nested begin calls are
+ * rejected. A Pipeline created from another source cache does not consume the
+ * arm. Call cancel in a finally scope even after a successful creation.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL vkBeginPipelineCacheShaderLibraryCaptureMVK(
+    VkPipelineCache                           sourcePipelineCache,
+    MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
+
+/** Cancels an unconsumed same-thread capture generation. This is idempotent. */
+VKAPI_ATTR VkResult VKAPI_CALL vkCancelPipelineCacheShaderLibraryCaptureMVK(
+    MVKPipelineCacheShaderLibraryCaptureToken captureToken);
+
+/**
  * Adds the exact shader-library memberships used to create pipeline to the
  * destination pipeline-cache view. Existing memberships and adoption into the
  * pipeline's source cache are successful no-ops. No Pipeline is recompiled.
  *
  * This function must be called immediately after successful Pipeline creation,
  * while the source VkPipelineCache passed to that creation call remains alive.
- * The recorded source-library references are consumed by this call.
+ * The begin/create/cancel sequence must create one Pipeline (count == 1). After
+ * the post-create gate, call either adopt or discard exactly once. Both consume
+ * and release all recorded source-library references, including on failure.
  */
 VKAPI_ATTR VkResult VKAPI_CALL vkAdoptPipelineCacheShaderLibrariesMVK(
     VkPipeline                                pipeline,
     VkPipelineCache                           destinationPipelineCache,
     uint32_t*                                 pAdoptedShaderLibraryCount);
+
+/** Consumes and releases captured contributions without adopting them. */
+VKAPI_ATTR VkResult VKAPI_CALL vkDiscardPipelineCacheShaderLibrariesMVK(
+    VkPipeline                                pipeline,
+    uint32_t*                                 pDiscardedShaderLibraryCount);
 
 
 #endif // VK_NO_PROTOTYPES

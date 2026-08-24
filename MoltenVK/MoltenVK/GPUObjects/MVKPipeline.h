@@ -179,6 +179,19 @@ public:
 	/** Returns the pipeline layout used by this pipeline. */
 	MVKPipelineLayout* getLayout() const { return _layout; }
 
+	/** Arms one same-thread, source-cache-specific Pipeline contribution capture. */
+	static VkResult beginShaderLibraryContributionCapture(
+		MVKPipelineCache* sourcePipelineCache,
+		uint64_t* pCaptureToken);
+
+	/** Idempotently cancels one same-thread capture generation. */
+	static VkResult cancelShaderLibraryContributionCapture(uint64_t captureToken);
+
+	/** Returns whether this Pipeline consumed the current one-shot capture arm. */
+	bool shouldRecordShaderLibraryContributions() const {
+		return _shouldRecordShaderLibraryContributions;
+	}
+
 	/** Records one exact shader library used while constructing this pipeline. */
 	void recordShaderLibraryContribution(
 		MVKShaderModuleKey shaderModuleKey,
@@ -189,6 +202,9 @@ public:
 	VkResult adoptShaderLibrariesInto(
 		MVKPipelineCache* destinationPipelineCache,
 		uint32_t* pAdoptedShaderLibraryCount);
+
+	/** Consumes and releases captured memberships without adopting them. */
+	void discardShaderLibraryContributions(uint32_t* pDiscardedShaderLibraryCount);
 
 	/** Returns whether the pipeline creation fail if a pipeline compile is required. */
 	bool shouldFailOnPipelineCompileRequired() {
@@ -220,6 +236,9 @@ public:
 
 protected:
 	void propagateDebugName() override {}
+	static bool consumeShaderLibraryContributionCapture(MVKPipelineCache* sourcePipelineCache);
+	static void releaseShaderLibraryContributions(
+		std::vector<MVKPipelineShaderLibraryContribution>& contributions);
 
 	MVKPipelineLayout* _layout;
 	MVKPipelineCache* _pipelineCache;
@@ -228,6 +247,7 @@ protected:
 	uint32_t _descriptorSetCount;
 	bool _stageUsesPushConstants[kMVKShaderStageCount];
 	bool _hasValidMTLPipelineStates = true;
+	bool _shouldRecordShaderLibraryContributions = false;
 	std::vector<MVKPipelineShaderLibraryContribution> _shaderLibraryContributions;
 
 };

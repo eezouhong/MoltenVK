@@ -2324,13 +2324,73 @@ MVKPipelineLayout::~MVKPipelineLayout() {
 #pragma mark -
 #pragma mark MVKPipeline
 
+struct MVKPipelineShaderLibraryCaptureState {
+	MVKPipelineCache* sourcePipelineCache = nullptr;
+	uint64_t generation = 0;
+	bool active = false;
+};
+
+static thread_local MVKPipelineShaderLibraryCaptureState _mvkPipelineShaderLibraryCaptureState;
+static atomic<uint64_t> _mvkPipelineShaderLibraryCaptureGeneration { 1 };
+
+VkResult MVKPipeline::beginShaderLibraryContributionCapture(
+	MVKPipelineCache* sourcePipelineCache,
+	uint64_t* pCaptureToken) {
+
+	if (pCaptureToken) { *pCaptureToken = 0; }
+	if (!sourcePipelineCache || !pCaptureToken ||
+		_mvkPipelineShaderLibraryCaptureState.active) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+
+	uint64_t generation =
+		_mvkPipelineShaderLibraryCaptureGeneration.fetch_add(1, memory_order_relaxed);
+	if (generation == 0) {
+		generation =
+			_mvkPipelineShaderLibraryCaptureGeneration.fetch_add(1, memory_order_relaxed);
+	}
+	_mvkPipelineShaderLibraryCaptureState = { sourcePipelineCache, generation, true };
+	*pCaptureToken = generation;
+	return VK_SUCCESS;
+}
+
+VkResult MVKPipeline::cancelShaderLibraryContributionCapture(uint64_t captureToken) {
+	if (_mvkPipelineShaderLibraryCaptureState.active &&
+		_mvkPipelineShaderLibraryCaptureState.generation == captureToken) {
+		_mvkPipelineShaderLibraryCaptureState = {};
+	}
+	return VK_SUCCESS;
+}
+
+bool MVKPipeline::consumeShaderLibraryContributionCapture(
+	MVKPipelineCache* sourcePipelineCache) {
+
+	if (!_mvkPipelineShaderLibraryCaptureState.active ||
+		_mvkPipelineShaderLibraryCaptureState.sourcePipelineCache != sourcePipelineCache) {
+		return false;
+	}
+	_mvkPipelineShaderLibraryCaptureState = {};
+	return true;
+}
+
+void MVKPipeline::releaseShaderLibraryContributions(
+	vector<MVKPipelineShaderLibraryContribution>& contributions) {
+
+	for (auto& contribution : contributions) {
+		if (contribution.shaderLibrary) { contribution.shaderLibrary->release(); }
+	}
+	contributions.clear();
+}
+
 MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVKPipelineLayout* layout,
 						 VkPipelineCreateFlags2 flags, MVKPipeline* parent) :
 	MVKVulkanAPIDeviceObject(device),
 	_layout(layout),
 	_pipelineCache(pipelineCache),
 	_flags(flags),
-	_descriptorSetCount(static_cast<uint32_t>(layout->getDescriptorSetCount())) {
+	_descriptorSetCount(static_cast<uint32_t>(layout->getDescriptorSetCount())),
+	_shouldRecordShaderLibraryContributions(
+		consumeShaderLibraryContributionCapture(pipelineCache)) {
 
 		layout->retain();
 
@@ -2343,6 +2403,7 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 
 MVKPipeline::~MVKPipeline() {
+	releaseShaderLibraryContributions(_shaderLibraryContributions);
 	_layout->release();
 }
 
@@ -2359,30 +2420,46 @@ void MVKPipeline::recordShaderLibraryContribution(
 		}
 	}
 	_shaderLibraryContributions.push_back({ shaderModuleKey, shaderConfig, shaderLibrary });
+	shaderLibrary->retain();
 }
 
 VkResult MVKPipeline::adoptShaderLibrariesInto(
 	MVKPipelineCache* destinationPipelineCache,
 	uint32_t* pAdoptedShaderLibraryCount) {
 
+	vector<MVKPipelineShaderLibraryContribution> contributions;
+	contributions.swap(_shaderLibraryContributions);
 	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = 0; }
-	if (!destinationPipelineCache ||
-		destinationPipelineCache->getDevice() != getDevice()) {
-		return VK_ERROR_INITIALIZATION_FAILED;
-	}
-
+	VkResult result = VK_SUCCESS;
 	uint32_t adoptedCount = 0;
-	for (const auto& contribution : _shaderLibraryContributions) {
-		if (destinationPipelineCache->adoptShaderLibraryMembership(
-				contribution.shaderModuleKey,
-				contribution.shaderConfig,
-				contribution.shaderLibrary)) {
-			adoptedCount++;
+	if (!destinationPipelineCache ||
+		destinationPipelineCache->getDevice() != getDevice() ||
+		!hasValidMTLPipelineStates()) {
+		result = VK_ERROR_INITIALIZATION_FAILED;
+	} else {
+		for (const auto& contribution : contributions) {
+			if (destinationPipelineCache->adoptShaderLibraryMembership(
+					contribution.shaderModuleKey,
+					contribution.shaderConfig,
+					contribution.shaderLibrary)) {
+				adoptedCount++;
+			}
 		}
 	}
-	_shaderLibraryContributions.clear();
+	releaseShaderLibraryContributions(contributions);
 	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = adoptedCount; }
-	return VK_SUCCESS;
+	return result;
+}
+
+void MVKPipeline::discardShaderLibraryContributions(
+	uint32_t* pDiscardedShaderLibraryCount) {
+
+	vector<MVKPipelineShaderLibraryContribution> contributions;
+	contributions.swap(_shaderLibraryContributions);
+	if (pDiscardedShaderLibraryCount) {
+		*pDiscardedShaderLibraryCount = static_cast<uint32_t>(contributions.size());
+	}
+	releaseShaderLibraryContributions(contributions);
 }
 
 #pragma mark -
@@ -4698,7 +4775,7 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 	bool wasAdded = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
 	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
-	if (shLib) {
+	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
 		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
 	}
 	if (wasAdded) { markDirty(); }

@@ -94,6 +94,33 @@ class LogicalCacheView:
         return adopted
 
 
+class OneShotCapture:
+    def __init__(self) -> None:
+        self.source: str | None = None
+        self.token = 0
+        self.next_token = 1
+
+    def begin(self, source: str) -> int | None:
+        if self.source is not None:
+            return None
+        self.source = source
+        self.token = self.next_token
+        self.next_token += 1
+        return self.token
+
+    def consume_for_pipeline(self, source: str) -> bool:
+        if self.source != source:
+            return False
+        self.source = None
+        self.token = 0
+        return True
+
+    def cancel(self, token: int) -> None:
+        if token == self.token:
+            self.source = None
+            self.token = 0
+
+
 def test_reference_and_residency_model() -> None:
     entry = Entry()
     entry.acquire()  # global cache membership
@@ -148,6 +175,22 @@ def test_exact_pipeline_contribution_adoption_model() -> None:
     # Re-adoption is a dedupe hit, not another logical membership or count.
     assert destination.adopt_pipeline(pipeline_a) == 0
     assert len(destination.memberships) == 2
+
+
+def test_one_shot_capture_model() -> None:
+    capture = OneShotCapture()
+    token = capture.begin("global-a")
+    assert token is not None
+    assert capture.begin("global-a") is None  # Nested begin is rejected.
+    assert not capture.consume_for_pipeline("per-program-b")
+    assert capture.consume_for_pipeline("global-a")
+    assert not capture.consume_for_pipeline("global-a")
+
+    token = capture.begin("global-a")
+    assert token is not None
+    capture.cancel(token)
+    capture.cancel(token)  # Idempotent finally cleanup.
+    assert not capture.consume_for_pipeline("global-a")
 
 
 def test_source_policy() -> None:
@@ -511,10 +554,29 @@ def test_source_policy() -> None:
     )
     require(
         private_api_h,
+        "PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK",
+        PRIVATE_API_H,
+    )
+    require(
+        private_api_h,
+        "PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK",
+        PRIVATE_API_H,
+    )
+    require(
+        private_api_h,
+        "PFN_vkDiscardPipelineCacheShaderLibrariesMVK",
+        PRIVATE_API_H,
+    )
+    require(
+        private_api_h,
         "vkAdoptPipelineCacheShaderLibrariesMVK(",
         PRIVATE_API_H,
     )
     require(private_api_h, "#define MVK_PRIVATE_API_VERSION   47", PRIVATE_API_H)
+    require(private_api_h, "MVKPipelineCacheShaderLibraryCaptureToken", PRIVATE_API_H)
+    require(private_api_h, "vkBeginPipelineCacheShaderLibraryCaptureMVK(", PRIVATE_API_H)
+    require(private_api_h, "vkCancelPipelineCacheShaderLibraryCaptureMVK(", PRIVATE_API_H)
+    require(private_api_h, "vkDiscardPipelineCacheShaderLibrariesMVK(", PRIVATE_API_H)
     require(private_api_h, "VkPipeline                                pipeline", PRIVATE_API_H)
     require(private_api_h, "VkPipelineCache                           destinationPipelineCache", PRIVATE_API_H)
     require(private_api_h, "uint32_t*                                 pAdoptedShaderLibraryCount", PRIVATE_API_H)
@@ -522,6 +584,21 @@ def test_source_policy() -> None:
     require(
         api_mm,
         "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAdoptPipelineCacheShaderLibrariesMVK(",
+        API_MM,
+    )
+    require(
+        api_mm,
+        "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkBeginPipelineCacheShaderLibraryCaptureMVK(",
+        API_MM,
+    )
+    require(
+        api_mm,
+        "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkCancelPipelineCacheShaderLibraryCaptureMVK(",
+        API_MM,
+    )
+    require(
+        api_mm,
+        "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkDiscardPipelineCacheShaderLibrariesMVK(",
         API_MM,
     )
     api_adoption_start = api_mm.index(
@@ -540,7 +617,11 @@ def test_source_policy() -> None:
     )
     require(pipeline_h, "MVKShaderLibrary* shaderLibrary", PIPELINE_H)
     require(pipeline_h, "recordShaderLibraryContribution(", PIPELINE_H)
+    require(pipeline_h, "beginShaderLibraryContributionCapture(", PIPELINE_H)
+    require(pipeline_h, "cancelShaderLibraryContributionCapture(", PIPELINE_H)
+    require(pipeline_h, "shouldRecordShaderLibraryContributions()", PIPELINE_H)
     require(pipeline_h, "adoptShaderLibrariesInto(", PIPELINE_H)
+    require(pipeline_h, "discardShaderLibraryContributions(", PIPELINE_H)
     require(pipeline_h, "_shaderLibraryContributions", PIPELINE_H)
     require(pipeline_h, "adoptShaderLibraryMembership(", PIPELINE_H)
     require(shader_h, "adoptShaderLibraryMembership(", SHADER_H)
@@ -551,10 +632,25 @@ def test_source_policy() -> None:
         PIPELINE_MM,
     )
     record_start = pipeline_mm.index("pipeline->recordShaderLibraryContribution(")
-    record_body = pipeline_mm[record_start : record_start + 500]
+    record_body = pipeline_mm[record_start - 120 : record_start + 500]
     assert "shaderModule->getKey()" in record_body
     assert "*pContext" in record_body
     assert "shLib" in record_body
+    assert "shouldRecordShaderLibraryContributions()" in record_body
+
+    capture_state_start = pipeline_mm.index(
+        "struct MVKPipelineShaderLibraryCaptureState"
+    )
+    capture_state_body = pipeline_mm[capture_state_start : capture_state_start + 2600]
+    assert "thread_local" in capture_state_body
+    assert "sourcePipelineCache" in capture_state_body
+    assert "generation" in capture_state_body
+    assert "active" in capture_state_body
+
+    pipeline_ctor_start = pipeline_mm.index("MVKPipeline::MVKPipeline(")
+    pipeline_ctor_end = pipeline_mm.index("MVKPipeline::~MVKPipeline()", pipeline_ctor_start)
+    pipeline_ctor_body = pipeline_mm[pipeline_ctor_start:pipeline_ctor_end]
+    assert "consumeShaderLibraryContributionCapture(pipelineCache)" in pipeline_ctor_body
 
     pipeline_adoption_start = pipeline_mm.index(
         "VkResult MVKPipeline::adoptShaderLibrariesInto("
@@ -565,8 +661,8 @@ def test_source_policy() -> None:
     assert "_shaderLibraryContributions" in pipeline_adoption_body
     assert "destinationPipelineCache->adoptShaderLibraryMembership(" in pipeline_adoption_body
     assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
-    assert "_shaderLibraryContributions.clear();" in pipeline_adoption_body
-    assert "destinationPipelineCache == _pipelineCache" not in pipeline_adoption_body
+    assert "swap(_shaderLibraryContributions)" in pipeline_adoption_body
+    assert "releaseShaderLibraryContributions" in pipeline_adoption_body
     assert "mergePipelineCaches" not in pipeline_adoption_body
     assert "createPipelines" not in pipeline_adoption_body
     assert "vkCreateGraphicsPipelines" not in pipeline_adoption_body
@@ -579,7 +675,10 @@ def test_source_policy() -> None:
         "VkResult MVKPipeline::adoptShaderLibrariesInto(", record_method_start
     )
     record_method_body = pipeline_mm[record_method_start:record_method_end]
-    assert "shaderLibrary->retain();" not in record_method_body
+    assert "shaderLibrary->retain();" in record_method_body
+    assert record_method_body.index(
+        "_shaderLibraryContributions.push_back("
+    ) < record_method_body.index("shaderLibrary->retain();")
 
     pipeline_destructor_start = pipeline_mm.index("MVKPipeline::~MVKPipeline()")
     pipeline_destructor_end = pipeline_mm.index(
@@ -588,7 +687,21 @@ def test_source_policy() -> None:
     pipeline_destructor_body = pipeline_mm[
         pipeline_destructor_start:pipeline_destructor_end
     ]
-    assert "contribution.shaderLibrary->release();" not in pipeline_destructor_body
+    assert "releaseShaderLibraryContributions" in pipeline_destructor_body
+
+    discard_start = pipeline_mm.index(
+        "void MVKPipeline::discardShaderLibraryContributions("
+    )
+    discard_body = pipeline_mm[discard_start : discard_start + 900]
+    assert "swap(_shaderLibraryContributions)" in discard_body
+    assert "releaseShaderLibraryContributions" in discard_body
+
+    release_start = pipeline_mm.index(
+        "void MVKPipeline::releaseShaderLibraryContributions("
+    )
+    release_body = pipeline_mm[release_start : release_start + 800]
+    assert "contribution.shaderLibrary->release();" in release_body
+    assert "contributions.clear();" in release_body
 
     cache_adoption_start = pipeline_mm.index(
         "bool MVKPipelineCache::adoptShaderLibraryMembership("
@@ -604,6 +717,7 @@ def test_source_policy() -> None:
 def main() -> None:
     test_reference_and_residency_model()
     test_exact_pipeline_contribution_adoption_model()
+    test_one_shot_capture_model()
     test_source_policy()
     print("metal4 shared shader-library repository policy: PASS")
 

@@ -2342,6 +2342,9 @@ VkResult MVKPipeline::beginShaderLibraryContributionCapture(
 		_mvkPipelineShaderLibraryCaptureState.active) {
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
+	if (!sourcePipelineCache->getDevice()->getShaderLibraryRepository()) {
+		return VK_ERROR_FEATURE_NOT_PRESENT;
+	}
 
 	uint64_t generation =
 		_mvkPipelineShaderLibraryCaptureGeneration.fetch_add(1, memory_order_relaxed);

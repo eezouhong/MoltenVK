@@ -495,7 +495,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
  * Arms exact shader-library contribution capture for the next single Pipeline
  * created on this thread from sourcePipelineCache. Nested begin calls are
  * rejected. A Pipeline created from another source cache does not consume the
- * arm. Call cancel in a finally scope even after a successful creation.
+ * arm. Call cancel in a finally scope even after a successful creation. If the
+ * shared shader-library repository is unavailable, this returns
+ * VK_ERROR_FEATURE_NOT_PRESENT with a zero token and does not arm capture.
  */
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginPipelineCacheShaderLibraryCaptureMVK(
     VkPipelineCache                           sourcePipelineCache,

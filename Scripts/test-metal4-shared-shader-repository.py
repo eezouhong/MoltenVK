@@ -647,6 +647,20 @@ def test_source_policy() -> None:
     assert "generation" in capture_state_body
     assert "active" in capture_state_body
 
+    begin_capture_start = pipeline_mm.index(
+        "VkResult MVKPipeline::beginShaderLibraryContributionCapture("
+    )
+    begin_capture_end = pipeline_mm.index(
+        "VkResult MVKPipeline::cancelShaderLibraryContributionCapture(",
+        begin_capture_start,
+    )
+    begin_capture_body = pipeline_mm[begin_capture_start:begin_capture_end]
+    assert "sourcePipelineCache->getDevice()->getShaderLibraryRepository()" in begin_capture_body
+    assert "VK_ERROR_FEATURE_NOT_PRESENT" in begin_capture_body
+    assert begin_capture_body.index("VK_ERROR_FEATURE_NOT_PRESENT") < begin_capture_body.index(
+        "_mvkPipelineShaderLibraryCaptureState ="
+    )
+
     pipeline_ctor_start = pipeline_mm.index("MVKPipeline::MVKPipeline(")
     pipeline_ctor_end = pipeline_mm.index("MVKPipeline::~MVKPipeline()", pipeline_ctor_start)
     pipeline_ctor_body = pipeline_mm[pipeline_ctor_start:pipeline_ctor_end]

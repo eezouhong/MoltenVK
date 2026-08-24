@@ -40,6 +40,12 @@
 class MVKCommandEncoder;
 class MVKPipelineCache;
 
+struct MVKPipelineShaderLibraryContribution {
+	MVKShaderModuleKey shaderModuleKey;
+	mvk::SPIRVToMSLConversionConfiguration shaderConfig;
+	MVKShaderLibrary* shaderLibrary = nullptr;
+};
+
 struct MVKShaderImplicitRezBinding {
 	uint32_t stages[kMVKShaderStageCount];
 };
@@ -172,6 +178,17 @@ public:
 	/** Returns the pipeline layout used by this pipeline. */
 	MVKPipelineLayout* getLayout() const { return _layout; }
 
+	/** Records one exact shader library used while constructing this pipeline. */
+	void recordShaderLibraryContribution(
+		MVKShaderModuleKey shaderModuleKey,
+		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+		MVKShaderLibrary* shaderLibrary);
+
+	/** Adds this pipeline's exact shader-library memberships to another cache view. */
+	VkResult adoptShaderLibrariesInto(
+		MVKPipelineCache* destinationPipelineCache,
+		uint32_t* pAdoptedShaderLibraryCount);
+
 	/** Returns whether the pipeline creation fail if a pipeline compile is required. */
 	bool shouldFailOnPipelineCompileRequired() {
 		return (getEnabledPipelineCreationCacheControlFeatures().pipelineCreationCacheControl &&
@@ -210,6 +227,7 @@ protected:
 	uint32_t _descriptorSetCount;
 	bool _stageUsesPushConstants[kMVKShaderStageCount];
 	bool _hasValidMTLPipelineStates = true;
+	std::vector<MVKPipelineShaderLibraryContribution> _shaderLibraryContributions;
 
 };
 
@@ -585,6 +603,12 @@ public:
 
 	/** Merges the contents of the specified number of pipeline caches into this cache. */
 	VkResult mergePipelineCaches(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches);
+
+	/** Adds one exact shader-library membership and marks this view dirty if newly added. */
+	bool adoptShaderLibraryMembership(
+		MVKShaderModuleKey shaderModuleKey,
+		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+		MVKShaderLibrary* shaderLibrary);
 
 #pragma mark Construction
 

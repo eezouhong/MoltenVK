@@ -303,6 +303,11 @@ public:
 	/** Adds this logical view's known bytes to a pipeline-cache snapshot. */
 	void accumulateMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) const;
 
+	/** Adds one exact library membership without compiling or merging caches. */
+	bool adoptShaderLibraryMembership(
+		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+		MVKShaderLibrary* shaderLibrary);
+
 	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner,
 						  MVKShaderModuleKey shaderModuleKey = {});
 

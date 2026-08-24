@@ -124,6 +124,20 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMV
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAdoptPipelineCacheShaderLibrariesMVK(
+	VkPipeline                                pipeline,
+	VkPipelineCache                           destinationPipelineCache,
+	uint32_t*                                 pAdoptedShaderLibraryCount) {
+
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = 0; }
+	if (!pipeline || !destinationPipelineCache) { return VK_ERROR_INITIALIZATION_FAILED; }
+	MVKPipeline* mvkPipeline = (MVKPipeline*)pipeline;
+	if (!mvkPipeline->hasValidMTLPipelineStates()) { return VK_ERROR_INITIALIZATION_FAILED; }
+	return mvkPipeline->adoptShaderLibrariesInto(
+		(MVKPipelineCache*)destinationPipelineCache,
+		pAdoptedShaderLibraryCount);
+}
+
 
 #pragma mark -
 #pragma mark mvk_deprecated_api.h
@@ -210,4 +224,3 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetWorkgroupSizeMVK(
     MVKShaderModule* mvkShaderModule = (MVKShaderModule*)shaderModule;
     mvkShaderModule->setWorkgroupSize(x, y, z);
 }
-

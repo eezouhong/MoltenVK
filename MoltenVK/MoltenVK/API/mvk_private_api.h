@@ -44,7 +44,7 @@ typedef unsigned long MTLArgumentBuffersTier;
  */
 
 
-#define MVK_PRIVATE_API_VERSION   46
+#define MVK_PRIVATE_API_VERSION   47
 
 
 #pragma mark -
@@ -402,6 +402,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignor
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkAdoptPipelineCacheShaderLibrariesMVK)(VkPipeline pipeline, VkPipelineCache destinationPipelineCache, uint32_t* pAdoptedShaderLibraryCount);
 
 
 #pragma mark -
@@ -483,6 +484,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
     VkDevice                                   device,
     MVKMetal4ShaderLibraryRepositoryStatistics* pStats,
     size_t*                                    pStatsSize);
+
+/**
+ * Adds the exact shader-library memberships used to create pipeline to the
+ * destination pipeline-cache view. Existing memberships and adoption into the
+ * pipeline's source cache are successful no-ops. No Pipeline is recompiled.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL vkAdoptPipelineCacheShaderLibrariesMVK(
+    VkPipeline                                pipeline,
+    VkPipelineCache                           destinationPipelineCache,
+    uint32_t*                                 pAdoptedShaderLibraryCount);
 
 
 #endif // VK_NO_PROTOTYPES

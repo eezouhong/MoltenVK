@@ -2343,7 +2343,50 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 
 MVKPipeline::~MVKPipeline() {
+	for (auto& contribution : _shaderLibraryContributions) {
+		if (contribution.shaderLibrary) { contribution.shaderLibrary->release(); }
+	}
 	_layout->release();
+}
+
+void MVKPipeline::recordShaderLibraryContribution(
+	MVKShaderModuleKey shaderModuleKey,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	if (!shaderLibrary) { return; }
+	for (const auto& contribution : _shaderLibraryContributions) {
+		if (contribution.shaderModuleKey == shaderModuleKey &&
+			contribution.shaderConfig.matches(shaderConfig)) {
+			return;
+		}
+	}
+	shaderLibrary->retain();
+	_shaderLibraryContributions.push_back({ shaderModuleKey, shaderConfig, shaderLibrary });
+}
+
+VkResult MVKPipeline::adoptShaderLibrariesInto(
+	MVKPipelineCache* destinationPipelineCache,
+	uint32_t* pAdoptedShaderLibraryCount) {
+
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = 0; }
+	if (!destinationPipelineCache ||
+		destinationPipelineCache->getDevice() != getDevice()) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	if (destinationPipelineCache == _pipelineCache) { return VK_SUCCESS; }
+
+	uint32_t adoptedCount = 0;
+	for (const auto& contribution : _shaderLibraryContributions) {
+		if (destinationPipelineCache->adoptShaderLibraryMembership(
+				contribution.shaderModuleKey,
+				contribution.shaderConfig,
+				contribution.shaderLibrary)) {
+			adoptedCount++;
+		}
+	}
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = adoptedCount; }
+	return VK_SUCCESS;
 }
 
 #pragma mark -
@@ -4659,9 +4702,24 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 	bool wasAdded = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
 	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	if (shLib) {
+		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
+	}
 	if (wasAdded) { markDirty(); }
 	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
 	return shLib;
+}
+
+bool MVKPipelineCache::adoptShaderLibraryMembership(
+	MVKShaderModuleKey shaderModuleKey,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	lock_guard<mutex> lock(_shaderCacheLock);
+	MVKShaderLibraryCache* shaderCache = getShaderLibraryCache(shaderModuleKey);
+	bool adopted = shaderCache->adoptShaderLibraryMembership(shaderConfig, shaderLibrary);
+	if (adopted) { markDirty(); }
+	return adopted;
 }
 
 // Returns a shader library cache for the specified shader module key, creating it if necessary.

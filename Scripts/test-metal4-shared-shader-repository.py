@@ -17,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEVICE_H = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDevice.h"
 DEVICE_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm"
 PIPELINE_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm"
+PIPELINE_H = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h"
 SHADER_H = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h"
 SHADER_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm"
 PRIVATE_API_H = ROOT / "MoltenVK/MoltenVK/API/mvk_private_api.h"
+API_MM = ROOT / "MoltenVK/MoltenVK/Vulkan/mvk_api.mm"
 CONFIG_MEMBERS = ROOT / "MoltenVK/MoltenVK/Utility/MVKConfigMembers.def"
 ENVIRONMENT_H = ROOT / "MoltenVK/MoltenVK/Utility/MVKEnvironment.h"
 
@@ -67,6 +69,31 @@ class Entry:
         return True
 
 
+@dataclass(frozen=True)
+class PipelineContribution:
+    shader_module_key: str
+    shader_config: str
+    shader_library: str
+
+
+class LogicalCacheView:
+    def __init__(self) -> None:
+        self.memberships: set[tuple[str, str, str]] = set()
+
+    def adopt_pipeline(self, contributions: list[PipelineContribution]) -> int:
+        adopted = 0
+        for contribution in contributions:
+            membership = (
+                contribution.shader_module_key,
+                contribution.shader_config,
+                contribution.shader_library,
+            )
+            if membership not in self.memberships:
+                self.memberships.add(membership)
+                adopted += 1
+        return adopted
+
+
 def test_reference_and_residency_model() -> None:
     entry = Entry()
     entry.acquire()  # global cache membership
@@ -101,13 +128,37 @@ def test_reference_and_residency_model() -> None:
     assert not entry.resident_counted
 
 
+def test_exact_pipeline_contribution_adoption_model() -> None:
+    destination = LogicalCacheView()
+    pipeline_a = [
+        PipelineContribution("vertex-a", "config-1", "library-1"),
+        PipelineContribution("fragment-a", "config-2", "library-2"),
+        PipelineContribution("vertex-a", "config-1", "library-1"),
+    ]
+    unrelated_pipeline = PipelineContribution("compute-b", "config-3", "library-3")
+
+    # Adoption adds only the exact libraries that contributed to this Pipeline.
+    assert destination.adopt_pipeline(pipeline_a) == 2
+    assert (
+        unrelated_pipeline.shader_module_key,
+        unrelated_pipeline.shader_config,
+        unrelated_pipeline.shader_library,
+    ) not in destination.memberships
+
+    # Re-adoption is a dedupe hit, not another logical membership or count.
+    assert destination.adopt_pipeline(pipeline_a) == 0
+    assert len(destination.memberships) == 2
+
+
 def test_source_policy() -> None:
     device_h = DEVICE_H.read_text()
     device_mm = DEVICE_MM.read_text()
     pipeline_mm = PIPELINE_MM.read_text()
+    pipeline_h = PIPELINE_H.read_text()
     shader_h = SHADER_H.read_text()
     shader_mm = SHADER_MM.read_text()
     private_api_h = PRIVATE_API_H.read_text()
+    api_mm = API_MM.read_text()
     config_members = CONFIG_MEMBERS.read_text()
     environment_h = ENVIRONMENT_H.read_text()
 
@@ -449,9 +500,90 @@ def test_source_policy() -> None:
         PIPELINE_MM,
     )
 
+    # A completed Global-cache Pipeline can publish only the exact shader
+    # libraries that contributed to it into one destination cache view. This
+    # must be a logical-membership operation: never a whole-cache merge and
+    # never a second native Pipeline creation.
+    require(
+        private_api_h,
+        "PFN_vkAdoptPipelineCacheShaderLibrariesMVK",
+        PRIVATE_API_H,
+    )
+    require(
+        private_api_h,
+        "vkAdoptPipelineCacheShaderLibrariesMVK(",
+        PRIVATE_API_H,
+    )
+    require(private_api_h, "#define MVK_PRIVATE_API_VERSION   47", PRIVATE_API_H)
+    require(private_api_h, "VkPipeline                                pipeline", PRIVATE_API_H)
+    require(private_api_h, "VkPipelineCache                           destinationPipelineCache", PRIVATE_API_H)
+    require(private_api_h, "uint32_t*                                 pAdoptedShaderLibraryCount", PRIVATE_API_H)
+
+    require(
+        api_mm,
+        "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAdoptPipelineCacheShaderLibrariesMVK(",
+        API_MM,
+    )
+    api_adoption_start = api_mm.index(
+        "MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAdoptPipelineCacheShaderLibrariesMVK("
+    )
+    api_adoption_body = api_mm[api_adoption_start : api_adoption_start + 1800]
+    assert "adoptShaderLibrariesInto" in api_adoption_body
+    assert "destinationPipelineCache" in api_adoption_body
+
+    require(pipeline_h, "struct MVKPipelineShaderLibraryContribution", PIPELINE_H)
+    require(pipeline_h, "MVKShaderModuleKey shaderModuleKey", PIPELINE_H)
+    require(
+        pipeline_h,
+        "SPIRVToMSLConversionConfiguration shaderConfig",
+        PIPELINE_H,
+    )
+    require(pipeline_h, "MVKShaderLibrary* shaderLibrary", PIPELINE_H)
+    require(pipeline_h, "recordShaderLibraryContribution(", PIPELINE_H)
+    require(pipeline_h, "adoptShaderLibrariesInto(", PIPELINE_H)
+    require(pipeline_h, "_shaderLibraryContributions", PIPELINE_H)
+    require(pipeline_h, "adoptShaderLibraryMembership(", PIPELINE_H)
+    require(shader_h, "adoptShaderLibraryMembership(", SHADER_H)
+
+    require(
+        pipeline_mm,
+        "pipeline->recordShaderLibraryContribution(",
+        PIPELINE_MM,
+    )
+    record_start = pipeline_mm.index("pipeline->recordShaderLibraryContribution(")
+    record_body = pipeline_mm[record_start : record_start + 500]
+    assert "shaderModule->getKey()" in record_body
+    assert "*pContext" in record_body
+    assert "shLib" in record_body
+
+    pipeline_adoption_start = pipeline_mm.index(
+        "VkResult MVKPipeline::adoptShaderLibrariesInto("
+    )
+    pipeline_adoption_body = pipeline_mm[
+        pipeline_adoption_start : pipeline_adoption_start + 2200
+    ]
+    assert "_shaderLibraryContributions" in pipeline_adoption_body
+    assert "destinationPipelineCache->adoptShaderLibraryMembership(" in pipeline_adoption_body
+    assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
+    assert "mergePipelineCaches" not in pipeline_adoption_body
+    assert "createPipelines" not in pipeline_adoption_body
+    assert "vkCreateGraphicsPipelines" not in pipeline_adoption_body
+    assert "vkCreateComputePipelines" not in pipeline_adoption_body
+
+    cache_adoption_start = pipeline_mm.index(
+        "bool MVKPipelineCache::adoptShaderLibraryMembership("
+    )
+    cache_adoption_body = pipeline_mm[cache_adoption_start : cache_adoption_start + 1600]
+    assert "getShaderLibraryCache(shaderModuleKey)" in cache_adoption_body
+    assert "adoptShaderLibraryMembership(" in cache_adoption_body
+    assert "markDirty();" in cache_adoption_body
+    assert "mergePipelineCaches" not in cache_adoption_body
+    assert "createPipelines" not in cache_adoption_body
+
 
 def main() -> None:
     test_reference_and_residency_model()
+    test_exact_pipeline_contribution_adoption_model()
     test_source_policy()
     print("metal4 shared shader-library repository policy: PASS")
 

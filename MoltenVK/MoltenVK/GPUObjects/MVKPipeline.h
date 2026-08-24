@@ -43,6 +43,7 @@ class MVKPipelineCache;
 struct MVKPipelineShaderLibraryContribution {
 	MVKShaderModuleKey shaderModuleKey;
 	mvk::SPIRVToMSLConversionConfiguration shaderConfig;
+	// Short-lived raw reference. The source cache owns it through immediate adoption.
 	MVKShaderLibrary* shaderLibrary = nullptr;
 };
 

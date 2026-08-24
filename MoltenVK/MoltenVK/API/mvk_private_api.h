@@ -489,6 +489,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
  * Adds the exact shader-library memberships used to create pipeline to the
  * destination pipeline-cache view. Existing memberships and adoption into the
  * pipeline's source cache are successful no-ops. No Pipeline is recompiled.
+ *
+ * This function must be called immediately after successful Pipeline creation,
+ * while the source VkPipelineCache passed to that creation call remains alive.
+ * The recorded source-library references are consumed by this call.
  */
 VKAPI_ATTR VkResult VKAPI_CALL vkAdoptPipelineCacheShaderLibrariesMVK(
     VkPipeline                                pipeline,

@@ -565,10 +565,30 @@ def test_source_policy() -> None:
     assert "_shaderLibraryContributions" in pipeline_adoption_body
     assert "destinationPipelineCache->adoptShaderLibraryMembership(" in pipeline_adoption_body
     assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
+    assert "_shaderLibraryContributions.clear();" in pipeline_adoption_body
+    assert "destinationPipelineCache == _pipelineCache" not in pipeline_adoption_body
     assert "mergePipelineCaches" not in pipeline_adoption_body
     assert "createPipelines" not in pipeline_adoption_body
     assert "vkCreateGraphicsPipelines" not in pipeline_adoption_body
     assert "vkCreateComputePipelines" not in pipeline_adoption_body
+
+    record_method_start = pipeline_mm.index(
+        "void MVKPipeline::recordShaderLibraryContribution("
+    )
+    record_method_end = pipeline_mm.index(
+        "VkResult MVKPipeline::adoptShaderLibrariesInto(", record_method_start
+    )
+    record_method_body = pipeline_mm[record_method_start:record_method_end]
+    assert "shaderLibrary->retain();" not in record_method_body
+
+    pipeline_destructor_start = pipeline_mm.index("MVKPipeline::~MVKPipeline()")
+    pipeline_destructor_end = pipeline_mm.index(
+        "void MVKPipeline::recordShaderLibraryContribution(", pipeline_destructor_start
+    )
+    pipeline_destructor_body = pipeline_mm[
+        pipeline_destructor_start:pipeline_destructor_end
+    ]
+    assert "contribution.shaderLibrary->release();" not in pipeline_destructor_body
 
     cache_adoption_start = pipeline_mm.index(
         "bool MVKPipelineCache::adoptShaderLibraryMembership("

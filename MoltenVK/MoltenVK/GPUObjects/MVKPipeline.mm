@@ -2343,9 +2343,6 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 
 MVKPipeline::~MVKPipeline() {
-	for (auto& contribution : _shaderLibraryContributions) {
-		if (contribution.shaderLibrary) { contribution.shaderLibrary->release(); }
-	}
 	_layout->release();
 }
 
@@ -2361,7 +2358,6 @@ void MVKPipeline::recordShaderLibraryContribution(
 			return;
 		}
 	}
-	shaderLibrary->retain();
 	_shaderLibraryContributions.push_back({ shaderModuleKey, shaderConfig, shaderLibrary });
 }
 
@@ -2374,7 +2370,6 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 		destinationPipelineCache->getDevice() != getDevice()) {
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
-	if (destinationPipelineCache == _pipelineCache) { return VK_SUCCESS; }
 
 	uint32_t adoptedCount = 0;
 	for (const auto& contribution : _shaderLibraryContributions) {
@@ -2385,6 +2380,7 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 			adoptedCount++;
 		}
 	}
+	_shaderLibraryContributions.clear();
 	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = adoptedCount; }
 	return VK_SUCCESS;
 }

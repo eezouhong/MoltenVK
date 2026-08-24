@@ -2436,6 +2436,8 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 		destinationPipelineCache->getDevice() != getDevice() ||
 		!hasValidMTLPipelineStates()) {
 		result = VK_ERROR_INITIALIZATION_FAILED;
+	} else if (!getDevice()->getShaderLibraryRepository()) {
+		result = VK_ERROR_FEATURE_NOT_PRESENT;
 	} else {
 		for (const auto& contribution : contributions) {
 			if (destinationPipelineCache->adoptShaderLibraryMembership(

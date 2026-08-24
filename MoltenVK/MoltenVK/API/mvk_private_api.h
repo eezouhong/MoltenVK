@@ -515,6 +515,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCancelPipelineCacheShaderLibraryCaptureMVK(
  * The begin/create/cancel sequence must create one Pipeline (count == 1). After
  * the post-create gate, call either adopt or discard exactly once. Both consume
  * and release all recorded source-library references, including on failure.
+ * Adoption requires the shared shader-library repository. If it is disabled,
+ * this returns VK_ERROR_FEATURE_NOT_PRESENT after consuming the contributions;
+ * the already-created source Pipeline remains valid.
  */
 VKAPI_ATTR VkResult VKAPI_CALL vkAdoptPipelineCacheShaderLibrariesMVK(
     VkPipeline                                pipeline,

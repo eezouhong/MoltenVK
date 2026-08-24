@@ -663,6 +663,8 @@ def test_source_policy() -> None:
     assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
     assert "swap(_shaderLibraryContributions)" in pipeline_adoption_body
     assert "releaseShaderLibraryContributions" in pipeline_adoption_body
+    assert "getShaderLibraryRepository()" in pipeline_adoption_body
+    assert "VK_ERROR_FEATURE_NOT_PRESENT" in pipeline_adoption_body
     assert "mergePipelineCaches" not in pipeline_adoption_body
     assert "createPipelines" not in pipeline_adoption_body
     assert "vkCreateGraphicsPipelines" not in pipeline_adoption_body
@@ -712,6 +714,15 @@ def test_source_policy() -> None:
     assert "markDirty();" in cache_adoption_body
     assert "mergePipelineCaches" not in cache_adoption_body
     assert "createPipelines" not in cache_adoption_body
+
+    shader_cache_adoption_start = shader_mm.index(
+        "bool MVKShaderLibraryCache::adoptShaderLibraryMembership("
+    )
+    shader_cache_adoption_body = shader_mm[
+        shader_cache_adoption_start : shader_cache_adoption_start + 1400
+    ]
+    assert "if (!_repository) { return false; }" in shader_cache_adoption_body
+    assert "new MVKShaderLibrary(*shaderLibrary)" not in shader_cache_adoption_body
 
 
 def main() -> None:

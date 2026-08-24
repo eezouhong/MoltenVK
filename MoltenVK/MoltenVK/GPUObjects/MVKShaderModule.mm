@@ -1386,21 +1386,16 @@ bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
 	MVKShaderLibrary* shaderLibrary) {
 
 	if (!shaderLibrary) { return false; }
+	if (!_repository) { return false; }
 
 	for (auto& libraryEntry : _shaderLibraries) {
 		if (libraryEntry.first.matches(shaderConfig)) { return false; }
 	}
 
 	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
-	if (_repository) {
-		MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
-		if (!shared) { return false; }
-		_shaderLibraries.emplace_back(alignedConfig, shared);
-	} else {
-		MVKShaderLibrary* copy = new MVKShaderLibrary(*shaderLibrary);
-		copy->_owner = _owner;
-		_shaderLibraries.emplace_back(alignedConfig, copy);
-	}
+	MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
+	if (!shared) { return false; }
+	_shaderLibraries.emplace_back(alignedConfig, shared);
 	return true;
 }
 

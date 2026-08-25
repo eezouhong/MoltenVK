@@ -347,6 +347,16 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 
+bool MVKCmdDraw::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding();
+}
+
+bool MVKCmdDraw::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->draw(_firstVertex, _vertexCount, _firstInstance, _instanceCount);
+}
+
+
 #pragma mark -
 #pragma mark MVKCmdDrawIndexed
 

@@ -301,12 +301,71 @@ void MVKCommandBuffer::addCommand(MVKCommand* command) {
     if ( !_head ) { _head = command; }
 }
 
+bool MVKCommandBuffer::supportsMetal4Encoding() const {
+	// Secondary command inheritance, prefilling, and simultaneous-use require
+	// additional materialization ownership that is outside the first usable
+	// transfer slice. A command count without a retained list means immediate or
+	// deferred legacy prefilling already consumed the source command stream.
+	if (_isSecondary ||
+		_supportsConcurrentExecution ||
+		_prefilledMTLCmdBuffer ||
+		(_commandCount > 0 && !_head)) {
+		return false;
+	}
+
+	for (MVKCommand* command = _head; command; command = command->_next) {
+		if (!command->supportsMetal4Encoding()) { return false; }
+	}
+	return true;
+}
+
+bool MVKCommandBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	for (MVKCommand* command = _head; command; command = command->_next) {
+		if (!command->prepareMetal4Encoding(cmdEncoder)) { return false; }
+	}
+	return true;
+}
+
+bool MVKCommandBuffer::beginMetal4Execution(bool* previousWasExecuted) {
+	if (!previousWasExecuted) { return false; }
+	if (_isSecondary) {
+		setConfigurationResult(reportError(VK_NOT_READY, "Secondary command buffers may not be submitted directly to a queue."));
+		return false;
+	}
+	if ( !_isReusable && _wasExecuted ) {
+		setConfigurationResult(reportError(VK_NOT_READY, "Command buffer does not support execution more that once."));
+		return false;
+	}
+	if ( !_supportsConcurrentExecution && _isExecutingNonConcurrently.test_and_set()) {
+		setConfigurationResult(reportError(VK_NOT_READY, "Command buffer does not support concurrent execution."));
+		return false;
+	}
+
+	*previousWasExecuted = _wasExecuted;
+	_wasExecuted = true;
+	return wasConfigurationSuccessful();
+}
+
+void MVKCommandBuffer::endMetal4Execution(bool previousWasExecuted, bool committed) {
+	if (!committed) { _wasExecuted = previousWasExecuted; }
+	if ( !_supportsConcurrentExecution ) { _isExecutingNonConcurrently.clear(); }
+}
+
+bool MVKCommandBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	for (MVKCommand* command = _head; command; command = command->_next) {
+		if (!command->encodeMetal4(cmdEncoder)) { return false; }
+	}
+	return true;
+}
+
 void MVKCommandBuffer::submit(MVKQueueCommandBufferSubmission* cmdBuffSubmit,
 							  MVKCommandEncodingContext* pEncodingContext) {
 	if ( !canExecute() ) { return; }
 
 	if (_prefilledMTLCmdBuffer) {
-		cmdBuffSubmit->setActiveMTLCommandBuffer(_prefilledMTLCmdBuffer);
+		cmdBuffSubmit->setActiveMTLCommandBuffer(_prefilledMTLCmdBuffer, true);
 		clearPrefilledMTLCommandBuffer();
 	} else {
 		MVKCommandEncoder encoder(this);

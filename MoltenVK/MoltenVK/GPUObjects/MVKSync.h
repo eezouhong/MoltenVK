@@ -161,6 +161,17 @@ public:
 	 */
 	virtual void encodeSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t value) = 0;
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	/** Returns whether this semaphore can preserve its semantics on an MTL4 queue. */
+	virtual bool supportsMetal4QueueEncoding() { return false; }
+
+	/** Schedules the Vulkan wait before subsequent MTL4 work. */
+	virtual void encodeMetal4Wait(id<MTL4CommandQueue>, uint64_t) {}
+
+	/** Schedules the Vulkan signal after preceding MTL4 work. */
+	virtual void encodeMetal4Signal(id<MTL4CommandQueue>, uint64_t) {}
+#endif
+
 	/**
 	 * Begin a deferred signal operation.
 	 *
@@ -241,6 +252,11 @@ public:
 	uint64_t deferSignal() override;
 	void encodeDeferredSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t deferToken) override;
 	bool isUsingCommandEncoding() override { return true; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() override { return true; }
+	void encodeMetal4Wait(id<MTL4CommandQueue> queue, uint64_t value) override;
+	void encodeMetal4Signal(id<MTL4CommandQueue> queue, uint64_t value) override;
+#endif
 
 	MVKSemaphoreMTLEvent(MVKDevice* device,
 						 const VkSemaphoreCreateInfo* pCreateInfo,
@@ -267,6 +283,11 @@ public:
 	uint64_t deferSignal() override;
 	void encodeDeferredSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t) override;
 	bool isUsingCommandEncoding() override { return false; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() override { return true; }
+	void encodeMetal4Wait(id<MTL4CommandQueue> queue, uint64_t value) override;
+	void encodeMetal4Signal(id<MTL4CommandQueue> queue, uint64_t value) override;
+#endif
 
 	MVKSemaphoreEmulated(MVKDevice* device,
 						 const VkSemaphoreCreateInfo* pCreateInfo,
@@ -324,6 +345,11 @@ public:
 	void encodeWait(id<MTLCommandBuffer> mtlCmdBuff, uint64_t value) override;
 	void encodeSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t value) override;
 	bool isUsingCommandEncoding() override { return true; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() override { return true; }
+	void encodeMetal4Wait(id<MTL4CommandQueue> queue, uint64_t value) override;
+	void encodeMetal4Signal(id<MTL4CommandQueue> queue, uint64_t value) override;
+#endif
 	id<MTLSharedEvent> getMTLSharedEvent() override { return _mtlEvent; };
 
 	uint64_t getCounterValue() override { return _mtlEvent.signaledValue; }

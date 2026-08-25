@@ -45,6 +45,44 @@ static inline MTLSize mvkClampMTLSize(MTLSize size, MTLOrigin origin, MTLSize ma
 #pragma mark -
 #pragma mark MVKCmdCopyImage
 
+static bool mvkMetal4CopyImageLayoutSupported(VkImageLayout layout) {
+	return layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+		layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+		layout == VK_IMAGE_LAYOUT_GENERAL;
+}
+
+template <typename Regions>
+static bool supportsMetal4CopyImage(MVKImage* srcImage,
+									VkImageLayout srcLayout,
+									MVKImage* dstImage,
+									VkImageLayout dstLayout,
+									const Regions& regions) {
+	if (!srcImage || !dstImage || regions.empty() ||
+		!mvkMetal4CopyImageLayoutSupported(srcLayout) ||
+		!mvkMetal4CopyImageLayoutSupported(dstLayout) ||
+		srcImage->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		dstImage->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		srcImage->getIsCompressed() || dstImage->getIsCompressed() ||
+		srcImage->needsSwizzle() || dstImage->needsSwizzle()) {
+		return false;
+	}
+
+	for (const auto& region : regions) {
+		if (region.srcSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+			region.dstSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+			region.srcSubresource.layerCount != region.dstSubresource.layerCount) {
+			return false;
+		}
+		uint8_t srcPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.srcSubresource.aspectMask);
+		uint8_t dstPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.dstSubresource.aspectMask);
+		if (srcImage->getMTLPixelFormat(srcPlane) != dstImage->getMTLPixelFormat(dstPlane) ||
+			!srcImage->getMTLTexture(srcPlane) || !dstImage->getMTLTexture(dstPlane)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 template <size_t N>
 VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
 										VkImage srcImage,
@@ -74,6 +112,8 @@ VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
         
         _vkImageCopies.emplace_back(std::move(vkIR2));
 	}
+	_supportsMetal4Encoding = supportsMetal4CopyImage(
+		_srcImage, _srcLayout, _dstImage, _dstLayout, _vkImageCopies);
     
 	return VK_SUCCESS;
 }
@@ -97,8 +137,29 @@ VkResult MVKCmdCopyImage<N>::setContent(MVKCommandBuffer* cmdBuff,
         
         _vkImageCopies.push_back(vkIR);
     }
+	_supportsMetal4Encoding = supportsMetal4CopyImage(
+		_srcImage, _srcLayout, _dstImage, _dstLayout, _vkImageCopies);
     
     return VK_SUCCESS;
+}
+
+template <size_t N>
+bool MVKCmdCopyImage<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useImage(_srcImage) && cmdEncoder->useImage(_dstImage);
+}
+
+template <size_t N>
+bool MVKCmdCopyImage<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	for (const auto& region : _vkImageCopies) {
+		uint8_t srcPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.srcSubresource.aspectMask);
+		uint8_t dstPlane = MVKImage::getPlaneFromVkImageAspectFlags(region.dstSubresource.aspectMask);
+		if (!cmdEncoder->copyImage(_srcImage, srcPlane, region, _dstImage, dstPlane)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static inline MTLPixelFormat getDepthStencilAspectFormat(const MTLPixelFormat format, const VkImageAspectFlags aspectMask) {
@@ -966,6 +1027,24 @@ template class MVKCmdResolveImage<4>;
 #pragma mark -
 #pragma mark MVKCmdCopyBuffer
 
+template <typename Regions>
+static bool supportsMetal4CopyBuffer(MVKCommandBuffer* cmdBuff,
+										 const Regions& regions) {
+	if (regions.empty()) { return false; }
+	VkDeviceSize alignment = std::max<VkDeviceSize>(
+		cmdBuff->getMetalFeatures().mtlCopyBufferAlignment,
+		1);
+	for (const auto& region : regions) {
+		if (!region.size ||
+			(region.srcOffset % alignment) != 0 ||
+			(region.dstOffset % alignment) != 0 ||
+			(region.size % alignment) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 // Matches shader struct.
 typedef struct {
 	uint32_t srcOffset;
@@ -993,6 +1072,7 @@ VkResult MVKCmdCopyBuffer<N>::setContent(MVKCommandBuffer* cmdBuff,
         };
 		_bufferCopyRegions.emplace_back(std::move(region2));
 	}
+	_supportsMetal4Encoding = supportsMetal4CopyBuffer(cmdBuff, _bufferCopyRegions);
 
 	return VK_SUCCESS;
 }
@@ -1009,6 +1089,7 @@ VkResult MVKCmdCopyBuffer<N>::setContent(MVKCommandBuffer* cmdBuff,
     for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
         _bufferCopyRegions.push_back(pCopyBufferInfo->pRegions[i]);
     }
+	_supportsMetal4Encoding = supportsMetal4CopyBuffer(cmdBuff, _bufferCopyRegions);
 
     return VK_SUCCESS;
 }
@@ -1054,6 +1135,27 @@ void MVKCmdCopyBuffer<N>::encode(MVKCommandEncoder* cmdEncoder) {
 								  size: cpyRgn.size];
 		}
 	}
+}
+
+template <size_t N>
+bool MVKCmdCopyBuffer<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding && _srcBuffer && _dstBuffer &&
+		cmdEncoder->useBuffer(_srcBuffer) && cmdEncoder->useBuffer(_dstBuffer);
+}
+
+template <size_t N>
+bool MVKCmdCopyBuffer<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding || !_srcBuffer || !_dstBuffer) { return false; }
+	for (const auto& region : _bufferCopyRegions) {
+		if (!cmdEncoder->copyBuffer(_srcBuffer,
+									 region.srcOffset,
+									 _dstBuffer,
+									 region.dstOffset,
+									 region.size)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 template class MVKCmdCopyBuffer<1>;
@@ -1710,6 +1812,10 @@ VkResult MVKCmdFillBuffer::setContent(MVKCommandBuffer* cmdBuff,
 		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdFillBuffer(): Buffer fill size must fit into a 32-bit unsigned integer. Fill size %llu is too large.", wdCnt);
 	}
 
+	uint8_t fillByte = static_cast<uint8_t>(_dataValue);
+	uint32_t repeatedByte = static_cast<uint32_t>(fillByte) * 0x01010101u;
+	_supportsMetal4Encoding = _wordCount > 0 && _dataValue == repeatedByte;
+
 	return VK_SUCCESS;
 }
 
@@ -1752,6 +1858,18 @@ void MVKCmdFillBuffer::encode(MVKCommandEncoder* cmdEncoder) {
 	}
 
 	[mtlComputeEnc popDebugGroup];
+}
+
+bool MVKCmdFillBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding && _dstBuffer && cmdEncoder->useBuffer(_dstBuffer);
+}
+
+bool MVKCmdFillBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding || !_dstBuffer) { return false; }
+	return cmdEncoder->fillBuffer(_dstBuffer,
+							   _dstOffset,
+							   static_cast<VkDeviceSize>(_wordCount) * sizeof(_dataValue),
+							   static_cast<uint8_t>(_dataValue));
 }
 
 

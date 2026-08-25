@@ -119,6 +119,27 @@ public:
 	/** Adds the specified execution command at the end of this command buffer. */
 	void addCommand(MVKCommand* command);
 
+	/**
+	 * Returns whether the complete retained command stream can be materialized
+	 * by the current Metal 4 backend without producing partial Vulkan effects.
+	 */
+	bool supportsMetal4Encoding() const;
+
+	/** Resolves every Metal resource used by the retained command stream. */
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder);
+
+	/**
+	 * Claims this command buffer for one host-side materialization. The previous
+	 * execution state is returned so a pre-commit failure can be rolled back.
+	 */
+	bool beginMetal4Execution(bool* previousWasExecuted);
+
+	/** Releases the host-side claim, preserving execution only after commit. */
+	void endMetal4Execution(bool previousWasExecuted, bool committed);
+
+	/** Materializes the previously preflighted command stream. */
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder);
+
 	/** Returns the number of commands currently in this command buffer. */
 	uint32_t getCommandCount() { return _commandCount; }
 

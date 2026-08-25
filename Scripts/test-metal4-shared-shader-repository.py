@@ -275,7 +275,9 @@ def test_source_policy() -> None:
     require(shader_h, "static MVKShaderLibraryRepository* create(MVKDevice* device);", SHADER_H)
     require(shader_mm, "getSharedShaderLibraryTrimHighWater", SHADER_MM)
     require(shader_h, "size_t _residentTrimHighWater = 0;", SHADER_H)
-    require(shader_mm, "Metal 4 shared shader-library repository summary:", SHADER_MM)
+    assert "Metal 4 shared shader-library repository enabled:" not in shader_mm
+    assert "Metal 4 shared shader-library resident limit:" not in shader_mm
+    assert "Metal 4 shared shader-library repository summary:" not in shader_mm
 
     require(private_api_h, "MVKPipelineCacheMemoryStatistics", PRIVATE_API_H)
     require(private_api_h, "MVKMetal4ShaderLibraryRepositoryStatistics", PRIVATE_API_H)

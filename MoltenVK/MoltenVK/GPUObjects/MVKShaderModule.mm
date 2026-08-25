@@ -473,6 +473,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 	if (activeRepositoryUse) {
 		uint32_t priorUseCount = _activeUseCount.fetch_sub(1, memory_order_acq_rel);
 		assert(priorUseCount > 0);
+		(void)priorUseCount;
 	}
 	// Candidate selection and Metal function production are complete. Any
 	// bounded resident-budget work happens outside the per-library lock.
@@ -829,28 +830,14 @@ MVKShaderLibraryRepository::MVKShaderLibraryRepository(
 	size_t residentLimit) :
 	MVKVulkanAPIDeviceObject(device),
 	_residentLimit(residentLimit),
-	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {
-	if (_residentLimit == 0) {
-		reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-					  "Metal 4 shared shader-library repository enabled: deduplication only.");
-	} else {
-		reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-					  "Metal 4 shared shader-library resident limit: %zu (trim high-water: %zu).",
-					  _residentLimit,
-					  _residentTrimHighWater);
-	}
-}
+	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {}
 
 MVKShaderLibraryRepository::~MVKShaderLibraryRepository() {
 	vector<MVKShaderLibrary*> libraries;
-	size_t remainingCanonicalEntries = 0;
-	uint64_t remainingMemberships = 0;
 	{
 		lock_guard<mutex> lock(_lock);
 		for (auto& moduleEntries : _entries) {
 			for (Entry& entry : moduleEntries.second) {
-				remainingCanonicalEntries++;
-				remainingMemberships += entry.membershipCount;
 				entry.library->_repositoryTracked.store(false, memory_order_release);
 				untrackResident(entry.library);
 				libraries.push_back(entry.library);
@@ -858,20 +845,6 @@ MVKShaderLibraryRepository::~MVKShaderLibraryRepository() {
 		}
 		_entries.clear();
 	}
-
-	reportMessage(
-		MVK_CONFIG_LOG_LEVEL_INFO,
-		"Metal 4 shared shader-library repository summary: published=%llu, dedupeHits=%llu, raceLosers=%llu, residentPeak=%zu, residentEvictions=%llu, residentAdoptions=%llu, rehydrates=%llu, membershipPeak=%llu, remainingCanonical=%zu, remainingMemberships=%llu.",
-		static_cast<unsigned long long>(_canonicalPublishCount.load(memory_order_relaxed)),
-		static_cast<unsigned long long>(_dedupeHitCount.load(memory_order_relaxed)),
-		static_cast<unsigned long long>(_raceLoserCount.load(memory_order_relaxed)),
-		_residentPeakCount.load(memory_order_relaxed),
-		static_cast<unsigned long long>(_residentEvictionCount.load(memory_order_relaxed)),
-		static_cast<unsigned long long>(_residentAdoptionCount.load(memory_order_relaxed)),
-		static_cast<unsigned long long>(_rehydrateCount.load(memory_order_relaxed)),
-		static_cast<unsigned long long>(_logicalMembershipPeak.load(memory_order_relaxed)),
-		remainingCanonicalEntries,
-		static_cast<unsigned long long>(remainingMemberships));
 
 	// Release only the repository ownership references. Valid Vulkan object
 	// lifetime requires all pipeline-cache membership references to be gone first.
@@ -957,6 +930,7 @@ void MVKShaderLibraryRepository::untrackResident(MVKShaderLibrary* library) {
 			expected, false, memory_order_acq_rel)) {
 		size_t priorCount = _residentEntryCount.fetch_sub(1, memory_order_acq_rel);
 		assert(priorCount > 0);
+		(void)priorCount;
 	}
 }
 
@@ -1009,6 +983,7 @@ void MVKShaderLibraryRepository::libraryBecameCold(
 			expected, false, memory_order_acq_rel)) {
 		size_t priorCount = _residentEntryCount.fetch_sub(1, memory_order_acq_rel);
 		assert(priorCount > 0);
+		(void)priorCount;
 		_residentEvictionCount.fetch_add(1, memory_order_relaxed);
 		_evictedUncompressedMSLBytes.fetch_add(
 			evictedUncompressedMSLBytes,
@@ -1237,6 +1212,7 @@ void MVKShaderLibraryRepository::release(
 	uint64_t priorMembershipCount =
 		_logicalMembershipCount.fetch_sub(1, memory_order_acq_rel);
 	assert(priorMembershipCount > 0);
+	(void)priorMembershipCount;
 
 	// Release references only after the exact logical membership was found.
 	// A mismatch must not underflow or destroy a canonical physical entry.

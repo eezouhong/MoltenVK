@@ -86,6 +86,8 @@ MVK_CONFIG_MEMBER(useMetalPrivateAPI,                     VkBool32,             
 MVK_CONFIG_MEMBER_STRING(shaderDumpDir,                   char*,                                    SHADER_DUMP_DIR)
 MVK_CONFIG_MEMBER(shaderLogEstimatedGLSL,                 VkBool32,                                 SHADER_LOG_ESTIMATED_GLSL)
 MVK_CONFIG_MEMBER(liveCheckAllResources,                  VkBool32,                                 LIVE_CHECK_ALL_RESOURCES)
+MVK_CONFIG_MEMBER(metal4SharedShaderLibraryRepositoryEnabled, VkBool32,                              METAL4_SHARED_SHADER_LIBRARY_REPOSITORY_ENABLED)
+MVK_CONFIG_MEMBER(metal4SharedShaderLibraryResidentLimit, uint32_t,                                  METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT)
 
 #undef MVK_CONFIG_MEMBER
 #undef MVK_CONFIG_MEMBER_STRING

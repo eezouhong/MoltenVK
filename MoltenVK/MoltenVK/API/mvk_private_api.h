@@ -44,7 +44,7 @@ typedef unsigned long MTLArgumentBuffersTier;
  */
 
 
-#define MVK_PRIVATE_API_VERSION   43
+#define MVK_PRIVATE_API_VERSION   47
 
 
 #pragma mark -
@@ -247,6 +247,8 @@ typedef struct {
 	const char* shaderDumpDir;                                                 /**< MVK_CONFIG_SHADER_DUMP_DIR */
 	VkBool32 shaderLogEstimatedGLSL;                                           /**< MVK_CONFIG_SHADER_LOG_ESTIMATED_GLSL */
 	VkBool32 liveCheckAllResources;                                            /**< MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES */
+	VkBool32 metal4SharedShaderLibraryRepositoryEnabled;                       /**< MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_REPOSITORY_ENABLED */
+	uint32_t metal4SharedShaderLibraryResidentLimit;                           /**< MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT */
 } MVKConfiguration;
 
 // Legacy support for renamed struct elements.
@@ -328,11 +330,85 @@ typedef struct {
 } MVKPerformanceStatistics;
 
 
+/**
+ * Logical memory represented by one VkPipelineCache view.
+ *
+ * The MSL byte counts are exact for MoltenVK-owned serialized source payloads.
+ * estimatedViewHostBytes is a lower-bound estimate for C++ view/index storage and
+ * deliberately excludes shared MVKShaderLibrary physical payloads and Metal driver
+ * allocations.
+ */
+typedef struct {
+    VkBool32 available;
+    uint64_t shaderModuleCacheCount;
+    uint64_t logicalShaderLibraryCount;
+    uint64_t logicalResidentShaderLibraryCount;
+    uint64_t specializationVariantCount;
+    uint64_t compressedMSLBytes;
+    uint64_t uncompressedMSLBytes;
+    uint64_t estimatedViewHostBytes;
+    uint64_t skippedShaderLibraryCount;
+} MVKPipelineCacheMemoryStatistics;
+
+/**
+ * Device-wide physical payload owned by the Metal 4 shared shader-library repository.
+ *
+ * compressedMSLBytes and uncompressedMSLBytes are exact MoltenVK-owned source
+ * payload counts. residentUncompressedMSLBytes is a workload-size proxy for
+ * resident MTLLibrary payloads, not the Metal driver's allocation size. Metal does
+ * not expose per-MTLLibrary allocated bytes; deviceCurrentAllocatedBytes and the
+ * process physical footprint must be used to validate real memory release.
+ */
+typedef struct {
+    VkBool32 available;
+    uint64_t canonicalShaderLibraryCount;
+    uint64_t logicalMembershipCount;
+    uint64_t residentCanonicalShaderLibraryCount;
+    uint64_t residentShaderLibraryCount;
+    uint64_t specializationVariantCount;
+    uint64_t compressedMSLBytes;
+    uint64_t uncompressedMSLBytes;
+    uint64_t residentUncompressedMSLBytes;
+    uint64_t estimatedHostBytes;
+    uint64_t deviceCurrentAllocatedBytes;
+    uint64_t residentLimit;
+    uint64_t residentTrimHighWater;
+    uint64_t trimCycleCount;
+    uint64_t trimBusyCount;
+    uint64_t trimCandidateCount;
+    uint64_t trimTotalNanoseconds;
+    uint64_t trimMaximumNanoseconds;
+    uint64_t residentEvictionCount;
+    uint64_t evictedUncompressedMSLBytes;
+    uint64_t rehydrateCount;
+    uint64_t rehydrateFailureCount;
+    uint64_t rehydrateTotalNanoseconds;
+    uint64_t rehydrateMaximumNanoseconds;
+    uint64_t dedupeHitCount;
+    uint64_t raceLoserCount;
+    uint64_t residentAdoptionCount;
+    uint64_t snapshotSkippedShaderLibraryCount;
+    uint64_t costAwareCandidateCount;
+    uint64_t costAwareEvictionCount;
+    uint64_t rehydrateProtectionSkipCount;
+    uint64_t unknownRehydrateCostCandidateCount;
+} MVKMetal4ShaderLibraryRepositoryStatistics;
+
+/** Opaque one-shot generation returned by shader-library capture begin. */
+typedef uint64_t MVKPipelineCacheShaderLibraryCaptureToken;
+
+
 #pragma mark -
 #pragma mark Function types
 
 typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignored, MVKConfiguration* pConfiguration, size_t* pConfigurationSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
+typedef VkResult (VKAPI_PTR *PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK)(MVKPipelineCacheShaderLibraryCaptureToken captureToken);
+typedef VkResult (VKAPI_PTR *PFN_vkAdoptPipelineCacheShaderLibrariesMVK)(VkPipeline pipeline, VkPipelineCache destinationPipelineCache, uint32_t* pAdoptedShaderLibraryCount);
+typedef VkResult (VKAPI_PTR *PFN_vkDiscardPipelineCacheShaderLibrariesMVK)(VkPipeline pipeline, uint32_t* pDiscardedShaderLibraryCount);
 
 
 #pragma mark -
@@ -401,6 +477,59 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPerformanceStatisticsMVK(
 	VkDevice                                    device,
 	MVKPerformanceStatistics*            		pPerf,
 	size_t*                                     pPerfSize);
+
+
+/** Returns a nonblocking snapshot of one logical VkPipelineCache view. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMemoryStatisticsMVK(
+    VkPipelineCache                            pipelineCache,
+    MVKPipelineCacheMemoryStatistics*          pStats,
+    size_t*                                    pStatsSize);
+
+/** Returns a nonblocking snapshot of the device-wide shared shader repository. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
+    VkDevice                                   device,
+    MVKMetal4ShaderLibraryRepositoryStatistics* pStats,
+    size_t*                                    pStatsSize);
+
+/**
+ * Arms exact shader-library contribution capture for the next single Pipeline
+ * created on this thread from sourcePipelineCache. Nested begin calls are
+ * rejected. A Pipeline created from another source cache does not consume the
+ * arm. Call cancel in a finally scope even after a successful creation. If the
+ * shared shader-library repository is unavailable, this returns
+ * VK_ERROR_FEATURE_NOT_PRESENT with a zero token and does not arm capture.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL vkBeginPipelineCacheShaderLibraryCaptureMVK(
+    VkPipelineCache                           sourcePipelineCache,
+    MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
+
+/** Cancels an unconsumed same-thread capture generation. This is idempotent. */
+VKAPI_ATTR VkResult VKAPI_CALL vkCancelPipelineCacheShaderLibraryCaptureMVK(
+    MVKPipelineCacheShaderLibraryCaptureToken captureToken);
+
+/**
+ * Adds the exact shader-library memberships used to create pipeline to the
+ * destination pipeline-cache view. Existing memberships and adoption into the
+ * pipeline's source cache are successful no-ops. No Pipeline is recompiled.
+ *
+ * This function must be called immediately after successful Pipeline creation,
+ * while the source VkPipelineCache passed to that creation call remains alive.
+ * The begin/create/cancel sequence must create one Pipeline (count == 1). After
+ * the post-create gate, call either adopt or discard exactly once. Both consume
+ * and release all recorded source-library references, including on failure.
+ * Adoption requires the shared shader-library repository. If it is disabled,
+ * this returns VK_ERROR_FEATURE_NOT_PRESENT after consuming the contributions;
+ * the already-created source Pipeline remains valid.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL vkAdoptPipelineCacheShaderLibrariesMVK(
+    VkPipeline                                pipeline,
+    VkPipelineCache                           destinationPipelineCache,
+    uint32_t*                                 pAdoptedShaderLibraryCount);
+
+/** Consumes and releases captured contributions without adopting them. */
+VKAPI_ATTR VkResult VKAPI_CALL vkDiscardPipelineCacheShaderLibrariesMVK(
+    VkPipeline                                pipeline,
+    uint32_t*                                 pDiscardedShaderLibraryCount);
 
 
 #endif // VK_NO_PROTOTYPES

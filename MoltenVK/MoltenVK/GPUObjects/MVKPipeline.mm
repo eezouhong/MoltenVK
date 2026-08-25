@@ -1115,14 +1115,15 @@ MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
 		uint32_t cachePolicy = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_CACHE_POLICY", 0.0) == 0.0
 			? 0u : 1u;
 		bool useAsyncTasks = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC", 0.0) != 0.0;
-		double configuredAsyncMax = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX", 3.0);
-		size_t configuredAsyncTaskMax = static_cast<size_t>(mvkClamp(configuredAsyncMax, 1.0, 3.0));
+		// shouldMaximizeConcurrentCompilation controls the device-selected CPU
+		// compilation width. Do not impose a second MoltenVK-local cap here.
 		size_t deviceAsyncTaskMax = max<size_t>(
 			1,
 			static_cast<size_t>(mtlDevice.maximumConcurrentCompilationTaskCount));
-			size_t effectiveAsyncTaskMax = useAsyncTasks
-				? min(configuredAsyncTaskMax, deviceAsyncTaskMax)
-				: 1;
+		size_t configuredAsyncTaskMax = deviceAsyncTaskMax;
+		size_t effectiveAsyncTaskMax = useAsyncTasks
+			? deviceAsyncTaskMax
+			: 1;
 			uint64_t configuredTimeoutNs = device->getMVKConfig().metalCompileTimeout;
 			uint64_t compilerTimeoutNs = configuredTimeoutNs >=
 				static_cast<uint64_t>(numeric_limits<int64_t>::max())
@@ -1712,6 +1713,17 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 			releasedPendingCandidate = true;
 		}
 		entry->pipeline = basePipeline;
+		if (impl->device->getShaderLibraryRepository()) {
+			// The input function descriptors only keep the source MTLLibraries
+			// alive while the asynchronous base compile is in flight. Later
+			// specialization starts from entry->pipeline, not these inputs.
+			// Release them after completion so the independent fixed-size base
+			// cache cannot pin an otherwise reclaimable shared shader library.
+			[entry->vertexFunction release];
+			entry->vertexFunction = nil;
+			[entry->fragmentFunction release];
+			entry->fragmentFunction = nil;
+		}
 		entry->failed = basePipeline == nil;
 		entry->compiling = false;
 		entry->compileTaskNs = compilerTaskDuration;
@@ -2312,13 +2324,76 @@ MVKPipelineLayout::~MVKPipelineLayout() {
 #pragma mark -
 #pragma mark MVKPipeline
 
+struct MVKPipelineShaderLibraryCaptureState {
+	MVKPipelineCache* sourcePipelineCache = nullptr;
+	uint64_t generation = 0;
+	bool active = false;
+};
+
+static thread_local MVKPipelineShaderLibraryCaptureState _mvkPipelineShaderLibraryCaptureState;
+static atomic<uint64_t> _mvkPipelineShaderLibraryCaptureGeneration { 1 };
+
+VkResult MVKPipeline::beginShaderLibraryContributionCapture(
+	MVKPipelineCache* sourcePipelineCache,
+	uint64_t* pCaptureToken) {
+
+	if (pCaptureToken) { *pCaptureToken = 0; }
+	if (!sourcePipelineCache || !pCaptureToken ||
+		_mvkPipelineShaderLibraryCaptureState.active) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	if (!sourcePipelineCache->getDevice()->getShaderLibraryRepository()) {
+		return VK_ERROR_FEATURE_NOT_PRESENT;
+	}
+
+	uint64_t generation =
+		_mvkPipelineShaderLibraryCaptureGeneration.fetch_add(1, memory_order_relaxed);
+	if (generation == 0) {
+		generation =
+			_mvkPipelineShaderLibraryCaptureGeneration.fetch_add(1, memory_order_relaxed);
+	}
+	_mvkPipelineShaderLibraryCaptureState = { sourcePipelineCache, generation, true };
+	*pCaptureToken = generation;
+	return VK_SUCCESS;
+}
+
+VkResult MVKPipeline::cancelShaderLibraryContributionCapture(uint64_t captureToken) {
+	if (_mvkPipelineShaderLibraryCaptureState.active &&
+		_mvkPipelineShaderLibraryCaptureState.generation == captureToken) {
+		_mvkPipelineShaderLibraryCaptureState = {};
+	}
+	return VK_SUCCESS;
+}
+
+bool MVKPipeline::consumeShaderLibraryContributionCapture(
+	MVKPipelineCache* sourcePipelineCache) {
+
+	if (!_mvkPipelineShaderLibraryCaptureState.active ||
+		_mvkPipelineShaderLibraryCaptureState.sourcePipelineCache != sourcePipelineCache) {
+		return false;
+	}
+	_mvkPipelineShaderLibraryCaptureState = {};
+	return true;
+}
+
+void MVKPipeline::releaseShaderLibraryContributions(
+	vector<MVKPipelineShaderLibraryContribution>& contributions) {
+
+	for (auto& contribution : contributions) {
+		if (contribution.shaderLibrary) { contribution.shaderLibrary->release(); }
+	}
+	contributions.clear();
+}
+
 MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVKPipelineLayout* layout,
 						 VkPipelineCreateFlags2 flags, MVKPipeline* parent) :
 	MVKVulkanAPIDeviceObject(device),
 	_layout(layout),
 	_pipelineCache(pipelineCache),
 	_flags(flags),
-	_descriptorSetCount(static_cast<uint32_t>(layout->getDescriptorSetCount())) {
+	_descriptorSetCount(static_cast<uint32_t>(layout->getDescriptorSetCount())),
+	_shouldRecordShaderLibraryContributions(
+		consumeShaderLibraryContributionCapture(pipelineCache)) {
 
 		layout->retain();
 
@@ -2331,7 +2406,65 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 
 MVKPipeline::~MVKPipeline() {
+	releaseShaderLibraryContributions(_shaderLibraryContributions);
 	_layout->release();
+}
+
+void MVKPipeline::recordShaderLibraryContribution(
+	MVKShaderModuleKey shaderModuleKey,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	if (!shaderLibrary) { return; }
+	for (const auto& contribution : _shaderLibraryContributions) {
+		if (contribution.shaderModuleKey == shaderModuleKey &&
+			contribution.shaderConfig.matches(shaderConfig)) {
+			return;
+		}
+	}
+	_shaderLibraryContributions.push_back({ shaderModuleKey, shaderConfig, shaderLibrary });
+	shaderLibrary->retain();
+}
+
+VkResult MVKPipeline::adoptShaderLibrariesInto(
+	MVKPipelineCache* destinationPipelineCache,
+	uint32_t* pAdoptedShaderLibraryCount) {
+
+	vector<MVKPipelineShaderLibraryContribution> contributions;
+	contributions.swap(_shaderLibraryContributions);
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = 0; }
+	VkResult result = VK_SUCCESS;
+	uint32_t adoptedCount = 0;
+	if (!destinationPipelineCache ||
+		destinationPipelineCache->getDevice() != getDevice() ||
+		!hasValidMTLPipelineStates()) {
+		result = VK_ERROR_INITIALIZATION_FAILED;
+	} else if (!getDevice()->getShaderLibraryRepository()) {
+		result = VK_ERROR_FEATURE_NOT_PRESENT;
+	} else {
+		for (const auto& contribution : contributions) {
+			if (destinationPipelineCache->adoptShaderLibraryMembership(
+					contribution.shaderModuleKey,
+					contribution.shaderConfig,
+					contribution.shaderLibrary)) {
+				adoptedCount++;
+			}
+		}
+	}
+	releaseShaderLibraryContributions(contributions);
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = adoptedCount; }
+	return result;
+}
+
+void MVKPipeline::discardShaderLibraryContributions(
+	uint32_t* pDiscardedShaderLibraryCount) {
+
+	vector<MVKPipelineShaderLibraryContribution> contributions;
+	contributions.swap(_shaderLibraryContributions);
+	if (pDiscardedShaderLibraryCount) {
+		*pDiscardedShaderLibraryCount = static_cast<uint32_t>(contributions.size());
+	}
+	releaseShaderLibraryContributions(contributions);
 }
 
 #pragma mark -
@@ -2780,6 +2913,24 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	// Render pipeline state. Do this as early as possible, to fail fast if pipeline requires a fail on cache-miss.
 	initMTLRenderPipelineState(pCreateInfo, reflectData, pPipelineFB, pVertexSS, pVertexFB, pTessCtlSS, pTessCtlFB, pTessEvalSS, pTessEvalFB, pFragmentSS, pFragmentFB);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (device->getShaderLibraryRepository()) {
+		// These descriptors only bridge shader-function creation to the synchronous
+		// Metal 4 render-pipeline build above. Keeping one descriptor pair on every
+		// live VkPipeline would retain the underlying MTLLibrary and defeat physical
+		// shader-library reclaim. The bounded compiler base cache retains any pair
+		// that it still needs as part of a resident base entry. Keep the legacy
+		// descriptor lifetime unchanged when the repository feature gate is absent.
+		[_metal4VertexFunctionDescriptor release];
+		_metal4VertexFunctionDescriptor = nil;
+		[_metal4FragmentFunctionDescriptor release];
+		_metal4FragmentFunctionDescriptor = nil;
+		_metal4VertexFunctionKey.clear();
+		_metal4FragmentFunctionKey.clear();
+		_metal4VertexPointerFunctionKey.clear();
+		_metal4FragmentPointerFunctionKey.clear();
+	}
+#endif
 	if ( !_hasValidMTLPipelineStates ) { return; }
 
 	// Blending - must ignore allowed bad pColorBlendState pointer if rasterization disabled or no color attachments
@@ -4586,6 +4737,28 @@ MVKComputePipeline::~MVKComputePipeline() {
 #pragma mark MVKPipelineCache
 
 // Return a shader library from the specified shader conversion configuration sourced from the specified shader module.
+
+void MVKPipelineCache::getMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) {
+    if (!pStats) { return; }
+    *pStats = {};
+
+    unique_lock<mutex> lock(_shaderCacheLock, try_to_lock);
+    if (!lock.owns_lock()) { return; }
+
+    pStats->available = VK_TRUE;
+    pStats->shaderModuleCacheCount = _shaderCache.size();
+    pStats->estimatedViewHostBytes =
+        sizeof(*this) +
+        (_shaderCache.bucket_count() * sizeof(void*)) +
+        (_shaderCache.size() * sizeof(decltype(_shaderCache)::value_type));
+
+    for (const auto& cacheEntry : _shaderCache) {
+        if (cacheEntry.second) {
+            cacheEntry.second->accumulateMemoryStatistics(pStats);
+        }
+    }
+}
+
 MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pContext,
 													 MVKShaderModule* shaderModule,
 													 MVKPipeline* pipeline,
@@ -4607,16 +4780,31 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 	bool wasAdded = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
 	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
+		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
+	}
 	if (wasAdded) { markDirty(); }
 	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
 	return shLib;
+}
+
+bool MVKPipelineCache::adoptShaderLibraryMembership(
+	MVKShaderModuleKey shaderModuleKey,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	lock_guard<mutex> lock(_shaderCacheLock);
+	MVKShaderLibraryCache* shaderCache = getShaderLibraryCache(shaderModuleKey);
+	bool adopted = shaderCache->adoptShaderLibraryMembership(shaderConfig, shaderLibrary);
+	if (adopted) { markDirty(); }
+	return adopted;
 }
 
 // Returns a shader library cache for the specified shader module key, creating it if necessary.
 MVKShaderLibraryCache* MVKPipelineCache::getShaderLibraryCache(MVKShaderModuleKey smKey) {
 	MVKShaderLibraryCache* slCache = _shaderCache[smKey];
 	if ( !slCache ) {
-		slCache = new MVKShaderLibraryCache(this);
+		slCache = new MVKShaderLibraryCache(this, smKey);
 		_shaderCache[smKey] = slCache;
 	}
 	return slCache;

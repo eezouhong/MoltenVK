@@ -25,6 +25,7 @@
 #include "MVKBuffer.h"
 #include "MVKFoundation.h"
 #include "MVKShaderModule.h"
+#include "MVKPipeline.h"
 #include "MVKQueue.h"
 #include <string>
 
@@ -92,6 +93,74 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPerformanceStatisticsMVK(
 	MVKPerformanceStatistics mvkPerf;
 	MVKDevice::getMVKDevice(device)->getPerformanceStatistics(&mvkPerf);
 	return mvkCopyGrowingStruct(pPerf, &mvkPerf, pPerfSize);
+}
+
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPipelineCacheMemoryStatisticsMVK(
+    VkPipelineCache                           pipelineCache,
+    MVKPipelineCacheMemoryStatistics*         pStats,
+    size_t*                                   pStatsSize) {
+
+    MVKPipelineCacheMemoryStatistics stats = {};
+    if (pipelineCache) {
+        ((MVKPipelineCache*)pipelineCache)->getMemoryStatistics(&stats);
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
+    VkDevice                                  device,
+    MVKMetal4ShaderLibraryRepositoryStatistics* pStats,
+    size_t*                                   pStatsSize) {
+
+    MVKMetal4ShaderLibraryRepositoryStatistics stats = {};
+    if (device) {
+        MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+        if (MVKShaderLibraryRepository* repository =
+                mvkDevice->getShaderLibraryRepository()) {
+            repository->getMemoryStatistics(&stats);
+        }
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkBeginPipelineCacheShaderLibraryCaptureMVK(
+	VkPipelineCache                           sourcePipelineCache,
+	MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken) {
+
+	return MVKPipeline::beginShaderLibraryContributionCapture(
+		(MVKPipelineCache*)sourcePipelineCache,
+		pCaptureToken);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkCancelPipelineCacheShaderLibraryCaptureMVK(
+	MVKPipelineCacheShaderLibraryCaptureToken captureToken) {
+
+	return MVKPipeline::cancelShaderLibraryContributionCapture(captureToken);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAdoptPipelineCacheShaderLibrariesMVK(
+	VkPipeline                                pipeline,
+	VkPipelineCache                           destinationPipelineCache,
+	uint32_t*                                 pAdoptedShaderLibraryCount) {
+
+	if (pAdoptedShaderLibraryCount) { *pAdoptedShaderLibraryCount = 0; }
+	if (!pipeline) { return VK_ERROR_INITIALIZATION_FAILED; }
+	MVKPipeline* mvkPipeline = (MVKPipeline*)pipeline;
+	return mvkPipeline->adoptShaderLibrariesInto(
+		(MVKPipelineCache*)destinationPipelineCache,
+		pAdoptedShaderLibraryCount);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkDiscardPipelineCacheShaderLibrariesMVK(
+	VkPipeline                                pipeline,
+	uint32_t*                                 pDiscardedShaderLibraryCount) {
+
+	if (pDiscardedShaderLibraryCount) { *pDiscardedShaderLibraryCount = 0; }
+	if (!pipeline) { return VK_ERROR_INITIALIZATION_FAILED; }
+	((MVKPipeline*)pipeline)->discardShaderLibraryContributions(
+		pDiscardedShaderLibraryCount);
+	return VK_SUCCESS;
 }
 
 
@@ -180,4 +249,3 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetWorkgroupSizeMVK(
     MVKShaderModule* mvkShaderModule = (MVKShaderModule*)shaderModule;
     mvkShaderModule->setWorkgroupSize(x, y, z);
 }
-

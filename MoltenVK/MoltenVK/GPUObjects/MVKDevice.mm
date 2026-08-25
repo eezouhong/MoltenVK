@@ -5181,6 +5181,9 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
 	_metal4CompilerService = MVKMetal4CompilerService::create(this);
+	_shaderLibraryRepository = _metal4CompilerService
+		? MVKShaderLibraryRepository::create(this)
+		: nullptr;
 	_commandResourceFactory = new MVKCommandResourceFactory(this);
 
 	startAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_DEVICE, _physicalDevice->_mtlDevice);
@@ -5549,6 +5552,7 @@ MVKDevice::~MVKDevice() {
 		mvkDestroyContainerContents(queues);
 	}
 
+	delete _shaderLibraryRepository;
 	delete _metal4CompilerService;
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 

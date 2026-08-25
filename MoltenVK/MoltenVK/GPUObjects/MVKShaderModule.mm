@@ -19,15 +19,31 @@
 #include "MVKShaderModule.h"
 #include "MVKPipeline.h"
 #include "MVKFoundation.h"
+#include <limits>
 #include <sys/stat.h>
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 #include <CommonCrypto/CommonDigest.h>
-#include <limits>
 #endif
 
 using namespace std;
 using namespace mvk;
+
+static size_t getSharedShaderLibraryTrimHighWater(size_t residentLimit) {
+	if (residentLimit == 0) { return 0; }
+	size_t margin = max<size_t>(4, residentLimit / 16);
+	return residentLimit > numeric_limits<size_t>::max() - margin
+		? numeric_limits<size_t>::max()
+		: residentLimit + margin;
+}
+
+template<typename T>
+static void updateAtomicMaximum(atomic<T>& target, T value) {
+	T current = target.load(memory_order_relaxed);
+	while (current < value &&
+		!target.compare_exchange_weak(
+			current, value, memory_order_relaxed, memory_order_relaxed)) {}
+}
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 static constexpr uint8_t kMetal4SourceLibraryContent = 1;
@@ -244,15 +260,51 @@ static uint32_t getWorkgroupDimensionSize(const SPIRVWorkgroupSizeDimension& wgD
 	return wgDim.size;
 }
 
-MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
-												VkPipelineCreationFeedback* pShaderFeedback,
-												MVKShaderModule* shaderModule) {
+void MVKShaderLibrary::retain() {
+	_referenceCount.fetch_add(1, memory_order_relaxed);
+}
 
-	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
+void MVKShaderLibrary::release() {
+	uint32_t priorCount = _referenceCount.fetch_sub(1, memory_order_acq_rel);
+	assert(priorCount > 0);
+	if (priorCount == 1) { destroy(); }
+}
+
+MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
+														VkPipelineCreationFeedback* pShaderFeedback,
+														MVKShaderModule* shaderModule,
+														bool allowLibraryCompile) {
+
+	bool rehydrated = false;
+	uint64_t rehydrateStartedAt = 0;
+	uint64_t rehydrateNanoseconds = 0;
+	unique_lock<mutex> accessLock(_accessLock, defer_lock);
+	if (_repository) { accessLock.lock(); }
+	bool wasResident = isResident();
+	if (_repository) {
+		if (!wasResident && allowLibraryCompile) { rehydrateStartedAt = mvkGetTimestamp(); }
+		if (!ensureResidentLocked(allowLibraryCompile)) {
+			if (rehydrateStartedAt) {
+				_repository->recordRehydrateFailure(
+					mvkGetElapsedNanoseconds(rehydrateStartedAt));
+			}
+			return MVKMTLFunctionNull;
+		}
+	} else if (!_mtlLibrary) {
+		return MVKMTLFunctionNull;
+	}
+	rehydrated = !wasResident;
+	if (rehydrated && rehydrateStartedAt) {
+		rehydrateNanoseconds = mvkGetElapsedNanoseconds(rehydrateStartedAt);
+	}
+	touch();
 
 	id<MTLLibrary> lib = _mtlLibrary;
+	bool retainedLibraryForUnlockedUse = false;
+	bool activeRepositoryUse = false;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	const string* libraryContentKey = &_metal4LibraryContentKey;
+	string retainedLibraryContentKey;
 #endif
 
 	// If specialization happens on constants mapped to macro, find or compile a library variant
@@ -283,6 +335,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 				libraryContentKey = &entry->second->getMetal4LibraryContentKey();
 #endif
 			} else {
+				if (!allowLibraryCompile) { return MVKMTLFunctionNull; }
 				MVKShaderLibrary *new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, _compressedMSL, &spec_list);
 				_specializationVariants[spec_list] = new_mvklib;
 				lib = new_mvklib->_mtlLibrary;
@@ -293,7 +346,41 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 		}
 	}
 
+	// The repository lock protects canonical ownership, and the per-library
+	// lock protects resident selection and macro-variant publication. Do not
+	// hold either while asking Metal for a function: a background pipeline
+	// compile using the same canonical shader must not serialize a foreground
+	// pipeline on the full function-specialization path. A local Objective-C
+	// retain keeps the selected library alive if reclaim runs after unlock.
+	if (_repository) {
+		if (lib) {
+			[lib retain];
+			retainedLibraryForUnlockedUse = true;
+			_activeUseCount.fetch_add(1, memory_order_acq_rel);
+			activeRepositoryUse = true;
+		}
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+		retainedLibraryContentKey = *libraryContentKey;
+		libraryContentKey = &retainedLibraryContentKey;
+#endif
+	}
 
+	// A cold logical cache hit still required Metal compilation, so it is not
+	// an application pipeline-cache hit for feedback purposes.
+	if (rehydrated && pShaderFeedback) {
+		mvkDisableFlags(
+			pShaderFeedback->flags,
+			VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+	}
+	// Publish resident accounting while the per-library lock still protects
+	// this freshly rehydrated payload. Otherwise a concurrent trim can see
+	// a resident-but-uncounted entry between unlock and notification.
+	if (rehydrated && _repository) {
+		_repository->libraryBecameResident(this, true, rehydrateNanoseconds);
+	}
+	if (accessLock.owns_lock()) { accessLock.unlock(); }
+
+	MVKMTLFunction result;
 	@synchronized (getMTLDevice()) {
 		@autoreleasepool {
 			NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
@@ -316,11 +403,9 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 				NSArray<MTLFunctionConstant*>* mtlFCs = mtlFunc.functionConstantsDictionary.allValues;
 				if (mtlFCs.count > 0) {
 					// The Metal shader contains function constants and expects to be specialized.
-					// Populate the Metal function constant values from the Vulkan specialization info.
+					// Populate Metal function constant values from Vulkan specialization data.
 					mtlFCVals = [[MTLFunctionConstantValues new] autorelease];
 					if (pSpecializationInfo) {
-						// Iterate through the provided Vulkan specialization entries, and populate the
-						// Metal function constant value that matches the Vulkan specialization constantID.
 						for (uint32_t specIdx = 0; specIdx < pSpecializationInfo->mapEntryCount; specIdx++) {
 							const VkSpecializationMapEntry* pMapEntry = &pSpecializationInfo->pMapEntries[specIdx];
 							for (MTLFunctionConstant* mfc in mtlFCs) {
@@ -334,27 +419,21 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 						}
 					}
 
-					// Compile the specialized Metal function, and use it instead of the unspecialized Metal function.
 					MVKFunctionSpecializer fs(_owner);
-					if (pShaderFeedback) {
-						startTime = mvkGetTimestamp();
-					}
+					if (pShaderFeedback) { startTime = mvkGetTimestamp(); }
 					mtlFunc = [fs.newMTLFunction(lib, mtlFuncName, mtlFCVals) autorelease];
-					if (pShaderFeedback) {
-						pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
-					}
+					if (pShaderFeedback) { pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime); }
 				}
 			}
 
-			// Set the debug name. First try name of shader module, otherwise try name of owner.
 			NSString* dbName = shaderModule->getDebugName();
 			if ( !dbName ) { dbName = _owner->getDebugName(); }
 			_owner->setMetalObjectLabel(mtlFunc, dbName);
 
 			auto& wgSize = _shaderConversionResultInfo.entryPoint.workgroupSize;
 			MTLSize threadGroupSize = MTLSizeMake(getWorkgroupDimensionSize(wgSize.width, pSpecializationInfo),
-												  getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
-												  getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo));
+														  getWorkgroupDimensionSize(wgSize.height, pSpecializationInfo),
+														  getWorkgroupDimensionSize(wgSize.depth, pSpecializationInfo));
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 			MTL4FunctionDescriptor* mtl4FunctionDescriptor = nil;
 			string mtl4FunctionKey;
@@ -377,19 +456,65 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 					mtl4PointerFunctionKey = makeMetal4PointerFunctionKey(lib, mtlFuncName, pSpecializationInfo);
 				}
 			}
-			MVKMTLFunction result(mtlFunc,
-								  _shaderConversionResultInfo,
-								  threadGroupSize,
-								  mtl4FunctionDescriptor,
-								  std::move(mtl4FunctionKey),
-								  std::move(mtl4PointerFunctionKey));
+			result = MVKMTLFunction(mtlFunc,
+										_shaderConversionResultInfo,
+										threadGroupSize,
+										mtl4FunctionDescriptor,
+										std::move(mtl4FunctionKey),
+										std::move(mtl4PointerFunctionKey));
 			[mtl4FunctionDescriptor release];
-			return result;
 #else
-			return MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, threadGroupSize);
+			result = MVKMTLFunction(mtlFunc, _shaderConversionResultInfo, threadGroupSize);
 #endif
 		}
 	}
+
+	if (retainedLibraryForUnlockedUse) { [lib release]; }
+	if (activeRepositoryUse) {
+		uint32_t priorUseCount = _activeUseCount.fetch_sub(1, memory_order_acq_rel);
+		assert(priorUseCount > 0);
+		(void)priorUseCount;
+	}
+	// Candidate selection and Metal function production are complete. Any
+	// bounded resident-budget work happens outside the per-library lock.
+	if (rehydrated && _repository) { _repository->trimToResidentLimit(this); }
+	return result;
+}
+
+
+bool MVKShaderLibrary::tryGetMemorySnapshot(MVKShaderLibraryMemorySnapshot& snapshot) {
+    unique_lock<mutex> accessLock(_accessLock, try_to_lock);
+    if (!accessLock.owns_lock()) { return false; }
+
+    snapshot = {};
+    auto addLibrary = [&snapshot](MVKShaderLibrary* library, bool specializationVariant) {
+        if (!library) { return; }
+        snapshot.shaderLibraryCount++;
+        if (specializationVariant) { snapshot.specializationVariantCount++; }
+        uint64_t compressedBytes = library->_compressedMSL._compressed.size();
+        uint64_t uncompressedBytes = library->_compressedMSL._uncompressedSize;
+        snapshot.compressedMSLBytes += compressedBytes;
+        snapshot.uncompressedMSLBytes += uncompressedBytes;
+        if (library->_mtlLibrary && library->isResident()) {
+            snapshot.residentShaderLibraryCount++;
+            snapshot.residentUncompressedMSLBytes += uncompressedBytes;
+        }
+        snapshot.estimatedHostBytes +=
+            sizeof(MVKShaderLibrary) +
+            library->_compressedMSL._compressed.capacity();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+        snapshot.estimatedHostBytes += library->_metal4LibraryContentKey.capacity();
+#endif
+    };
+
+    addLibrary(this, false);
+    snapshot.estimatedHostBytes +=
+        _specializationVariants.size() *
+        (sizeof(decltype(_specializationVariants)::value_type) + (3 * sizeof(void*)));
+    for (const auto& variant : _specializationVariants) {
+        addLibrary(variant.second, true);
+    }
+    return true;
 }
 
 void MVKShaderLibrary::setEntryPointName(string& funcName) {
@@ -415,6 +540,129 @@ void MVKShaderLibrary::decompressMSL(string& msl) {
 	uint64_t startTime = getPerformanceTimestamp();
 	_compressedMSL.decompress(msl);
 	addPerformanceInterval(getPerformanceStats().shaderCompilation.mslDecompress, startTime);
+}
+
+bool MVKShaderLibrary::ensureResidentLocked(bool allowLibraryCompile) {
+	if (_mtlLibrary) {
+		_resident.store(true, memory_order_release);
+		return true;
+	}
+	if (!allowLibraryCompile) { return false; }
+
+	string msl;
+	decompressMSL(msl);
+	if (msl.empty()) { return false; }
+	compileLibrary(msl);
+	return _mtlLibrary != nil;
+}
+
+void MVKShaderLibrary::touch() {
+	if (_repository) {
+		_lastUseSequence.store(_repository->nextUseSequence(), memory_order_relaxed);
+	}
+}
+
+bool MVKShaderLibrary::tryGetEvictionSnapshot(MVKShaderLibraryEvictionSnapshot& snapshot) {
+	unique_lock<mutex> accessLock(_accessLock, try_to_lock);
+	if (!accessLock.owns_lock() ||
+		!_mtlLibrary ||
+		!isResident() ||
+		_activeUseCount.load(memory_order_acquire) != 0) {
+		return false;
+	}
+
+	snapshot = {};
+	snapshot.lastUseSequence = getLastUseSequence();
+	snapshot.lastRehydrateNanoseconds =
+		_lastRehydrateNanoseconds.load(memory_order_relaxed);
+	snapshot.rehydrateProtectedUntilSequence =
+		_rehydrateProtectedUntilSequence.load(memory_order_relaxed);
+	snapshot.reclaimableUncompressedMSLBytes =
+		_compressedMSL._uncompressedSize;
+	for (const auto& item : _specializationVariants) {
+		if (item.second) {
+			snapshot.reclaimableUncompressedMSLBytes +=
+				item.second->_compressedMSL._uncompressedSize;
+		}
+	}
+	return true;
+}
+
+bool MVKShaderLibrary::tryAdoptResidentPayload(MVKShaderLibrary* candidate) {
+	if (!candidate ||
+		candidate == this ||
+		candidate->_repository ||
+		!candidate->isResident() ||
+		!candidate->_mtlLibrary) {
+		return false;
+	}
+
+	unique_lock<mutex> accessLock(_accessLock);
+	if (_mtlLibrary ||
+		isResident() ||
+		!_repositoryTracked.load(memory_order_acquire) ||
+		_activeUseCount.load(memory_order_acquire) != 0 ||
+		!candidate->_mtlLibrary) {
+		return false;
+	}
+
+	// Transfer the candidate's retained MTLLibrary reference instead of
+	// discarding it and recompiling the cold canonical entry. Fresh candidates
+	// have no published users, so their payload can move without another lock.
+	_mtlLibrary = candidate->_mtlLibrary;
+	candidate->_mtlLibrary = nil;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey = candidate->_metal4LibraryContentKey;
+	candidate->_metal4LibraryContentKey.clear();
+#endif
+	_resident.store(true, memory_order_release);
+	candidate->_resident.store(false, memory_order_release);
+	if (_repository) { _repository->libraryBecameResident(this, false, 0); }
+	return true;
+}
+
+bool MVKShaderLibrary::tryEvictResident(
+	const MVKShaderLibraryEvictionSnapshot& snapshot,
+	uint64_t currentUseSequence) {
+	unique_lock<mutex> accessLock(_accessLock, try_to_lock);
+	if (!accessLock.owns_lock() ||
+		!_mtlLibrary ||
+		!isResident() ||
+		_activeUseCount.load(memory_order_acquire) != 0 ||
+		getLastUseSequence() != snapshot.lastUseSequence ||
+		_rehydrateProtectedUntilSequence.load(memory_order_relaxed) !=
+			snapshot.rehydrateProtectedUntilSequence ||
+		currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+		return false;
+	}
+
+	uint64_t evictedUncompressedMSLBytes =
+		_compressedMSL._uncompressedSize;
+	for (const auto& item : _specializationVariants) {
+		if (item.second) {
+			evictedUncompressedMSLBytes +=
+				item.second->_compressedMSL._uncompressedSize;
+		}
+	}
+
+	id<MTLLibrary> releasedLibrary = _mtlLibrary;
+	_mtlLibrary = nil;
+	map<vector<pair<uint32_t, MVKShaderMacroValue>>, MVKShaderLibrary*> releasedVariants;
+	releasedVariants.swap(_specializationVariants);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4LibraryContentKey.clear();
+#endif
+	_resident.store(false, memory_order_release);
+	if (_repository) {
+		_repository->libraryBecameCold(
+			this,
+			evictedUncompressedMSLBytes);
+	}
+	accessLock.unlock();
+
+	[releasedLibrary release];
+	for (auto& item : releasedVariants) { item.second->release(); }
+	return true;
 }
 
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
@@ -445,6 +693,7 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
 
 void MVKShaderLibrary::compileLibrary(const string& msl,
 									  const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) {
+	assert(!_mtlLibrary);
 	MVKShaderLibraryCompiler* slc = new MVKShaderLibraryCompiler(_owner);
 	NSString* nsSrc = [[NSString alloc] initWithUTF8String: msl.c_str()];	// temp retained
 
@@ -469,6 +718,7 @@ void MVKShaderLibrary::compileLibrary(const string& msl,
 	_mtlLibrary = slc->newMTLLibrary(nsSrc, _shaderConversionResultInfo, macro_def);	// retained
 	[nsSrc release];														// release temp string
 	slc->destroy();
+	_resident.store(_mtlLibrary != nil, memory_order_release);
 }
 
 MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
@@ -497,6 +747,7 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
         [shdrData release];
     }
 	addPerformanceInterval(getPerformanceStats().shaderCompilation.mslLoad, startTime);
+	_resident.store(_mtlLibrary != nil, memory_order_release);
 }
 
 MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
@@ -506,6 +757,8 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	_specializationVariants(other._specializationVariants) {
 
 	_mtlLibrary = [other._mtlLibrary retain];
+	_resident.store(_mtlLibrary != nil, memory_order_release);
+	for (auto& item : _specializationVariants) { item.second->retain(); }
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
@@ -514,11 +767,17 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 }
 
 MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
+	if (this == &other) { return *this; }
 	if (_mtlLibrary != other._mtlLibrary) {
 		[_mtlLibrary release];
 		_mtlLibrary = [other._mtlLibrary retain];
 	}
+	for (auto& item : _specializationVariants) { item.second->release(); }
+	_specializationVariants = other._specializationVariants;
+	for (auto& item : _specializationVariants) { item.second->retain(); }
 	_owner = other._owner;
+	_maySpecializeWithMacro = other._maySpecializeWithMacro;
+	_resident.store(_mtlLibrary != nil, memory_order_release);
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
@@ -536,24 +795,465 @@ void MVKShaderLibrary::handleCompilationError(NSError* err, const char* opDesc) 
     if (_mtlLibrary) {
         MVKLogInfo("%s succeeded with warnings (Error code %li):\n%s", opDesc, (long)err.code, err.localizedDescription.UTF8String);
     } else {
-		_owner->setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED,
+		VkResult error = reportError(VK_ERROR_INITIALIZATION_FAILED,
 												   "%s failed (Error code %li):\n%s",
 												   opDesc, (long)err.code,
-												   err.localizedDescription.UTF8String));
+												   err.localizedDescription.UTF8String);
+		if (!_repository) { _owner->setConfigurationResult(error); }
     }
 }
 
 MVKShaderLibrary::~MVKShaderLibrary() {
+	_resident.store(false, memory_order_release);
 	[_mtlLibrary release];
 
 	for (auto& item: _specializationVariants) {
-		delete item.second;
+		item.second->release();
 	}
 }
 
 
 #pragma mark -
+#pragma mark MVKShaderLibraryRepository
+
+MVKShaderLibraryRepository* MVKShaderLibraryRepository::create(MVKDevice* device) {
+    const MVKConfiguration& config = device->getMVKConfig();
+    return config.metal4SharedShaderLibraryRepositoryEnabled
+        ? new MVKShaderLibraryRepository(
+            device,
+            config.metal4SharedShaderLibraryResidentLimit)
+        : nullptr;
+}
+
+MVKShaderLibraryRepository::MVKShaderLibraryRepository(
+	MVKDevice* device,
+	size_t residentLimit) :
+	MVKVulkanAPIDeviceObject(device),
+	_residentLimit(residentLimit),
+	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {}
+
+MVKShaderLibraryRepository::~MVKShaderLibraryRepository() {
+	vector<MVKShaderLibrary*> libraries;
+	{
+		lock_guard<mutex> lock(_lock);
+		for (auto& moduleEntries : _entries) {
+			for (Entry& entry : moduleEntries.second) {
+				entry.library->_repositoryTracked.store(false, memory_order_release);
+				untrackResident(entry.library);
+				libraries.push_back(entry.library);
+			}
+		}
+		_entries.clear();
+	}
+
+	// Release only the repository ownership references. Valid Vulkan object
+	// lifetime requires all pipeline-cache membership references to be gone first.
+	for (MVKShaderLibrary* library : libraries) { library->release(); }
+}
+
+void MVKShaderLibraryRepository::getMemoryStatistics(
+    MVKMetal4ShaderLibraryRepositoryStatistics* pStats) {
+    if (!pStats) { return; }
+    *pStats = {};
+
+    vector<MVKShaderLibrary*> libraries;
+    unique_lock<mutex> repositoryLock(_lock, try_to_lock);
+    if (!repositoryLock.owns_lock()) { return; }
+
+    pStats->available = VK_TRUE;
+    pStats->logicalMembershipCount = _logicalMembershipCount.load(memory_order_relaxed);
+    pStats->residentCanonicalShaderLibraryCount = _residentEntryCount.load(memory_order_relaxed);
+    pStats->residentLimit = _residentLimit;
+    pStats->residentTrimHighWater = _residentTrimHighWater;
+    pStats->trimCycleCount = _trimCycleCount.load(memory_order_relaxed);
+    pStats->trimBusyCount = _trimBusyCount.load(memory_order_relaxed);
+    pStats->trimCandidateCount = _trimCandidateCount.load(memory_order_relaxed);
+    pStats->trimTotalNanoseconds = _trimTotalNanoseconds.load(memory_order_relaxed);
+    pStats->trimMaximumNanoseconds = _trimMaximumNanoseconds.load(memory_order_relaxed);
+    pStats->residentEvictionCount = _residentEvictionCount.load(memory_order_relaxed);
+    pStats->evictedUncompressedMSLBytes = _evictedUncompressedMSLBytes.load(memory_order_relaxed);
+    pStats->rehydrateCount = _rehydrateCount.load(memory_order_relaxed);
+    pStats->rehydrateFailureCount = _rehydrateFailureCount.load(memory_order_relaxed);
+    pStats->rehydrateTotalNanoseconds = _rehydrateTotalNanoseconds.load(memory_order_relaxed);
+    pStats->rehydrateMaximumNanoseconds = _rehydrateMaximumNanoseconds.load(memory_order_relaxed);
+    pStats->costAwareCandidateCount = _costAwareCandidateCount.load(memory_order_relaxed);
+    pStats->costAwareEvictionCount = _costAwareEvictionCount.load(memory_order_relaxed);
+    pStats->rehydrateProtectionSkipCount = _rehydrateProtectionSkipCount.load(memory_order_relaxed);
+    pStats->unknownRehydrateCostCandidateCount = _unknownRehydrateCostCandidateCount.load(memory_order_relaxed);
+    pStats->dedupeHitCount = _dedupeHitCount.load(memory_order_relaxed);
+    pStats->raceLoserCount = _raceLoserCount.load(memory_order_relaxed);
+    pStats->residentAdoptionCount = _residentAdoptionCount.load(memory_order_relaxed);
+    pStats->estimatedHostBytes =
+        sizeof(*this) +
+        (_entries.bucket_count() * sizeof(void*)) +
+        (_entries.size() * sizeof(decltype(_entries)::value_type));
+
+    for (auto& moduleEntries : _entries) {
+        pStats->estimatedHostBytes +=
+            moduleEntries.second.capacity() * sizeof(Entry);
+        for (Entry& entry : moduleEntries.second) {
+            pStats->canonicalShaderLibraryCount++;
+            entry.library->retain();
+            libraries.push_back(entry.library);
+        }
+    }
+    repositoryLock.unlock();
+
+    for (MVKShaderLibrary* library : libraries) {
+        MVKShaderLibraryMemorySnapshot snapshot;
+        if (library->tryGetMemorySnapshot(snapshot)) {
+            pStats->residentShaderLibraryCount += snapshot.residentShaderLibraryCount;
+            pStats->specializationVariantCount += snapshot.specializationVariantCount;
+            pStats->compressedMSLBytes += snapshot.compressedMSLBytes;
+            pStats->uncompressedMSLBytes += snapshot.uncompressedMSLBytes;
+            pStats->residentUncompressedMSLBytes += snapshot.residentUncompressedMSLBytes;
+            pStats->estimatedHostBytes += snapshot.estimatedHostBytes;
+        } else {
+            pStats->snapshotSkippedShaderLibraryCount++;
+        }
+        library->release();
+    }
+
+    if (@available(macOS 10.15, iOS 13.0, *)) {
+        pStats->deviceCurrentAllocatedBytes = getMTLDevice().currentAllocatedSize;
+    }
+}
+
+uint64_t MVKShaderLibraryRepository::nextUseSequence() {
+	return _nextUseSequence.fetch_add(1, memory_order_relaxed) + 1;
+}
+
+void MVKShaderLibraryRepository::untrackResident(MVKShaderLibrary* library) {
+	if (!library) { return; }
+	bool expected = true;
+	if (library->_repositoryResidentCounted.compare_exchange_strong(
+			expected, false, memory_order_acq_rel)) {
+		size_t priorCount = _residentEntryCount.fetch_sub(1, memory_order_acq_rel);
+		assert(priorCount > 0);
+		(void)priorCount;
+	}
+}
+
+void MVKShaderLibraryRepository::libraryBecameResident(
+	MVKShaderLibrary* library,
+	bool rehydrated,
+	uint64_t rehydrateNanoseconds) {
+
+	if (!library || library->_repository != this || !library->isResident()) { return; }
+	{
+		lock_guard<mutex> lock(_lock);
+		uint64_t currentUseSequence =
+			_nextUseSequence.load(memory_order_relaxed);
+		library->_rehydrateProtectedUntilSequence.store(
+			currentUseSequence + 256,
+			memory_order_relaxed);
+		if (rehydrated && rehydrateNanoseconds != 0) {
+			library->_lastRehydrateNanoseconds.store(
+				rehydrateNanoseconds,
+				memory_order_relaxed);
+		}
+		if (!library->_repositoryTracked.load(memory_order_acquire)) { return; }
+		bool expected = false;
+		if (library->_repositoryResidentCounted.compare_exchange_strong(
+				expected, true, memory_order_acq_rel)) {
+			size_t residentCount =
+				_residentEntryCount.fetch_add(1, memory_order_relaxed) + 1;
+			updateAtomicMaximum(_residentPeakCount, residentCount);
+			if (rehydrated) {
+				_rehydrateCount.fetch_add(1, memory_order_relaxed);
+				_rehydrateTotalNanoseconds.fetch_add(rehydrateNanoseconds, memory_order_relaxed);
+				updateAtomicMaximum(_rehydrateMaximumNanoseconds, rehydrateNanoseconds);
+			}
+		}
+	}
+}
+
+void MVKShaderLibraryRepository::recordRehydrateFailure(uint64_t rehydrateNanoseconds) {
+    _rehydrateFailureCount.fetch_add(1, memory_order_relaxed);
+    _rehydrateTotalNanoseconds.fetch_add(rehydrateNanoseconds, memory_order_relaxed);
+    updateAtomicMaximum(_rehydrateMaximumNanoseconds, rehydrateNanoseconds);
+}
+
+void MVKShaderLibraryRepository::libraryBecameCold(
+	MVKShaderLibrary* library,
+	uint64_t evictedUncompressedMSLBytes) {
+	if (!library || library->_repository != this) { return; }
+	bool expected = true;
+	if (library->_repositoryResidentCounted.compare_exchange_strong(
+			expected, false, memory_order_acq_rel)) {
+		size_t priorCount = _residentEntryCount.fetch_sub(1, memory_order_acq_rel);
+		assert(priorCount > 0);
+		(void)priorCount;
+		_residentEvictionCount.fetch_add(1, memory_order_relaxed);
+		_evictedUncompressedMSLBytes.fetch_add(
+			evictedUncompressedMSLBytes,
+			memory_order_relaxed);
+	}
+}
+
+void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protectedLibrary) {
+	if (_residentLimit == 0 ||
+		_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
+		return;
+	}
+
+	uint64_t trimStartedAt = mvkGetTimestamp();
+	_trimCycleCount.fetch_add(1, memory_order_relaxed);
+	unique_lock<mutex> trimLock(_trimLock, try_to_lock);
+	if (!trimLock.owns_lock() ||
+		_residentEntryCount.load(memory_order_relaxed) <= _residentTrimHighWater) {
+		_trimBusyCount.fetch_add(1, memory_order_relaxed);
+		uint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
+		_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
+		updateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
+		return;
+	}
+
+	constexpr uint64_t kUnknownRehydrateCostNanoseconds = 16'000'000;
+	uint64_t currentUseSequence = _nextUseSequence.load(memory_order_relaxed);
+	struct Candidate {
+		uint64_t score;
+		MVKShaderLibraryEvictionSnapshot snapshot;
+		MVKShaderLibrary* library;
+	};
+	vector<MVKShaderLibrary*> retainedLibraries;
+	{
+		lock_guard<mutex> lock(_lock);
+		for (auto& moduleEntries : _entries) {
+			for (Entry& entry : moduleEntries.second) {
+				MVKShaderLibrary* library = entry.library;
+				if (library == protectedLibrary ||
+					!library->isResident() ||
+					!library->_repositoryResidentCounted.load(memory_order_acquire)) {
+					continue;
+				}
+				library->retain();
+				retainedLibraries.push_back(library);
+			}
+		}
+	}
+
+	vector<Candidate> candidates;
+	candidates.reserve(retainedLibraries.size());
+	for (MVKShaderLibrary* library : retainedLibraries) {
+		MVKShaderLibraryEvictionSnapshot snapshot;
+		if (!library->tryGetEvictionSnapshot(snapshot)) { continue; }
+		if (currentUseSequence < snapshot.rehydrateProtectedUntilSequence) {
+			_rehydrateProtectionSkipCount.fetch_add(1, memory_order_relaxed);
+			continue;
+		}
+		uint64_t coldness = currentUseSequence >= snapshot.lastUseSequence
+			? currentUseSequence - snapshot.lastUseSequence : 0;
+		uint64_t benefitPages = min<uint64_t>(snapshot.reclaimableUncompressedMSLBytes / 4096, 65535);
+		uint64_t rehydrateCost = snapshot.lastRehydrateNanoseconds;
+		if (rehydrateCost == 0) {
+			rehydrateCost = kUnknownRehydrateCostNanoseconds;
+			_unknownRehydrateCostCandidateCount.fetch_add(1, memory_order_relaxed);
+		}
+		uint64_t costMicros = min<uint64_t>(rehydrateCost / 1000, 65535);
+		uint64_t score = (min<uint64_t>(coldness, 65535) * 4) + (benefitPages * 2) + (65535 - costMicros);
+		candidates.push_back({ score, snapshot, library });
+	}
+
+	_trimCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
+	_costAwareCandidateCount.fetch_add(candidates.size(), memory_order_relaxed);
+
+	sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+		if (left.score != right.score) { return left.score > right.score; }
+		if (left.snapshot.lastUseSequence != right.snapshot.lastUseSequence) {
+			return left.snapshot.lastUseSequence < right.snapshot.lastUseSequence;
+		}
+		return left.snapshot.reclaimableUncompressedMSLBytes >
+			right.snapshot.reclaimableUncompressedMSLBytes;
+	});
+
+	for (const Candidate& candidate : candidates) {
+		if (_residentEntryCount.load(memory_order_relaxed) <= _residentLimit) { break; }
+		if (candidate.library->tryEvictResident(candidate.snapshot, currentUseSequence)) {
+			_costAwareEvictionCount.fetch_add(1, memory_order_relaxed);
+		}
+	}
+
+	for (MVKShaderLibrary* library : retainedLibraries) { library->release(); }
+	uint64_t trimNanoseconds = mvkGetElapsedNanoseconds(trimStartedAt);
+	_trimTotalNanoseconds.fetch_add(trimNanoseconds, memory_order_relaxed);
+	updateAtomicMaximum(_trimMaximumNanoseconds, trimNanoseconds);
+}
+
+MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
+	MVKShaderModuleKey shaderModuleKey,
+	SPIRVToMSLConversionConfiguration* pShaderConfig,
+	MVKShaderLibrary* candidate) {
+
+	if (!pShaderConfig) {
+		if (candidate) { candidate->release(); }
+		return nullptr;
+	}
+
+	MVKShaderLibrary* result = nullptr;
+	MVKShaderLibrary* rejectedCandidate = candidate;
+	bool publishedCandidate = false;
+	bool shouldAdoptCandidatePayload = false;
+	bool adoptedCandidatePayload = false;
+	{
+		lock_guard<mutex> lock(_lock);
+		auto moduleIt = _entries.find(shaderModuleKey);
+		if (moduleIt != _entries.end()) {
+			for (Entry& entry : moduleIt->second) {
+				if (entry.shaderConfig.matches(*pShaderConfig)) {
+					pShaderConfig->alignWith(entry.shaderConfig);
+					entry.membershipCount++;
+					entry.library->retain();
+					result = entry.library;
+					shouldAdoptCandidatePayload =
+						candidate &&
+						candidate->isResident() &&
+						!entry.library->isResident();
+					uint64_t membershipCount =
+						_logicalMembershipCount.fetch_add(1, memory_order_relaxed) + 1;
+					updateAtomicMaximum(_logicalMembershipPeak, membershipCount);
+					_dedupeHitCount.fetch_add(1, memory_order_relaxed);
+					break;
+				}
+			}
+		}
+
+		if (!result && candidate && candidate->isResident()) {
+			// Only a successfully materialized candidate may become canonical.
+			// A failed import/compile remains a local failure and is released
+			// after the repository lock instead of poisoning future cache views.
+			// The candidate's initial reference becomes repository ownership.
+			// Add one separate reference for the acquiring cache view.
+			candidate->_owner = this;
+			candidate->_repository = this;
+			candidate->_repositoryTracked.store(true, memory_order_release);
+			candidate->retain();
+			_entries[shaderModuleKey].push_back({ *pShaderConfig, candidate, 1 });
+			_canonicalPublishCount.fetch_add(1, memory_order_relaxed);
+			uint64_t membershipCount =
+				_logicalMembershipCount.fetch_add(1, memory_order_relaxed) + 1;
+			updateAtomicMaximum(_logicalMembershipPeak, membershipCount);
+			if (candidate->isResident()) {
+				bool expected = false;
+				if (candidate->_repositoryResidentCounted.compare_exchange_strong(
+						expected, true, memory_order_acq_rel)) {
+					size_t residentCount =
+						_residentEntryCount.fetch_add(1, memory_order_relaxed) + 1;
+					updateAtomicMaximum(_residentPeakCount, residentCount);
+				}
+			}
+			result = candidate;
+			rejectedCandidate = nullptr;
+			publishedCandidate = true;
+		}
+	}
+
+	if (shouldAdoptCandidatePayload && result && candidate) {
+		adoptedCandidatePayload = result->tryAdoptResidentPayload(candidate);
+		if (adoptedCandidatePayload) {
+			_residentAdoptionCount.fetch_add(1, memory_order_relaxed);
+		}
+	}
+
+	if (publishedCandidate || adoptedCandidatePayload) {
+		trimToResidentLimit(result);
+	}
+
+	// A competing path published first, or this candidate failed to
+	// materialize. Drop it outside the repository lock. An adopted
+	// candidate has already transferred its retained Metal payload.
+	if (rejectedCandidate) {
+		if (result && !adoptedCandidatePayload) {
+			_raceLoserCount.fetch_add(1, memory_order_relaxed);
+		}
+		rejectedCandidate->release();
+	}
+	return result;
+}
+
+void MVKShaderLibraryRepository::release(
+	MVKShaderModuleKey shaderModuleKey,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* library) {
+
+	if (!library) { return; }
+
+	bool releaseRepositoryReference = false;
+	bool found = false;
+	{
+		lock_guard<mutex> lock(_lock);
+		auto moduleIt = _entries.find(shaderModuleKey);
+		if (moduleIt != _entries.end()) {
+			auto& entries = moduleIt->second;
+			for (auto entryIt = entries.begin(); entryIt != entries.end(); ++entryIt) {
+				if (entryIt->library == library && entryIt->shaderConfig.matches(shaderConfig)) {
+					found = true;
+					assert(entryIt->membershipCount > 0);
+					entryIt->membershipCount--;
+					if (entryIt->membershipCount == 0) {
+						library->_repositoryTracked.store(false, memory_order_release);
+						untrackResident(library);
+						entries.erase(entryIt);
+						releaseRepositoryReference = true;
+						if (entries.empty()) { _entries.erase(moduleIt); }
+					}
+					break;
+				}
+			}
+		}
+	}
+
+	if (!found) {
+		reportMessage(MVK_CONFIG_LOG_LEVEL_WARNING,
+					  "Shared shader-library membership was not present during release.");
+		return;
+	}
+
+	uint64_t priorMembershipCount =
+		_logicalMembershipCount.fetch_sub(1, memory_order_acq_rel);
+	assert(priorMembershipCount > 0);
+	(void)priorMembershipCount;
+
+	// Release references only after the exact logical membership was found.
+	// A mismatch must not underflow or destroy a canonical physical entry.
+	library->release();
+	if (releaseRepositoryReference) { library->release(); }
+}
+
+
+#pragma mark -
 #pragma mark MVKShaderLibraryCache
+
+void MVKShaderLibraryCache::accumulateMemoryStatistics(
+    MVKPipelineCacheMemoryStatistics* pStats) const {
+    if (!pStats) { return; }
+
+    pStats->estimatedViewHostBytes +=
+        sizeof(*this) +
+        (_shaderLibraries.capacity() * sizeof(decltype(_shaderLibraries)::value_type));
+    for (const auto& libraryEntry : _shaderLibraries) {
+        pStats->logicalShaderLibraryCount++;
+        MVKShaderLibraryMemorySnapshot snapshot;
+        if (!libraryEntry.second || !libraryEntry.second->tryGetMemorySnapshot(snapshot)) {
+            pStats->skippedShaderLibraryCount++;
+            continue;
+        }
+        pStats->logicalResidentShaderLibraryCount += snapshot.residentShaderLibraryCount;
+        pStats->specializationVariantCount += snapshot.specializationVariantCount;
+        pStats->compressedMSLBytes += snapshot.compressedMSLBytes;
+        pStats->uncompressedMSLBytes += snapshot.uncompressedMSLBytes;
+    }
+}
+
+MVKShaderLibraryCache::MVKShaderLibraryCache(
+	MVKVulkanAPIDeviceObject* owner,
+	MVKShaderModuleKey shaderModuleKey) :
+	MVKBaseDeviceObject(owner->getDevice()),
+	_owner(owner),
+	_shaderModuleKey(shaderModuleKey),
+	_repository(shaderModuleKey.codeSize != 0
+		? owner->getDevice()->getShaderLibraryRepository()
+		: nullptr) {}
 
 MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  MVKShaderModule* shaderModule, MVKPipeline* pipeline,
@@ -561,6 +1261,17 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 														  uint64_t startTime) {
 	bool wasAdded = false;
 	MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+	if (!shLib && _repository) {
+		shLib = _repository->acquire(_shaderModuleKey, pShaderConfig);
+		if (shLib) {
+			_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+			wasAdded = true;
+			addPerformanceInterval(getPerformanceStats().shaderCompilation.shaderLibraryFromCache, startTime);
+			if (pShaderFeedback) {
+				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+			}
+		}
+	}
 	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
 		if (shaderModule->convert(pShaderConfig, conversionResult)) {
@@ -568,7 +1279,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
-			wasAdded = true;
+			wasAdded = shLib != nullptr;
 		}
 	}
 
@@ -598,8 +1309,25 @@ MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionC
 // Adds and returns a new shader library configured from the specified conversion configuration.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResult& conversionResult) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, conversionResult);
-	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
+	if (_repository) {
+		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
+			_shaderLibraries.emplace_back(alignedConfig, existing);
+			return existing;
+		}
+	}
+
+	VkResult priorConfigurationResult = _owner->getConfigurationResult();
+	MVKShaderLibrary* candidate = new MVKShaderLibrary(_owner, conversionResult);
+	bool candidateResident = candidate->isResident();
+	MVKShaderLibrary* shLib = _repository
+		? _repository->acquire(_shaderModuleKey, &alignedConfig, candidate)
+		: candidate;
+	if (_repository && !candidateResident && shLib &&
+		priorConfigurationResult == VK_SUCCESS) {
+		_owner->clearConfigurationResult();
+	}
+	if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }
 	return shLib;
 }
 
@@ -607,9 +1335,44 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResultInfo& resultInfo,
 														  const MVKCompressor<std::string> compressedMSL) {
-	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
-	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
+	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
+	if (_repository) {
+		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
+			_shaderLibraries.emplace_back(alignedConfig, existing);
+			return existing;
+		}
+	}
+
+	VkResult priorConfigurationResult = _owner->getConfigurationResult();
+	MVKShaderLibrary* candidate = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
+	bool candidateResident = candidate->isResident();
+	MVKShaderLibrary* shLib = _repository
+		? _repository->acquire(_shaderModuleKey, &alignedConfig, candidate)
+		: candidate;
+	if (_repository && !candidateResident && shLib &&
+		priorConfigurationResult == VK_SUCCESS) {
+		_owner->clearConfigurationResult();
+	}
+	if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }
 	return shLib;
+}
+
+bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	if (!shaderLibrary) { return false; }
+	if (!_repository) { return false; }
+
+	for (auto& libraryEntry : _shaderLibraries) {
+		if (libraryEntry.first.matches(shaderConfig)) { return false; }
+	}
+
+	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
+	MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
+	if (!shared) { return false; }
+	_shaderLibraries.emplace_back(alignedConfig, shared);
+	return true;
 }
 
 // Merge another shader library cache with this one. Handle null input.
@@ -617,14 +1380,39 @@ void MVKShaderLibraryCache::merge(MVKShaderLibraryCache* other) {
 	if ( !other ) { return; }
 	for (auto& otherPair : other->_shaderLibraries) {
 		if ( !findShaderLibrary(&otherPair.first) ) {
-			_shaderLibraries.emplace_back(otherPair.first, new MVKShaderLibrary(*otherPair.second));
-			_shaderLibraries.back().second->_owner = _owner;
+			if (_repository) {
+				SPIRVToMSLConversionConfiguration alignedConfig = otherPair.first;
+				MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
+				if (!shared) {
+					VkResult priorConfigurationResult = _owner->getConfigurationResult();
+					MVKShaderLibrary* candidate = new MVKShaderLibrary(
+						_owner,
+						otherPair.second->_shaderConversionResultInfo,
+						otherPair.second->_compressedMSL);
+					bool candidateResident = candidate->isResident();
+					shared = _repository->acquire(_shaderModuleKey, &alignedConfig, candidate);
+					if (!candidateResident && shared &&
+						priorConfigurationResult == VK_SUCCESS) {
+						_owner->clearConfigurationResult();
+					}
+				}
+				if (shared) { _shaderLibraries.emplace_back(alignedConfig, shared); }
+			} else {
+				_shaderLibraries.emplace_back(otherPair.first, new MVKShaderLibrary(*otherPair.second));
+				_shaderLibraries.back().second->_owner = _owner;
+			}
 		}
 	}
 }
 
 MVKShaderLibraryCache::~MVKShaderLibraryCache() {
-	for (auto& slPair : _shaderLibraries) { slPair.second->destroy(); }
+	for (auto& slPair : _shaderLibraries) {
+		if (_repository) {
+			_repository->release(_shaderModuleKey, slPair.first, slPair.second);
+		} else {
+			slPair.second->release();
+		}
+	}
 }
 
 
@@ -650,7 +1438,13 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 		pShaderConfig->markAllInterfaceVarsAndResourcesUsed();
 	}
 
-	return mvkLib ? mvkLib->getMTLFunction(pSpecializationInfo, pShaderFeedback, this) : MVKMTLFunctionNull;
+	return mvkLib
+		? mvkLib->getMTLFunction(
+			pSpecializationInfo,
+			pShaderFeedback,
+			this,
+			!pipeline->shouldFailOnPipelineCompileRequired())
+		: MVKMTLFunctionNull;
 }
 
 bool MVKShaderModule::convert(SPIRVToMSLConversionConfiguration* pShaderConfig,

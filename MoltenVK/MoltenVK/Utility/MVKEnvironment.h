@@ -350,3 +350,13 @@ void mvkSetConfig(MVKConfiguration& dstMVKConfig, const MVKConfiguration& srcMVK
 #ifndef MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES
 #   define MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES 0
 #endif
+
+/** Enable device-wide physical sharing of Metal shader libraries. Disabled by default. */
+#ifndef MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_REPOSITORY_ENABLED
+#   define MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_REPOSITORY_ENABLED 0
+#endif
+
+/** Maximum resident shared shader libraries. Zero keeps all canonical libraries resident. */
+#ifndef MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT
+#   define MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT 0
+#endif

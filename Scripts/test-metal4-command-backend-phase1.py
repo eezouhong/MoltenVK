@@ -259,7 +259,7 @@ def main() -> int:
     )
     require(
         transfer_mm,
-        r"supportsMetal4BufferImageCopy[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT",
+        r"supportsMetal4BufferImageCopy[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?MTLTextureType2DArray[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT[\s\S]*?layerCount\s*!=\s*1[\s\S]*?baseArrayLayer",
         "buffer/image-copy preflight does not fail closed on unsupported formats/aspects",
     )
 
@@ -851,13 +851,18 @@ def main() -> int:
         ),
         (
             rendering_h + rendering_mm,
-            r"MVKCmdBeginRenderPass[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?classic_render_pass_missing[\s\S]*?classic_render_pass_subpass_count[\s\S]*?classic_render_pass_secondary_contents[\s\S]*?classic_render_pass_missing_framebuffer[\s\S]*?classic_render_pass_layered[\s\S]*?classic_render_pass_partial_area[\s\S]*?classic_render_pass_multiview[\s\S]*?classic_render_pass_multisample[\s\S]*?classic_render_pass_color_count[\s\S]*?classic_render_pass_no_color[\s\S]*?classic_render_pass_unused_color[\s\S]*?classic_render_pass_attachment_missing[\s\S]*?classic_render_pass_attachment_plane_count[\s\S]*?classic_render_pass_attachment_multisample[\s\S]*?classic_render_pass_attachment_texture_type[\s\S]*?classic_render_pass_attachment_swizzle[\s\S]*?classic_render_pass_attachment_extent",
+            r"MVKCmdBeginRenderPass[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?classic_render_pass_missing[\s\S]*?classic_render_pass_subpass_count[\s\S]*?classic_render_pass_secondary_contents[\s\S]*?classic_render_pass_missing_framebuffer[\s\S]*?classic_render_pass_layer_count[\s\S]*?classic_render_pass_partial_area[\s\S]*?classic_render_pass_multiview[\s\S]*?classic_render_pass_multisample[\s\S]*?classic_render_pass_color_count[\s\S]*?classic_render_pass_no_color[\s\S]*?classic_render_pass_unused_color[\s\S]*?classic_render_pass_attachment_missing[\s\S]*?classic_render_pass_attachment_plane_count[\s\S]*?classic_render_pass_attachment_multisample[\s\S]*?classic_render_pass_attachment_texture_type[\s\S]*?classic_render_pass_attachment_layer_count[\s\S]*?classic_render_pass_attachment_swizzle[\s\S]*?classic_render_pass_attachment_extent",
             "classic render-pass fallback telemetry does not identify the actual unsupported condition",
         ),
         (
             rendering_mm + queue_mm + pipeline_mm + e2e,
             r"!hasUsedColorAttachment[\s\S]*?isDepthAttachmentUsed[\s\S]*?isStencilAttachmentUsed[\s\S]*?hasSupportedRenderAttachments[\s\S]*?colorAttachmentCount\s*==\s*0[\s\S]*?depthAttachmentFormat\s*!=\s*VK_FORMAT_UNDEFINED[\s\S]*?stencilAttachmentFormat\s*!=\s*VK_FORMAT_UNDEFINED[\s\S]*?CLASSIC_DEPTH_ONLY_RENDER_OK",
             "classic depth-only render passes are not admitted by the command, descriptor, pipeline, and E2E path",
+        ),
+        (
+            rendering_mm + queue_mm + transfer_mm + e2e,
+            r"framebufferLayerCount[\s\S]*?MTLTextureType2DArray[\s\S]*?texture\.arrayLength[\s\S]*?renderTargetArrayLength\s*=\s*framebuffer->getLayerCount\(\)[\s\S]*?CLASSIC_LAYERED_RENDER_OK",
+            "classic layered render passes are not admitted and exercised through the Metal 4 path",
         ),
     ):
         require(source, pattern, message)

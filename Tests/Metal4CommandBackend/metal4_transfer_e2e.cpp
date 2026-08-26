@@ -182,7 +182,9 @@ Image createImage(VkPhysicalDevice physicalDevice,
                   VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
+                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                  uint32_t arrayLayers = 1,
+                  VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D) {
     Image result;
     result.device = device;
     result.format = format;
@@ -194,7 +196,7 @@ Image createImage(VkPhysicalDevice physicalDevice,
     createInfo.format = result.format;
     createInfo.extent = {width, height, 1};
     createInfo.mipLevels = 1;
-    createInfo.arrayLayers = 1;
+    createInfo.arrayLayers = arrayLayers;
     createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     createInfo.usage = usage;
@@ -220,13 +222,13 @@ Image createImage(VkPhysicalDevice physicalDevice,
 
     VkImageViewCreateInfo viewInfo = makeVkStruct<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
     viewInfo.image = result.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = viewType;
     viewInfo.format = result.format;
     viewInfo.subresourceRange.aspectMask = aspect;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.layerCount = arrayLayers;
     check(vkCreateImageView(device, &viewInfo, nullptr, &result.view), "vkCreateImageView");
     return result;
 }
@@ -420,7 +422,8 @@ void imageBarrier(VkCommandBuffer commandBuffer,
                   VkAccessFlags dstAccess,
                   VkPipelineStageFlags srcStage,
                   VkPipelineStageFlags dstStage,
-                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
+                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                  uint32_t layerCount = 1) {
     VkImageMemoryBarrier barrier = makeVkStruct<VkImageMemoryBarrier>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
     barrier.srcAccessMask = srcAccess;
     barrier.dstAccessMask = dstAccess;
@@ -433,7 +436,7 @@ void imageBarrier(VkCommandBuffer commandBuffer,
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = layerCount;
     vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0,
                          0, nullptr, 0, nullptr, 1, &barrier);
 }
@@ -2307,6 +2310,139 @@ int main() {
         std::cout << "CLASSIC_MRT_RENDER_OK" << std::endl;
         std::cout << "CLASSIC_CLEAR_ATTACHMENTS_OK" << std::endl;
 
+        // A layered framebuffer exposes two active slices of one array image.
+        // With no Layer output, the draw paints slice zero while the render-pass
+        // load clear still covers both active slices. This verifies the MTL4
+        // descriptor's renderTargetArrayLength and attachment slice bounds.
+        Image classicLayeredTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT, 2, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+        Buffer classicLayerZeroReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        Buffer classicLayerOneReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        VkAttachmentDescription classicLayeredDescription{};
+        classicLayeredDescription.format = classicLayeredTarget.format;
+        classicLayeredDescription.samples = VK_SAMPLE_COUNT_1_BIT;
+        classicLayeredDescription.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        classicLayeredDescription.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        classicLayeredDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        classicLayeredDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        classicLayeredDescription.initialLayout =
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        classicLayeredDescription.finalLayout =
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference classicLayeredReference{
+            0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+        VkSubpassDescription classicLayeredSubpass{};
+        classicLayeredSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        classicLayeredSubpass.colorAttachmentCount = 1;
+        classicLayeredSubpass.pColorAttachments = &classicLayeredReference;
+        VkRenderPassCreateInfo classicLayeredRenderPassInfo =
+            makeVkStruct<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+        classicLayeredRenderPassInfo.attachmentCount = 1;
+        classicLayeredRenderPassInfo.pAttachments = &classicLayeredDescription;
+        classicLayeredRenderPassInfo.subpassCount = 1;
+        classicLayeredRenderPassInfo.pSubpasses = &classicLayeredSubpass;
+        VkRenderPass classicLayeredRenderPass = VK_NULL_HANDLE;
+        check(vkCreateRenderPass(device, &classicLayeredRenderPassInfo, nullptr,
+                                 &classicLayeredRenderPass),
+              "vkCreateRenderPass(classic layered)");
+
+        VkFramebufferCreateInfo classicLayeredFramebufferInfo =
+            makeVkStruct<VkFramebufferCreateInfo>(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+        classicLayeredFramebufferInfo.renderPass = classicLayeredRenderPass;
+        classicLayeredFramebufferInfo.attachmentCount = 1;
+        classicLayeredFramebufferInfo.pAttachments = &classicLayeredTarget.view;
+        classicLayeredFramebufferInfo.width = kImageWidth;
+        classicLayeredFramebufferInfo.height = kImageHeight;
+        classicLayeredFramebufferInfo.layers = 2;
+        VkFramebuffer classicLayeredFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &classicLayeredFramebufferInfo, nullptr,
+                                  &classicLayeredFramebuffer),
+              "vkCreateFramebuffer(classic layered)");
+
+        graphicsInfo.renderPass = classicLayeredRenderPass;
+        blendState.attachmentCount = 1;
+        blendState.pAttachments = &blendAttachment;
+        VkPipeline classicLayeredPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &classicLayeredPipeline),
+              "vkCreateGraphicsPipelines(classic layered)");
+
+        VkCommandBuffer prepareClassicLayered = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareClassicLayered, classicLayeredTarget.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT, 2);
+        endCommandBuffer(prepareClassicLayered);
+        VkClearValue classicLayeredClear{};
+        classicLayeredClear.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderPassBeginInfo classicLayeredBegin =
+            makeVkStruct<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+        classicLayeredBegin.renderPass = classicLayeredRenderPass;
+        classicLayeredBegin.framebuffer = classicLayeredFramebuffer;
+        classicLayeredBegin.renderArea = scissor;
+        classicLayeredBegin.clearValueCount = 1;
+        classicLayeredBegin.pClearValues = &classicLayeredClear;
+        VkCommandBuffer classicLayeredRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRenderPass(classicLayeredRender, &classicLayeredBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(classicLayeredRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          classicLayeredPipeline);
+        vkCmdDraw(classicLayeredRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(classicLayeredRender);
+        endCommandBuffer(classicLayeredRender);
+
+        VkCommandBuffer finishClassicLayered = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishClassicLayered, classicLayeredTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT, 2);
+        endCommandBuffer(finishClassicLayered);
+        VkCommandBuffer readClassicLayered = beginCommandBuffer(device, commandPool);
+        VkBufferImageCopy layerZeroRegion = imageRegion;
+        layerZeroRegion.imageSubresource.baseArrayLayer = 0;
+        VkBufferImageCopy layerOneRegion = imageRegion;
+        layerOneRegion.imageSubresource.baseArrayLayer = 1;
+        vkCmdCopyImageToBuffer(readClassicLayered, classicLayeredTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               classicLayerZeroReadback.buffer, 1, &layerZeroRegion);
+        vkCmdCopyImageToBuffer(readClassicLayered, classicLayeredTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               classicLayerOneReadback.buffer, 1, &layerOneRegion);
+        endCommandBuffer(readClassicLayered);
+        std::array<VkSubmitInfo, 4> classicLayeredSubmits{};
+        for (auto& submit : classicLayeredSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        classicLayeredSubmits[0].commandBufferCount = 1;
+        classicLayeredSubmits[0].pCommandBuffers = &prepareClassicLayered;
+        classicLayeredSubmits[1].commandBufferCount = 1;
+        classicLayeredSubmits[1].pCommandBuffers = &classicLayeredRender;
+        classicLayeredSubmits[2].commandBufferCount = 1;
+        classicLayeredSubmits[2].pCommandBuffers = &finishClassicLayered;
+        classicLayeredSubmits[3].commandBufferCount = 1;
+        classicLayeredSubmits[3].pCommandBuffers = &readClassicLayered;
+        VkFence classicLayeredFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(classicLayeredSubmits.size()),
+                            classicLayeredSubmits.data(), classicLayeredFence),
+              "vkQueueSubmit(classic layered sequence)");
+        waitFence(device, classicLayeredFence);
+        validateSolidColor(device, classicLayerZeroReadback, {64, 128, 191, 255});
+        validateSolidColor(device, classicLayerOneReadback, {255, 0, 0, 255});
+        std::cout << "CLASSIC_LAYERED_RENDER_OK" << std::endl;
+
         // A classic render pass may carry a stencil attachment even when the
         // pipeline cannot read or write stencil. Metal still requires the
         // attachment format and texture to match the render pipeline state.
@@ -2976,6 +3112,13 @@ int main() {
         vkDestroyRenderPass(device, classicRenderPass, nullptr);
         classicMrtTarget.destroy();
         classicMrtReadback.destroy();
+        vkDestroyFence(device, classicLayeredFence, nullptr);
+        vkDestroyPipeline(device, classicLayeredPipeline, nullptr);
+        vkDestroyFramebuffer(device, classicLayeredFramebuffer, nullptr);
+        vkDestroyRenderPass(device, classicLayeredRenderPass, nullptr);
+        classicLayeredTarget.destroy();
+        classicLayerZeroReadback.destroy();
+        classicLayerOneReadback.destroy();
         vkDestroyFence(device, depthFence, nullptr);
         vkDestroyFence(device, depthOnlyFence, nullptr);
         vkDestroyPipeline(device, depthOnlyPipeline, nullptr);

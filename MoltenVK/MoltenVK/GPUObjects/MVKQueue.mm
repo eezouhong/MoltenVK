@@ -1385,7 +1385,7 @@ public:
 		}
 		descriptor.renderTargetWidth = renderArea.extent.width;
 		descriptor.renderTargetHeight = renderArea.extent.height;
-		descriptor.renderTargetArrayLength = 1;
+		descriptor.renderTargetArrayLength = framebuffer->getLayerCount();
 		if (_visibilityQueryPool) {
 			descriptor.visibilityResultBuffer =
 				_queryPools.find(_visibilityQueryPool)->second.resetBuffer;

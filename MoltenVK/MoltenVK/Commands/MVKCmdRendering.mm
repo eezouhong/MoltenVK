@@ -81,8 +81,9 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 	VkExtent2D framebufferExtent = _framebuffer
 		? _framebuffer->getExtent2D()
 		: VkExtent2D{};
-	if (_framebuffer->getLayerCount() != 1) {
-		_metal4UnsupportedReason = "classic_render_pass_layered";
+	uint32_t framebufferLayerCount = _framebuffer->getLayerCount();
+	if (!framebufferLayerCount) {
+		_metal4UnsupportedReason = "classic_render_pass_layer_count";
 		return VK_SUCCESS;
 	}
 	if (_renderArea.offset.x != 0 || _renderArea.offset.y != 0 ||
@@ -129,8 +130,16 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 			_metal4UnsupportedReason = "classic_render_pass_attachment_multisample";
 			return VK_SUCCESS;
 		}
-		if (attachment->getMTLTextureType() != MTLTextureType2D) {
+		MTLTextureType textureType = attachment->getMTLTextureType();
+		bool hasSupportedTextureType = framebufferLayerCount == 1
+			? textureType == MTLTextureType2D || textureType == MTLTextureType2DArray
+			: textureType == MTLTextureType2DArray;
+		if (!hasSupportedTextureType) {
 			_metal4UnsupportedReason = "classic_render_pass_attachment_texture_type";
+			return VK_SUCCESS;
+		}
+		if (framebufferLayerCount > texture.arrayLength) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_layer_count";
 			return VK_SUCCESS;
 		}
 		if (attachment->getPackedSwizzle() != 0) {

@@ -1181,7 +1181,8 @@ static bool supportsMetal4BufferImageCopy(MVKBuffer* buffer,
 		!mvkMetal4BufferImageLayoutSupported(imageLayout, toImage) ||
 		image->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
 		image->getPlaneCount() != 1 ||
-		image->getMTLTextureType() != MTLTextureType2D ||
+		(image->getMTLTextureType() != MTLTextureType2D &&
+		 image->getMTLTextureType() != MTLTextureType2DArray) ||
 		image->getIsCompressed() || image->getIsDepthStencil() ||
 		image->needsSwizzle() || !image->hasExpectedTexelSize()) {
 		return false;

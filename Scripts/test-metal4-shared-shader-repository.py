@@ -121,6 +121,16 @@ class OneShotCapture:
             self.token = 0
 
 
+def effective_async_task_max(
+    configured: int,
+    device_max: int,
+    enabled: bool,
+) -> int:
+    configured_ceiling = min(max(configured, 1), 3)
+    device_ceiling = max(device_max, 1)
+    return min(configured_ceiling, device_ceiling) if enabled else 1
+
+
 def test_reference_and_residency_model() -> None:
     entry = Entry()
     entry.acquire()  # global cache membership
@@ -191,6 +201,14 @@ def test_one_shot_capture_model() -> None:
     capture.cancel(token)
     capture.cancel(token)  # Idempotent finally cleanup.
     assert not capture.consume_for_pipeline("global-a")
+
+
+def test_async_task_ceiling_model() -> None:
+    assert effective_async_task_max(3, 4, enabled=True) == 3
+    assert effective_async_task_max(3, 2, enabled=True) == 2
+    assert effective_async_task_max(2, 4, enabled=True) == 2
+    assert effective_async_task_max(99, 99, enabled=True) == 3
+    assert effective_async_task_max(3, 4, enabled=False) == 1
 
 
 def test_source_policy() -> None:
@@ -278,6 +296,26 @@ def test_source_policy() -> None:
     assert "Metal 4 shared shader-library repository enabled:" not in shader_mm
     assert "Metal 4 shared shader-library resident limit:" not in shader_mm
     assert "Metal 4 shared shader-library repository summary:" not in shader_mm
+
+    # The app-provided value is a ceiling, not a fixed width. Keep the
+    # compiler device-aware while preventing a wider device from exceeding
+    # the validated three-task maximum.
+    require(
+        pipeline_mm,
+        '"MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX"',
+        PIPELINE_MM,
+    )
+    require(
+        pipeline_mm,
+        "mvkClamp(configuredAsyncMax, 1.0, 3.0)",
+        PIPELINE_MM,
+    )
+    require(
+        pipeline_mm,
+        "min(configuredAsyncTaskMax, deviceAsyncTaskMax)",
+        PIPELINE_MM,
+    )
+    assert "configuredAsyncTaskMax = deviceAsyncTaskMax" not in pipeline_mm
 
     require(private_api_h, "MVKPipelineCacheMemoryStatistics", PRIVATE_API_H)
     require(private_api_h, "MVKMetal4ShaderLibraryRepositoryStatistics", PRIVATE_API_H)
@@ -745,6 +783,7 @@ def main() -> None:
     test_reference_and_residency_model()
     test_exact_pipeline_contribution_adoption_model()
     test_one_shot_capture_model()
+    test_async_task_ceiling_model()
     test_source_policy()
     print("metal4 shared shader-library repository policy: PASS")
 

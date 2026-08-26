@@ -80,8 +80,10 @@ pipeline, so the pipeline-owned Metal map remains the single remapping step.
 ## Lifetime, concurrency, and failure policy
 
 The compiler service and base cache live for one `MVKDevice`. Library, render,
-and compute operations share one concurrency counter capped by
-`maximumConcurrentCompilationTaskCount`; a task releases its slot before a
+and compute operations share one concurrency counter. Its effective ceiling is
+one when asynchronous compilation is disabled; otherwise it is
+`min(clamp(MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX, 1, 3),
+maximumConcurrentCompilationTaskCount)`. A task releases its slot before a
 dependent stage starts. Cache entries coordinate concurrent creators so a key
 is compiled once. Failed keys are recorded in the
 bounded ghost ring and immediately use the legacy path on later requests. Successful

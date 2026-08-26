@@ -1115,14 +1115,16 @@ MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
 		uint32_t cachePolicy = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_CACHE_POLICY", 0.0) == 0.0
 			? 0u : 1u;
 		bool useAsyncTasks = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC", 0.0) != 0.0;
-		// shouldMaximizeConcurrentCompilation controls the device-selected CPU
-		// compilation width. Do not impose a second MoltenVK-local cap here.
+		double configuredAsyncMax = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX",
+			3.0);
+		size_t configuredAsyncTaskMax = static_cast<size_t>(
+			mvkClamp(configuredAsyncMax, 1.0, 3.0));
 		size_t deviceAsyncTaskMax = max<size_t>(
 			1,
 			static_cast<size_t>(mtlDevice.maximumConcurrentCompilationTaskCount));
-		size_t configuredAsyncTaskMax = deviceAsyncTaskMax;
 		size_t effectiveAsyncTaskMax = useAsyncTasks
-			? deviceAsyncTaskMax
+			? min(configuredAsyncTaskMax, deviceAsyncTaskMax)
 			: 1;
 			uint64_t configuredTimeoutNs = device->getMVKConfig().metalCompileTimeout;
 			uint64_t compilerTimeoutNs = configuredTimeoutNs >=

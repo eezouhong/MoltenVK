@@ -369,7 +369,7 @@ def main() -> int:
     )
     require(
         rendering_mm,
-        r"mvkSupportsMetal4RenderingAttachment[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?mvkSupportsMetal4RenderingInfo[\s\S]*?colorAttachmentCount\s*!=\s*1[\s\S]*?pStencilAttachment[\s\S]*?pDepthAttachment",
+        r"mvkSupportsMetal4RenderingAttachment[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?mvkSupportsMetal4RenderingInfo[\s\S]*?colorAttachmentCount\s*==\s*0[\s\S]*?kMVKMaxColorAttachmentCount[\s\S]*?pStencilAttachment[\s\S]*?pDepthAttachment",
         "dynamic-rendering eligibility does not fail closed on unsupported attachments or multisampling",
     )
     require(
@@ -456,6 +456,11 @@ def main() -> int:
         rendering_h + rendering_mm + queue_mm,
         r"MVKCmdSetBlendConstants[\s\S]*?encodeMetal4[\s\S]*?setBlendConstants[\s\S]*?setBlendColorRed:[\s\S]*?green:[\s\S]*?blue:[\s\S]*?alpha:",
         "dynamic blend constants are not preserved through Metal 4 draw encoding",
+    )
+    require(
+        pipeline_h + pipeline_mm + rendering_mm + queue_mm + e2e,
+        r"getMetal4ColorAttachmentCount[\s\S]*?kMVKMaxColorAttachmentCount[\s\S]*?colorAttachmentCount[\s\S]*?colorAttachments\[colorIndex\][\s\S]*?CLASSIC_MRT_RENDER_OK",
+        "classic Metal 4 MRT does not preserve pipeline and render-pass attachment arrays",
     )
     require(
         rendering_h + queue_mm,

@@ -1066,13 +1066,25 @@ public:
 	}
 
 	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
-		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
+		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount == 0 ||
+			renderingInfo.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
 			!renderingInfo.pColorAttachments) {
 			return false;
 		}
-		const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
-		auto viewIt = _imageViews.find((MVKImageView*)color.imageView);
-		if (viewIt == _imageViews.end()) { return false; }
+		const ImageViewBinding* firstColorBinding = nullptr;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < renderingInfo.colorAttachmentCount;
+			 colorIndex++) {
+			auto viewIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pColorAttachments[colorIndex].imageView);
+			if (viewIt == _imageViews.end()) { return false; }
+			if (!firstColorBinding) {
+				firstColorBinding = &viewIt->second;
+			} else if (viewIt->second.width != firstColorBinding->width ||
+					   viewIt->second.height != firstColorBinding->height) {
+				return false;
+			}
+		}
 		auto depthIt = _imageViews.end();
 		if (renderingInfo.pDepthAttachment) {
 			depthIt = _imageViews.find(
@@ -1081,19 +1093,31 @@ public:
 		}
 		endComputeEncoding();
 
-		const ImageViewBinding& binding = viewIt->second;
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
-		MTLRenderPassColorAttachmentDescriptor* colorDescriptor = descriptor.colorAttachments[0];
-		colorDescriptor.texture = binding.texture;
-		colorDescriptor.level = binding.level;
-		colorDescriptor.slice = binding.slice;
-		colorDescriptor.depthPlane = binding.depthPlane;
-		colorDescriptor.loadAction = mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
-		colorDescriptor.storeAction = mvkMTLStoreActionFromVkAttachmentStoreOpInObj(color.storeOp, false, true, nullptr);
-		colorDescriptor.clearColor = MTLClearColorMake(color.clearValue.color.float32[0],
-												 color.clearValue.color.float32[1],
-												 color.clearValue.color.float32[2],
-											 color.clearValue.color.float32[3]);
+		for (uint32_t colorIndex = 0;
+			 colorIndex < renderingInfo.colorAttachmentCount;
+			 colorIndex++) {
+			const VkRenderingAttachmentInfo& color =
+				renderingInfo.pColorAttachments[colorIndex];
+			const ImageViewBinding& binding =
+				_imageViews.find((MVKImageView*)color.imageView)->second;
+			MTLRenderPassColorAttachmentDescriptor* colorDescriptor =
+				descriptor.colorAttachments[colorIndex];
+			colorDescriptor.texture = binding.texture;
+			colorDescriptor.level = binding.level;
+			colorDescriptor.slice = binding.slice;
+			colorDescriptor.depthPlane = binding.depthPlane;
+			colorDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
+			colorDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					color.storeOp, false, true, nullptr);
+			colorDescriptor.clearColor = MTLClearColorMake(
+				color.clearValue.color.float32[0],
+				color.clearValue.color.float32[1],
+				color.clearValue.color.float32[2],
+				color.clearValue.color.float32[3]);
+		}
 		if (renderingInfo.pDepthAttachment) {
 			const VkRenderingAttachmentInfo& depth = *renderingInfo.pDepthAttachment;
 			const ImageViewBinding& depthBinding = depthIt->second;
@@ -1123,12 +1147,19 @@ public:
 		if (!_renderEncoder) { return false; }
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 
-		_currentRenderFormat = binding.format;
+		_currentColorAttachmentCount = renderingInfo.colorAttachmentCount;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			_currentColorAttachmentFormats[colorIndex] =
+				_imageViews.find((MVKImageView*)renderingInfo.pColorAttachments[colorIndex].imageView)
+					->second.format;
+		}
 		_currentDepthFormat = renderingInfo.pDepthAttachment
 			? depthIt->second.format
 			: VK_FORMAT_UNDEFINED;
-		_currentRenderWidth = binding.width;
-		_currentRenderHeight = binding.height;
+		_currentRenderWidth = firstColorBinding->width;
+		_currentRenderHeight = firstColorBinding->height;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -1149,10 +1180,18 @@ public:
 			return false;
 		}
 		MVKRenderSubpass* subpass = renderPass->getSubpass(0);
-		if (!subpass || subpass->getColorAttachmentCount() != 1 ||
-			!subpass->isColorAttachmentUsed(0) || subpass->isStencilAttachmentUsed()) {
+		if (!subpass || subpass->getColorAttachmentCount() == 0 ||
+			subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount ||
+			subpass->isStencilAttachmentUsed()) {
 			return false;
 		}
+		bool hasUsedColorAttachment = false;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < subpass->getColorAttachmentCount();
+			 colorIndex++) {
+			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
+		}
+		if (!hasUsedColorAttachment) { return false; }
 		endComputeEncoding();
 
 		MTLRenderPassDescriptor* legacyDescriptor =
@@ -1168,7 +1207,12 @@ public:
 			false);
 
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
-		descriptor.colorAttachments[0] = legacyDescriptor.colorAttachments[0];
+		for (uint32_t colorIndex = 0;
+			 colorIndex < subpass->getColorAttachmentCount();
+			 colorIndex++) {
+			descriptor.colorAttachments[colorIndex] =
+				legacyDescriptor.colorAttachments[colorIndex];
+		}
 		if (subpass->isDepthAttachmentUsed()) {
 			descriptor.depthAttachment = legacyDescriptor.depthAttachment;
 		}
@@ -1187,7 +1231,13 @@ public:
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 
 		VkExtent2D extent = framebuffer->getExtent2D();
-		_currentRenderFormat = subpass->getColorAttachmentFormat(0);
+		_currentColorAttachmentCount = subpass->getColorAttachmentCount();
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			_currentColorAttachmentFormats[colorIndex] =
+				subpass->getColorAttachmentFormat(colorIndex);
+		}
 		_currentDepthFormat = subpass->isDepthAttachmentUsed()
 			? subpass->getDepthFormat()
 			: VK_FORMAT_UNDEFINED;
@@ -1365,7 +1415,7 @@ public:
 		_computeEncoder = nil;
 		_commandBuffer = nil;
 		_boundComputePipeline = nullptr;
-		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
@@ -1448,7 +1498,7 @@ private:
 		[_renderEncoder endEncoding];
 		[_renderEncoder release];
 		_renderEncoder = nil;
-		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
@@ -1492,9 +1542,18 @@ private:
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
 		if (it == _graphicsPipelines.end() ||
-			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat ||
+			_boundGraphicsPipeline->getMetal4ColorAttachmentCount() !=
+				_currentColorAttachmentCount ||
 			_boundGraphicsPipeline->getMetal4DepthAttachmentFormat() != _currentDepthFormat) {
 			return false;
+		}
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			if (_boundGraphicsPipeline->getMetal4ColorAttachmentFormat(colorIndex) !=
+				_currentColorAttachmentFormats[colorIndex]) {
+				return false;
+			}
 		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder setRenderPipelineState:it->second.pipelineState];
@@ -1657,7 +1716,8 @@ private:
 	MVKQueryPool* _visibilityQueryPool = nullptr;
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;
-	VkFormat _currentRenderFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
+	uint32_t _currentColorAttachmentCount = 0;
 	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;

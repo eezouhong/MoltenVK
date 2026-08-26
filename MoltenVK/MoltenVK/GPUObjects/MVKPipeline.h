@@ -442,8 +442,15 @@ public:
 		return _metal4RenderExecutionUnsupportedReason;
 	}
 
-	/** Returns the color format accepted by the strict Metal 4 render slice. */
-	VkFormat getMetal4ColorAttachmentFormat() const { return _metal4ColorAttachmentFormat; }
+	/** Returns the color attachment count accepted by the Metal 4 render slice. */
+	uint32_t getMetal4ColorAttachmentCount() const { return _metal4ColorAttachmentCount; }
+
+	/** Returns one color format accepted by the Metal 4 render slice. */
+	VkFormat getMetal4ColorAttachmentFormat(uint32_t colorIndex) const {
+		return colorIndex < _metal4ColorAttachmentCount
+			? _metal4ColorAttachmentFormats[colorIndex]
+			: VK_FORMAT_UNDEFINED;
+	}
 
 	/** Returns the optional depth format accepted by the strict Metal 4 render slice. */
 	VkFormat getMetal4DepthAttachmentFormat() const { return _metal4DepthAttachmentFormat; }
@@ -589,7 +596,8 @@ protected:
 	bool _supportsMetal4DescriptorlessRenderExecution = false;
 	bool _supportsMetal4ArgumentTableRenderExecution = false;
 	const char* _metal4RenderExecutionUnsupportedReason = "MVKCmdBindGraphicsPipeline:unclassified";
-	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _metal4ColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
+	uint32_t _metal4ColorAttachmentCount = 0;
 	VkFormat _metal4DepthAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 

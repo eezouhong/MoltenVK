@@ -72,9 +72,18 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 		_renderArea.extent.height == framebufferExtent.height &&
 		!subpass->isMultiview() &&
 		subpass->getSampleCount() == VK_SAMPLE_COUNT_1_BIT &&
-		subpass->getColorAttachmentCount() == 1 &&
-		subpass->isColorAttachmentUsed(0) &&
+		subpass->getColorAttachmentCount() > 0 &&
+		subpass->getColorAttachmentCount() <= kMVKMaxColorAttachmentCount &&
 		!subpass->isStencilAttachmentUsed();
+	if (_supportsMetal4Encoding) {
+		bool hasUsedColorAttachment = false;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < subpass->getColorAttachmentCount();
+			 colorIndex++) {
+			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
+		}
+		_supportsMetal4Encoding = hasUsedColorAttachment;
+	}
 	if (_supportsMetal4Encoding) {
 		for (MVKImageView* attachment : _attachments) {
 			id<MTLTexture> texture = attachment ? attachment->getMTLTexture() : nil;
@@ -236,7 +245,8 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		renderingInfo.flags != 0 ||
 		renderingInfo.viewMask != 0 ||
 		renderingInfo.layerCount != 1 ||
-		renderingInfo.colorAttachmentCount != 1 ||
+		renderingInfo.colorAttachmentCount == 0 ||
+		renderingInfo.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
 		!renderingInfo.pColorAttachments ||
 		renderingInfo.renderArea.offset.x != 0 ||
 		renderingInfo.renderArea.offset.y != 0) {
@@ -247,9 +257,15 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		return false;
 	}
 
-	const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
-	if (!mvkSupportsMetal4RenderingAttachment(color, renderingInfo.renderArea, false)) {
-		return false;
+	for (uint32_t colorIndex = 0;
+		 colorIndex < renderingInfo.colorAttachmentCount;
+		 colorIndex++) {
+		if (!mvkSupportsMetal4RenderingAttachment(
+				renderingInfo.pColorAttachments[colorIndex],
+				renderingInfo.renderArea,
+				false)) {
+			return false;
+		}
 	}
 
 	return !renderingInfo.pDepthAttachment ||
@@ -289,8 +305,13 @@ void MVKCmdBeginRendering<N>::encode(MVKCommandEncoder* cmdEncoder) {
 template <size_t N>
 bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
-	auto* imageView = (MVKImageView*)_renderingInfo.pColorAttachments[0].imageView;
-	if (!cmdEncoder->useImageView(imageView)) { return false; }
+	for (uint32_t colorIndex = 0;
+		 colorIndex < _renderingInfo.colorAttachmentCount;
+		 colorIndex++) {
+		auto* imageView =
+			(MVKImageView*)_renderingInfo.pColorAttachments[colorIndex].imageView;
+		if (!cmdEncoder->useImageView(imageView)) { return false; }
+	}
 	if (_renderingInfo.pDepthAttachment &&
 		!cmdEncoder->useImageView(
 			(MVKImageView*)_renderingInfo.pDepthAttachment->imageView)) {

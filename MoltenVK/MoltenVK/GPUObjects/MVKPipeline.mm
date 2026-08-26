@@ -3188,12 +3188,22 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	const auto* pRS = pCreateInfo->pRasterizationState;
 	const auto* pMS = pCreateInfo->pMultisampleState;
 	const auto* pVP = pCreateInfo->pViewportState;
-	bool hasOneColorWithOptionalDepth =
+	bool hasSupportedColorsWithOptionalDepth =
 		pRendInfo && pRendInfo->viewMask == 0 &&
-		pRendInfo->colorAttachmentCount == 1 &&
+		pRendInfo->colorAttachmentCount > 0 &&
+		pRendInfo->colorAttachmentCount <= kMVKMaxColorAttachmentCount &&
 		pRendInfo->pColorAttachmentFormats &&
-		pRendInfo->pColorAttachmentFormats[0] != VK_FORMAT_UNDEFINED &&
 		pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED;
+	bool hasAnyColorAttachment = false;
+	if (hasSupportedColorsWithOptionalDepth) {
+		for (uint32_t colorIndex = 0;
+			 colorIndex < pRendInfo->colorAttachmentCount;
+			 colorIndex++) {
+			hasAnyColorAttachment |=
+				pRendInfo->pColorAttachmentFormats[colorIndex] != VK_FORMAT_UNDEFINED;
+		}
+		hasSupportedColorsWithOptionalDepth &= hasAnyColorAttachment;
+	}
 	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
 		!pTessCtlSS && !pTessEvalSS;
@@ -3249,14 +3259,20 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneColorWithOptionalDepth && hasDescriptorlessShaderStages &&
+		hasSupportedColorsWithOptionalDepth && hasDescriptorlessShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneColorWithOptionalDepth && hasArgumentTableShaderStages &&
+		hasSupportedColorsWithOptionalDepth && hasArgumentTableShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
-		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
+		_metal4ColorAttachmentCount = pRendInfo->colorAttachmentCount;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _metal4ColorAttachmentCount;
+			 colorIndex++) {
+			_metal4ColorAttachmentFormats[colorIndex] =
+				pRendInfo->pColorAttachmentFormats[colorIndex];
+		}
 		_metal4DepthAttachmentFormat = pRendInfo->depthAttachmentFormat;
 		_metal4RenderExecutionUnsupportedReason = nullptr;
 	} else if (hasVertexFragmentStages &&
@@ -3267,7 +3283,8 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
-			   pRendInfo->colorAttachmentCount != 1) {
+			   (pRendInfo->colorAttachmentCount == 0 ||
+				pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount)) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
@@ -3280,11 +3297,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (pRendInfo->viewMask != 0) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_multiview";
-	} else if (pRendInfo->colorAttachmentCount != 1) {
+	} else if (pRendInfo->colorAttachmentCount == 0 ||
+			   pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_color_count";
-	} else if (!pRendInfo->pColorAttachmentFormats ||
-			   pRendInfo->pColorAttachmentFormats[0] == VK_FORMAT_UNDEFINED) {
+	} else if (!pRendInfo->pColorAttachmentFormats || !hasAnyColorAttachment) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_color_format";
 	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {

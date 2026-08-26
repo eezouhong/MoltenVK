@@ -2721,6 +2721,80 @@ static MVKRenderStateFlags getRenderStateFlags(VkDynamicState vk) {
 	}
 }
 
+static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dynamicStateFlags) {
+	MVKRenderStateFlags unsupported =
+		dynamicStateFlags.removing(MVKRenderStateFlag::VertexStride);
+	static constexpr MVKRenderStateFlags viewportScissor {
+		MVKRenderStateFlag::Viewports,
+		MVKRenderStateFlag::Scissors,
+	};
+	static constexpr MVKRenderStateFlags depthStencil {
+		MVKRenderStateFlag::DepthBounds,
+		MVKRenderStateFlag::DepthBoundsTestEnable,
+		MVKRenderStateFlag::DepthCompareOp,
+		MVKRenderStateFlag::DepthTestEnable,
+		MVKRenderStateFlag::DepthWriteEnable,
+		MVKRenderStateFlag::StencilCompareMask,
+		MVKRenderStateFlag::StencilOp,
+		MVKRenderStateFlag::StencilReference,
+		MVKRenderStateFlag::StencilTestEnable,
+		MVKRenderStateFlag::StencilWriteMask,
+	};
+	static constexpr MVKRenderStateFlags rasterization {
+		MVKRenderStateFlag::CullMode,
+		MVKRenderStateFlag::DepthBias,
+		MVKRenderStateFlag::DepthBiasEnable,
+		MVKRenderStateFlag::DepthClipEnable,
+		MVKRenderStateFlag::FrontFace,
+		MVKRenderStateFlag::LineRasterizationMode,
+		MVKRenderStateFlag::LineWidth,
+		MVKRenderStateFlag::PolygonMode,
+		MVKRenderStateFlag::RasterizerDiscardEnable,
+	};
+	static constexpr MVKRenderStateFlags topology {
+		MVKRenderStateFlag::PrimitiveRestartEnable,
+		MVKRenderStateFlag::PrimitiveTopology,
+		MVKRenderStateFlag::ProvokingVertexMode,
+	};
+	static constexpr MVKRenderStateFlags colorBlend {
+		MVKRenderStateFlag::BlendConstants,
+		MVKRenderStateFlag::ColorBlend,
+		MVKRenderStateFlag::ColorBlendEnable,
+		MVKRenderStateFlag::LogicOp,
+		MVKRenderStateFlag::LogicOpEnable,
+	};
+	static constexpr MVKRenderStateFlags sampling {
+		MVKRenderStateFlag::SampleLocations,
+		MVKRenderStateFlag::SampleLocationsEnable,
+	};
+	static constexpr MVKRenderStateFlags tessellation {
+		MVKRenderStateFlag::PatchControlPoints,
+	};
+
+	if (unsupported.hasAny(viewportScissor)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_viewport_scissor";
+	}
+	if (unsupported.hasAny(depthStencil)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_depth_stencil";
+	}
+	if (unsupported.hasAny(rasterization)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_rasterization";
+	}
+	if (unsupported.hasAny(topology)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_topology";
+	}
+	if (unsupported.hasAny(colorBlend)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_color_blend";
+	}
+	if (unsupported.hasAny(sampling)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_sampling";
+	}
+	if (unsupported.hasAny(tessellation)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_tessellation";
+	}
+	return "MVKCmdBindGraphicsPipeline:dynamic_other";
+}
+
 static void loadStencil(MVKMTLStencilDescriptorData& mtl, const VkStencilOpState& vk) {
 	mtl.readMask = vk.compareMask;
 	mtl.writeMask = vk.writeMask;
@@ -3151,7 +3225,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			"MVKCmdBindGraphicsPipeline:attachment_depth_state";
 	} else if (hasUnsupportedDynamicState) {
 		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:dynamic_state";
+			getMetal4UnsupportedDynamicStateReason(_dynamicStateFlags);
 	} else if (!_mtlPipelineState) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:missing_pipeline_state";

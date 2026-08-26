@@ -647,8 +647,13 @@ def main() -> int:
         ),
         (
             pipeline_h + pipeline_cmd_mm + pipeline_mm,
-            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state[\s\S]*?dynamic_state",
+            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state",
             "graphics-pipeline blockers are not classified before expanding the render backend",
+        ),
+        (
+            pipeline_mm,
+            r"dynamic_viewport_scissor[\s\S]*?dynamic_depth_stencil[\s\S]*?dynamic_rasterization[\s\S]*?dynamic_topology[\s\S]*?dynamic_color_blend[\s\S]*?dynamic_sampling[\s\S]*?dynamic_tessellation[\s\S]*?dynamic_other",
+            "dynamic-state blockers are not split into actionable capability groups",
         ),
     ):
         require(source, pattern, message)
@@ -656,6 +661,11 @@ def main() -> int:
         pipeline_mm,
         r"attachment_render_pass_simple",
         "supported single-color classic render passes are still mislabeled as attachment blockers",
+    )
+    reject(
+        pipeline_mm,
+        r'"MVKCmdBindGraphicsPipeline:dynamic_state"',
+        "dynamic-state blockers are still collapsed into one unactionable bucket",
     )
     reject(
         execute_metal4,

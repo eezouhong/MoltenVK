@@ -1458,6 +1458,8 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
     }
 
 	MVKRenderPass* renderPass = cmdBuff ? cmdBuff->_currentSubpassInfo.renderpass : nullptr;
+	MVKFramebuffer* framebuffer =
+		cmdBuff ? cmdBuff->_currentSubpassInfo.framebuffer : nullptr;
 	const VkRenderingInfo* renderingInfo =
 		cmdBuff ? cmdBuff->_currentSubpassInfo.renderingInfo : nullptr;
 	uint32_t subpassIndex = cmdBuff ? cmdBuff->_currentSubpassInfo.subpassIndex : 0;
@@ -1535,6 +1537,7 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_metal4Info.depthStencilValue = _clearDepthStencilValue;
 		_metal4Info.rects = _clearRects.data();
 		_metal4Info.rectCount = _clearRects.size();
+		_metal4Info.framebufferLayerCount = renderingInfo->layerCount;
 		_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
 		_metal4UnsupportedReason = _supportsMetal4Encoding
 			? nullptr : "dynamic_clear_encoding_pool_missing";
@@ -1544,6 +1547,7 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	if (renderPass->getSubpassCount() != 1) {
 		return rejectMetal4("classic_clear_subpass_count");
 	}
+	if (!framebuffer) { return rejectMetal4("classic_clear_framebuffer_missing"); }
 	MVKRenderSubpass* subpass = renderPass->getSubpass(subpassIndex);
 	if (!subpass) { return rejectMetal4("classic_clear_subpass_missing"); }
 	if (subpass->isMultiview()) { return rejectMetal4("classic_clear_multiview"); }
@@ -1553,11 +1557,13 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	if (subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
 		return rejectMetal4("classic_clear_color_count");
 	}
+	uint32_t framebufferLayerCount = framebuffer->getLayerCount();
+	if (!framebufferLayerCount) {
+		return rejectMetal4("classic_clear_framebuffer_layer_count");
+	}
 	for (const auto& rect : _clearRects) {
-		if (rect.baseArrayLayer != 0) {
-			return rejectMetal4("classic_clear_base_layer");
-		}
-		if (rect.layerCount != 1) {
+		if (!rect.layerCount || rect.baseArrayLayer >= framebufferLayerCount ||
+			rect.layerCount > framebufferLayerCount - rect.baseArrayLayer) {
 			return rejectMetal4("classic_clear_layer_count");
 		}
 		if (rect.rect.offset.x < 0 || rect.rect.offset.y < 0) {
@@ -1598,6 +1604,7 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	_metal4Info.depthStencilValue = _clearDepthStencilValue;
 	_metal4Info.rects = _clearRects.data();
 	_metal4Info.rectCount = _clearRects.size();
+	_metal4Info.framebufferLayerCount = framebufferLayerCount;
 	_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
 	_metal4UnsupportedReason = _supportsMetal4Encoding
 		? nullptr : "classic_clear_encoding_pool_missing";

@@ -1364,7 +1364,7 @@ public:
 		}
 		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
 		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
-		descriptor.renderTargetArrayLength = 1;
+		descriptor.renderTargetArrayLength = renderingInfo.layerCount;
 		if (_visibilityQueryPool) {
 			descriptor.visibilityResultBuffer =
 				_queryPools.find(_visibilityQueryPool)->second.resetBuffer;
@@ -1392,6 +1392,7 @@ public:
 			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = firstColorBinding->width;
 		_currentRenderHeight = firstColorBinding->height;
+		_currentRenderLayerCount = renderingInfo.layerCount;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -1492,6 +1493,7 @@ public:
 			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = extent.width;
 		_currentRenderHeight = extent.height;
+		_currentRenderLayerCount = framebuffer->getLayerCount();
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -1774,7 +1776,7 @@ public:
 		if (!_device || !_mtlDevice || !info.commandKey || !info.encodingPool ||
 			!info.rects || !info.rectCount ||
 			info.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
-			info.rectCount > NSUIntegerMax / (6 * sizeof(simd::float4)) ||
+			!info.framebufferLayerCount ||
 			!ensureArgumentTable()) {
 			return false;
 		}
@@ -1782,9 +1784,19 @@ public:
 
 		ClearAttachmentsBinding binding;
 		binding.rects.assign(info.rects, info.rects + info.rectCount);
-		binding.vertexCount = info.rectCount * 6;
+		for (const VkClearRect& rect : binding.rects) {
+			if (!rect.layerCount || rect.baseArrayLayer >= info.framebufferLayerCount ||
+				rect.layerCount > info.framebufferLayerCount - rect.baseArrayLayer ||
+				rect.layerCount > (NSUIntegerMax - binding.vertexCount) / 6) {
+				return false;
+			}
+			binding.vertexCount += static_cast<NSUInteger>(rect.layerCount) * 6;
+		}
 		binding.stencilReference = info.depthStencilValue.stencil;
 		binding.pipelineKey.mtlSampleCount = 1;
+		if (info.framebufferLayerCount > 1) {
+			binding.pipelineKey.enableLayeredRendering();
+		}
 		simd::float4 clearColors[kMVKClearAttachmentCount] = {};
 		MVKPixelFormats* pixelFormats = _pixelFormats;
 		if (!pixelFormats) { return false; }
@@ -1867,7 +1879,10 @@ public:
 			uint64_t right = uint64_t(clearRect.rect.offset.x) + clearRect.rect.extent.width;
 			uint64_t bottom = uint64_t(clearRect.rect.offset.y) + clearRect.rect.extent.height;
 			if (clearRect.rect.offset.x < 0 || clearRect.rect.offset.y < 0 ||
-				clearRect.baseArrayLayer != 0 || clearRect.layerCount != 1 ||
+				!clearRect.layerCount ||
+				clearRect.baseArrayLayer >= _currentRenderLayerCount ||
+				clearRect.layerCount >
+					_currentRenderLayerCount - clearRect.baseArrayLayer ||
 				right > _currentRenderWidth || bottom > _currentRenderHeight) {
 				return false;
 			}
@@ -1879,12 +1894,16 @@ public:
 			rightPos = rightPos * 2.0f - 1.0f;
 			bottomPos = bottomPos * 2.0f - 1.0f;
 			topPos = topPos * 2.0f - 1.0f;
-			vertices[vertexIndex++] = { leftPos, topPos, 0.0f, 0.0f };
-			vertices[vertexIndex++] = { leftPos, bottomPos, 0.0f, 0.0f };
-			vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, 0.0f };
-			vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, 0.0f };
-			vertices[vertexIndex++] = { rightPos, topPos, 0.0f, 0.0f };
-			vertices[vertexIndex++] = { leftPos, topPos, 0.0f, 0.0f };
+			uint32_t endLayer = clearRect.baseArrayLayer + clearRect.layerCount;
+			for (uint32_t layer = clearRect.baseArrayLayer; layer < endLayer; layer++) {
+				float layerValue = static_cast<float>(layer);
+				vertices[vertexIndex++] = { leftPos, topPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { leftPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, topPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { leftPos, topPos, 0.0f, layerValue };
+			}
 		}
 
 		[_renderEncoder setRenderPipelineState:binding.pipelineState];
@@ -1937,6 +1956,7 @@ public:
 		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
+		_currentRenderLayerCount = 0;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -2044,6 +2064,7 @@ private:
 		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
+		_currentRenderLayerCount = 0;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -2413,6 +2434,7 @@ private:
 	VkFormat _currentStencilFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
+	uint32_t _currentRenderLayerCount = 0;
 	array<VkViewport, kMVKMaxViewportScissorCount> _dynamicViewports = {};
 	array<VkRect2D, kMVKMaxViewportScissorCount> _dynamicScissors = {};
 	uint32_t _dynamicViewportCount = 0;

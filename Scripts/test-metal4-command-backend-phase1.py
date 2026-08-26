@@ -41,6 +41,9 @@ def main() -> int:
     command_h = read("MoltenVK/MoltenVK/Commands/MVKCommand.h")
     command_pool_h = read("MoltenVK/MoltenVK/Commands/MVKCommandPool.h")
     command_pool_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandPool.mm")
+    command_resource_factory_mm = read(
+        "MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm"
+    )
     command_buffer_h = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h")
     command_buffer_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm")
     transfer_h = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.h")
@@ -871,7 +874,7 @@ def main() -> int:
         ),
         (
             transfer_h + transfer_mm,
-            r"MVKCmdClearAttachments[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?dynamic_clear_flags[\s\S]*?dynamic_clear_multiview[\s\S]*?dynamic_clear_layer_count[\s\S]*?dynamic_clear_rect[\s\S]*?dynamic_clear_color_attachment_missing[\s\S]*?dynamic_clear_multisample[\s\S]*?dynamic_clear_depth_stencil_attachment_missing[\s\S]*?classic_clear_multisample[\s\S]*?classic_clear_base_layer[\s\S]*?classic_clear_layer_count[\s\S]*?classic_clear_negative_offset[\s\S]*?classic_clear_zero_extent",
+            r"MVKCmdClearAttachments[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?dynamic_clear_flags[\s\S]*?dynamic_clear_multiview[\s\S]*?dynamic_clear_layer_count[\s\S]*?dynamic_clear_rect[\s\S]*?dynamic_clear_color_attachment_missing[\s\S]*?dynamic_clear_multisample[\s\S]*?dynamic_clear_depth_stencil_attachment_missing[\s\S]*?classic_clear_framebuffer_missing[\s\S]*?classic_clear_multisample[\s\S]*?classic_clear_framebuffer_layer_count[\s\S]*?classic_clear_layer_count[\s\S]*?classic_clear_negative_offset[\s\S]*?classic_clear_zero_extent",
             "clear-attachment fallback telemetry does not identify the actual unsupported shape",
         ),
         (
@@ -883,6 +886,11 @@ def main() -> int:
             rendering_mm + queue_mm + transfer_mm + e2e,
             r"framebufferLayerCount[\s\S]*?MTLTextureType2DArray[\s\S]*?texture\.arrayLength[\s\S]*?renderTargetArrayLength\s*=\s*framebuffer->getLayerCount\(\)[\s\S]*?CLASSIC_LAYERED_RENDER_OK",
             "classic layered render passes are not admitted and exercised through the Metal 4 path",
+        ),
+        (
+            command_h + command_buffer_h + command_buffer_mm + transfer_mm + queue_mm + command_resource_factory_mm + e2e,
+            r"framebufferLayerCount[\s\S]*?beginRenderpass[\s\S]*?framebuffer[\s\S]*?enableLayeredRendering[\s\S]*?rect\.layerCount[\s\S]*?render_target_array_index[\s\S]*?CLASSIC_LAYERED_CLEAR_ATTACHMENTS_OK",
+            "classic layered vkCmdClearAttachments is not retained, materialized, and read back through Metal 4",
         ),
     ):
         require(source, pattern, message)

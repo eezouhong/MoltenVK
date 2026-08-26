@@ -75,8 +75,9 @@ MVKCommandEncodingContext::~MVKCommandEncodingContext() {
 #pragma mark -
 #pragma mark MVKCurrentSubpassInfo
 
-void MVKCurrentSubpassInfo::beginRenderpass(MVKRenderPass* rp) {
+void MVKCurrentSubpassInfo::beginRenderpass(MVKRenderPass* rp, MVKFramebuffer* fb) {
 	renderpass = rp;
+	framebuffer = fb;
 	renderingInfo = nullptr;
 	subpassIndex = 0;
 	updateViewMask();
@@ -87,6 +88,7 @@ void MVKCurrentSubpassInfo::nextSubpass() {
 }
 void MVKCurrentSubpassInfo::beginRendering(const VkRenderingInfo* info) {
 	renderpass = nullptr;
+	framebuffer = nullptr;
 	renderingInfo = info;
 	subpassIndex = 0;
 	subpassViewMask = info ? info->viewMask : 0;

@@ -38,7 +38,7 @@ VkResult MVKCmdBeginRenderPassBase::setContent(MVKCommandBuffer* cmdBuff,
 	_framebuffer = (MVKFramebuffer*)pRenderPassBegin->framebuffer;
 	_renderArea = pRenderPassBegin->renderArea;
 
-	cmdBuff->_currentSubpassInfo.beginRenderpass(_renderPass);
+	cmdBuff->_currentSubpassInfo.beginRenderpass(_renderPass, _framebuffer);
 
 	return VK_SUCCESS;
 }

@@ -2498,9 +2498,9 @@ int main() {
         std::cout << "CLASSIC_CLEAR_ATTACHMENTS_OK" << std::endl;
 
         // A layered framebuffer exposes two active slices of one array image.
-        // With no Layer output, the draw paints slice zero while the render-pass
-        // load clear still covers both active slices. This verifies the MTL4
-        // descriptor's renderTargetArrayLength and attachment slice bounds.
+        // The draw first paints slice zero, then vkCmdClearAttachments explicitly
+        // clears both slices. This verifies the MTL4 descriptor's array length,
+        // layered clear shader output, and attachment slice bounds.
         Image classicLayeredTarget = createImage(
             physicalDevice, device, kImageWidth, kImageHeight,
             VK_FORMAT_R8G8B8A8_UNORM,
@@ -2585,6 +2585,18 @@ int main() {
         vkCmdBindPipeline(classicLayeredRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           classicLayeredPipeline);
         vkCmdDraw(classicLayeredRender, 3, 1, 0, 0);
+        VkClearAttachment classicLayeredExplicitClear{};
+        classicLayeredExplicitClear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        classicLayeredExplicitClear.colorAttachment = 0;
+        classicLayeredExplicitClear.clearValue.color =
+            {{0.0f, 1.0f, 0.0f, 1.0f}};
+        VkClearRect classicLayeredClearRect{};
+        classicLayeredClearRect.rect = scissor;
+        classicLayeredClearRect.baseArrayLayer = 0;
+        classicLayeredClearRect.layerCount = 2;
+        vkCmdClearAttachments(classicLayeredRender, 1,
+                              &classicLayeredExplicitClear, 1,
+                              &classicLayeredClearRect);
         vkCmdEndRenderPass(classicLayeredRender);
         endCommandBuffer(classicLayeredRender);
 
@@ -2626,9 +2638,10 @@ int main() {
                             classicLayeredSubmits.data(), classicLayeredFence),
               "vkQueueSubmit(classic layered sequence)");
         waitFence(device, classicLayeredFence);
-        validateSolidColor(device, classicLayerZeroReadback, {64, 128, 191, 255});
-        validateSolidColor(device, classicLayerOneReadback, {255, 0, 0, 255});
+        validateSolidColor(device, classicLayerZeroReadback, {0, 255, 0, 255});
+        validateSolidColor(device, classicLayerOneReadback, {0, 255, 0, 255});
         std::cout << "CLASSIC_LAYERED_RENDER_OK" << std::endl;
+        std::cout << "CLASSIC_LAYERED_CLEAR_ATTACHMENTS_OK" << std::endl;
 
         // A classic render pass may carry a stencil attachment even when the
         // pipeline cannot read or write stencil. Metal still requires the

@@ -54,6 +54,7 @@ struct MVKMetal4ClearAttachmentsInfo {
 	bool clearStencil = false;
 	const VkClearRect* rects = nullptr;
 	size_t rectCount = 0;
+	uint32_t framebufferLayerCount = 1;
 };
 
 

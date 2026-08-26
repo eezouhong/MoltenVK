@@ -190,6 +190,16 @@ def main() -> int:
         r"supportsMetal4CopyImage[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT",
         "image-copy preflight does not fail closed on unsupported formats/aspects",
     )
+    require(
+        transfer_h + transfer_mm,
+        r"MVKCmdBufferImageCopy[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?copyBufferImage",
+        "buffer/image copies are not materialized by the Metal 4 backend",
+    )
+    require(
+        transfer_mm,
+        r"supportsMetal4BufferImageCopy[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT",
+        "buffer/image-copy preflight does not fail closed on unsupported formats/aspects",
+    )
 
     for token in (
         "supportsMetal4DescriptorlessExecution",
@@ -233,9 +243,9 @@ def main() -> int:
         "unsupported dependency flags do not fail closed",
     )
     require(
-        pipeline_cmd_mm,
-        r"supportsMetal4PipelineBarriers[\s\S]*?barrier\.type\s*==\s*MVKPipelineBarrier::Image[\s\S]*?return\s+false",
-        "image barriers with unimplemented layout side effects do not fail closed",
+        command_h + pipeline_cmd_mm + queue_mm,
+        r"trackImageBarrier[\s\S]*?pendingImageBarriers[\s\S]*?publishCommittedState",
+        "image-layout transitions are not deferred until a successful Metal 4 commit",
     )
     require(
         pipeline_cmd_mm,
@@ -445,8 +455,8 @@ def main() -> int:
     )
     require(
         execute_metal4,
-        r"commit:[\s\S]*?publishCommittedCounters",
-        "command telemetry is published before a successful Metal 4 commit",
+        r"commit:[\s\S]*?publishCommittedState[\s\S]*?publishCommittedCounters",
+        "Metal 4 state or telemetry is published before a successful commit",
     )
     for token in (
         "MVKMetal4FallbackReason",
@@ -593,6 +603,8 @@ def main() -> int:
         "barriers",
     ):
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
+    require(runner, r"fallbacks=0", "controlled Metal 4 E2E does not require a zero-fallback path")
+    require(runner, r"unsupported_commands=none", "controlled Metal 4 E2E permits unsupported commands")
 
     print("PASS: usable Metal 4 Phase 1C compute/transfer/render backend source contract")
     return 0

@@ -440,6 +440,24 @@ void MVKImagePlane::applyImageMemoryBarrier(MVKPipelineBarrier& barrier,
 	}
 }
 
+void MVKImagePlane::applyMetal4ImageLayoutTransition(const MVKPipelineBarrier& barrier) {
+	uint32_t mipLevelEnd = barrier.levelCount == (uint8_t)VK_REMAINING_MIP_LEVELS
+		? _image->getMipLevelCount()
+		: std::min(_image->getMipLevelCount(),
+					   (uint32_t)barrier.baseMipLevel + barrier.levelCount);
+	uint32_t layerEnd = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
+		? _image->getLayerCount()
+		: std::min(_image->getLayerCount(),
+					   (uint32_t)barrier.baseArrayLayer + barrier.layerCount);
+	for (uint32_t mipLevel = barrier.baseMipLevel; mipLevel < mipLevelEnd; mipLevel++) {
+		for (uint32_t layer = barrier.baseArrayLayer; layer < layerEnd; layer++) {
+			if (MVKImageSubresource* subresource = getSubresource(mipLevel, layer)) {
+				subresource->layoutState = barrier.newLayout;
+			}
+		}
+	}
+}
+
 // Once the command buffer completes, pull the content of the subresource into host memory.
 // This is only necessary when the image memory is intended to be host-coherent, and the
 // device memory is currently mapped to host memory
@@ -934,6 +952,16 @@ void MVKImage::applyImageMemoryBarrier(MVKPipelineBarrier& barrier,
 			_planes[planeIndex]->applyImageMemoryBarrier(barrier, cmdEncoder, cmdUse);
 		}
     }
+}
+
+void MVKImage::applyMetal4ImageLayoutTransition(const MVKPipelineBarrier& barrier) {
+	for (uint8_t planeIndex = 0; planeIndex < _planes.size(); planeIndex++) {
+		if (!_hasChromaSubsampling ||
+			mvkIsAnyFlagEnabled(barrier.aspectMask,
+								 (VK_IMAGE_ASPECT_PLANE_0_BIT << planeIndex))) {
+			_planes[planeIndex]->applyMetal4ImageLayoutTransition(barrier);
+		}
+	}
 }
 
 VkResult MVKImage::getMemoryRequirements(VkMemoryRequirements* pMemoryRequirements, uint8_t planeIndex) {

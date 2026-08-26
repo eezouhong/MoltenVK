@@ -40,6 +40,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 using namespace std;
 
@@ -722,6 +723,66 @@ public:
 		return true;
 	}
 
+	bool copyBufferImage(MVKBuffer* buffer,
+						 MVKImage* image,
+						 const VkBufferImageCopy2& region,
+						 bool toImage) override {
+		auto bufferIt = _buffers.find(buffer);
+		auto imageIt = _images.find(image);
+		uint8_t plane = MVKImage::getPlaneFromVkImageAspectFlags(
+			region.imageSubresource.aspectMask);
+		if (!ensureComputeEncoder() || bufferIt == _buffers.end() ||
+			imageIt == _images.end() || plane >= imageIt->second.textures.size()) {
+			return false;
+		}
+
+		id<MTLBuffer> mtlBuffer = bufferIt->second.buffer;
+		id<MTLTexture> mtlTexture = imageIt->second.textures[plane];
+		MTLPixelFormat pixelFormat = image->getMTLPixelFormat(plane);
+		uint32_t bufferWidth = region.bufferRowLength ?
+			region.bufferRowLength : region.imageExtent.width;
+		NSUInteger bytesPerRow = image->getPixelFormats()->getBytesPerRow(pixelFormat, bufferWidth);
+		NSUInteger activeRowBytes = image->getPixelFormats()->getBytesPerRow(
+			pixelFormat, region.imageExtent.width);
+		NSUInteger bufferOffset = bufferIt->second.offset + (NSUInteger)region.bufferOffset;
+		NSUInteger rowCount = region.imageExtent.height;
+		NSUInteger maxValue = std::numeric_limits<NSUInteger>::max();
+		if (!bytesPerRow || !activeRowBytes || bufferOffset > mtlBuffer.length ||
+			(rowCount > 1 && bytesPerRow > (maxValue - bufferOffset) / (rowCount - 1))) {
+			return false;
+		}
+		NSUInteger lastRowOffset = bufferOffset + bytesPerRow * (rowCount - 1);
+		if (activeRowBytes > mtlBuffer.length - lastRowOffset) { return false; }
+
+		MTLOrigin textureOrigin = mvkMTLOriginFromVkOffset3D(region.imageOffset);
+		MTLSize textureSize = mvkMTLSizeFromVkExtent3D(region.imageExtent);
+		NSUInteger slice = region.imageSubresource.baseArrayLayer;
+		NSUInteger level = region.imageSubresource.mipLevel;
+		if (toImage) {
+			[_computeEncoder copyFromBuffer:mtlBuffer
+							 sourceOffset:bufferOffset
+						sourceBytesPerRow:bytesPerRow
+					  sourceBytesPerImage:0
+							  sourceSize:textureSize
+							   toTexture:mtlTexture
+						 destinationSlice:slice
+						 destinationLevel:level
+						destinationOrigin:textureOrigin];
+		} else {
+			[_computeEncoder copyFromTexture:mtlTexture
+							  sourceSlice:slice
+							  sourceLevel:level
+							 sourceOrigin:textureOrigin
+							   sourceSize:textureSize
+								 toBuffer:mtlBuffer
+						 destinationOffset:bufferOffset
+					destinationBytesPerRow:bytesPerRow
+				  destinationBytesPerImage:0];
+		}
+		_counters.imageCopies++;
+		return true;
+	}
+
 	bool bindComputePipeline(MVKComputePipeline* pipeline) override {
 		auto it = _computePipelines.find(pipeline);
 		if (!ensureComputeEncoder() || it == _computePipelines.end()) { return false; }
@@ -772,6 +833,15 @@ public:
 		endComputeEncoding();
 		_pendingBarriers.push_back(PendingBarrier{after, before, visibility});
 		_counters.barriers++;
+		return true;
+	}
+
+	bool trackImageBarrier(const MVKPipelineBarrier& barrier) override {
+		if (barrier.type != MVKPipelineBarrier::Image || !barrier.mvkImage ||
+			_images.find(barrier.mvkImage) == _images.end()) {
+			return false;
+		}
+		_pendingImageBarriers.push_back(barrier);
 		return true;
 	}
 
@@ -906,6 +976,12 @@ public:
 		_state->recordBarrier(_counters.barriers);
 	}
 
+	void publishCommittedState() {
+		for (const auto& barrier : _pendingImageBarriers) {
+			barrier.mvkImage->applyMetal4ImageLayoutTransition(barrier);
+		}
+	}
+
 private:
 	bool ensureComputeEncoder() {
 		if (!_commandBuffer || _renderEncoder) { return false; }
@@ -987,6 +1063,7 @@ private:
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
 	vector<PendingBarrier> _pendingBarriers;
+	vector<MVKPipelineBarrier> _pendingImageBarriers;
 	vector<id<MTLAllocation>> _allocations;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
@@ -2136,6 +2213,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[commandQueue commit:commandBuffers count:1 options:options];
 		endMetal4CommandBuffers(true);
 		claimedCommandBuffers = false;
+		encoder.publishCommittedState();
 		encoder.publishCommittedCounters();
 		state->recordRealSubmission();
 		if (encoder.hasRenderWork()) { state->recordRenderSubmission(); }

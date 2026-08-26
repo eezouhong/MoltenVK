@@ -29,6 +29,7 @@ class MVKComputePipeline;
 class MVKGraphicsPipeline;
 class MVKImage;
 class MVKImageView;
+struct MVKPipelineBarrier;
 
 
 #pragma mark -
@@ -77,6 +78,11 @@ public:
 						   MVKImage* dstImage,
 						   uint8_t dstPlane) = 0;
 
+	virtual bool copyBufferImage(MVKBuffer* buffer,
+							 MVKImage* image,
+							 const VkBufferImageCopy2& region,
+							 bool toImage) = 0;
+
 	virtual bool bindComputePipeline(MVKComputePipeline* pipeline) = 0;
 
 	virtual bool dispatchThreadgroups(uint32_t groupCountX,
@@ -87,6 +93,9 @@ public:
 								 VkAccessFlags2 srcAccess,
 								 VkPipelineStageFlags2 dstStages,
 								 VkAccessFlags2 dstAccess) = 0;
+
+	/** Defers image layout metadata until the Metal 4 command buffer commits. */
+	virtual bool trackImageBarrier(const MVKPipelineBarrier& barrier) = 0;
 
 	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
 	virtual bool endRendering() = 0;

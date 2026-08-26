@@ -97,6 +97,8 @@ grep -Eq 'render_submissions=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'render_passes=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'draws=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'barriers=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -q 'fallbacks=0' "${BUILD_DIR}/metal4.log"
+grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4.log"
 
 MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0 \
 MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
@@ -107,6 +109,8 @@ MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
 grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'fallbacks=0' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4-single-queue.log"
 if grep -q 'unsupported_semaphore' "${BUILD_DIR}/metal4-single-queue.log"; then
   echo "Single-queue semaphore unexpectedly forced Metal 4 fallback" >&2
   exit 1

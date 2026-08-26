@@ -61,14 +61,31 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 	if (barriers.empty()) { return true; }
 	for (const auto& barrier : barriers) {
 		if (barrier.type == MVKPipelineBarrier::None) { return false; }
-		// The legacy path applies image-layout state transitions and host-read
-		// synchronization in addition to encoding a GPU barrier. Until the MTL4
-		// materializer preserves those side effects, fail closed for every image
-		// barrier and for memory/buffer barriers visible to the host.
-		if (barrier.type == MVKPipelineBarrier::Image) { return false; }
+		// Host synchronization remains on the legacy path. Ordinary image layout
+		// metadata is staged by the MTL4 materializer and published only after commit.
 		if (mvkIsAnyFlagEnabled(barrier.dstStageMask, VK_PIPELINE_STAGE_2_HOST_BIT) ||
 			mvkIsAnyFlagEnabled(barrier.dstAccessMask, VK_ACCESS_2_HOST_READ_BIT)) {
 			return false;
+		}
+		if (barrier.type == MVKPipelineBarrier::Image) {
+			bool supportedLayout = barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+				barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+				barrier.newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			uint32_t mipLevelCount = barrier.levelCount == (uint8_t)VK_REMAINING_MIP_LEVELS
+				? barrier.mvkImage ? barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel : 0
+				: barrier.levelCount;
+			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
+				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
+				: barrier.layerCount;
+			if (!barrier.mvkImage || !supportedLayout ||
+				barrier.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+				barrier.baseMipLevel >= barrier.mvkImage->getMipLevelCount() ||
+				barrier.baseArrayLayer >= barrier.mvkImage->getLayerCount() ||
+				!mipLevelCount || !layerCount ||
+				mipLevelCount > barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel ||
+				layerCount > barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer) {
+				return false;
+			}
 		}
 		if (barrier.type == MVKPipelineBarrier::Buffer ||
 			barrier.type == MVKPipelineBarrier::Image) {
@@ -161,6 +178,10 @@ bool MVKCmdPipelineBarrier<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder)
 										 barrier.srcAccessMask,
 										 barrier.dstStageMask,
 										 barrier.dstAccessMask)) {
+			return false;
+		}
+		if (barrier.type == MVKPipelineBarrier::Image &&
+			!cmdEncoder->trackImageBarrier(barrier)) {
 			return false;
 		}
 	}

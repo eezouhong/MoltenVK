@@ -78,6 +78,7 @@ protected:
 	void applyImageMemoryBarrier(MVKPipelineBarrier& barrier,
 								 MVKCommandEncoder* cmdEncoder,
 								 MVKCommandUse cmdUse);
+	void applyMetal4ImageLayoutTransition(const MVKPipelineBarrier& barrier);
 	void pullFromDeviceOnCompletion(MVKCommandEncoder* cmdEncoder,
 									MVKImageSubresource& subresource,
 									const MVKMappedMemoryRange& mappedRange);
@@ -257,6 +258,9 @@ public:
 	void applyImageMemoryBarrier(MVKPipelineBarrier& barrier,
 								 MVKCommandEncoder* cmdEncoder,
 								 MVKCommandUse cmdUse);
+
+	/** Applies layout metadata after a Metal 4 command buffer commits. */
+	void applyMetal4ImageLayoutTransition(const MVKPipelineBarrier& barrier);
 
     /** Flush underlying buffer memory into the image if necessary */
     void flushToDevice(VkDeviceSize offset, VkDeviceSize size);

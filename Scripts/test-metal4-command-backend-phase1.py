@@ -647,11 +647,16 @@ def main() -> int:
         ),
         (
             pipeline_h + pipeline_cmd_mm + pipeline_mm,
-            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil[\s\S]*?attachment_render_pass_simple[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state[\s\S]*?dynamic_state",
+            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state[\s\S]*?dynamic_state",
             "graphics-pipeline blockers are not classified before expanding the render backend",
         ),
     ):
         require(source, pattern, message)
+    reject(
+        pipeline_mm,
+        r"attachment_render_pass_simple",
+        "supported single-color classic render passes are still mislabeled as attachment blockers",
+    )
     reject(
         execute_metal4,
         r"\[options release\];\s*\[options release\];",

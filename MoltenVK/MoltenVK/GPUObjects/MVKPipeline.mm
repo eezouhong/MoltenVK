@@ -3127,9 +3127,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil";
-	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE) {
-		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:attachment_render_pass_simple";
 	} else if (!pRendInfo) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_rendering_info";

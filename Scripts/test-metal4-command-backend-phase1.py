@@ -762,7 +762,6 @@ def main() -> int:
         "replayable materialization failures do not identify the concrete Vulkan command",
     )
     for token in (
-        "begin_query_no_render_encoder",
         "begin_query_pool_mismatch",
         "begin_query_already_active",
         "dispatch_compute_encoder_unavailable",
@@ -1008,6 +1007,8 @@ def main() -> int:
         "RENDER_OK",
         "QUERY_RESET_OK",
         "QUERY_OCCLUSION_OK",
+        "COMPUTE_REBIND_AFTER_RENDER_OK",
+        "QUERY_OUTSIDE_RENDER_SCOPE_OK",
         "UPDATE_BUFFER_OK",
         "METAL4_PHASE1C_E2E_PASS",
     ):

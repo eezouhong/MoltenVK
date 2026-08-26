@@ -1313,34 +1313,29 @@ public:
 	bool beginVisibilityQuery(MVKQueryPool* queryPool,
 							  uint32_t query,
 							  VkQueryControlFlags flags) override {
-		if (!_renderEncoder) {
-			return failMetal4Encoding("begin_query_no_render_encoder");
-		}
 		if (queryPool != _visibilityQueryPool) {
 			return failMetal4Encoding("begin_query_pool_mismatch");
 		}
 		if (_activeQueryPool) {
 			return failMetal4Encoding("begin_query_already_active");
 		}
-		MTLVisibilityResultMode mode = mvkAreAllFlagsEnabled(
-			flags, VK_QUERY_CONTROL_PRECISE_BIT)
-			? MTLVisibilityResultModeCounting
-			: MTLVisibilityResultModeBoolean;
-		[_renderEncoder setVisibilityResultMode:mode
-								 offset:MVKOcclusionQueryPool::getVisibilityResultOffset(query)];
 		_activeQueryPool = queryPool;
 		_activeQuery = query;
-		return true;
+		_activeQueryFlags = flags;
+		return applyActiveVisibilityQuery();
 	}
 
 	bool endVisibilityQuery(MVKQueryPool* queryPool, uint32_t query) override {
-		if (!_renderEncoder || _activeQueryPool != queryPool || _activeQuery != query) {
+		if (_activeQueryPool != queryPool || _activeQuery != query) {
 			return false;
 		}
-		[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
+		if (_renderEncoder) {
+			[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
+		}
 		_completedQueries.push_back(MVKMetal4CompletedQuery{queryPool, query});
 		_activeQueryPool = nullptr;
 		_activeQuery = 0;
+		_activeQueryFlags = 0;
 		_counters.visibilityQueries++;
 		return true;
 	}
@@ -1477,6 +1472,7 @@ public:
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+		if (!applyActiveVisibilityQuery()) { return false; }
 
 		_currentColorAttachmentCount = renderingInfo.colorAttachmentCount;
 		for (uint32_t colorIndex = 0;
@@ -1578,6 +1574,7 @@ public:
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+		if (!applyActiveVisibilityQuery()) { return false; }
 
 		VkExtent2D extent = framebuffer->getExtent2D();
 		_currentColorAttachmentCount = subpass->getColorAttachmentCount();
@@ -1605,7 +1602,7 @@ public:
 	}
 
 	bool endRendering() override {
-		if (!_renderEncoder || _activeQueryPool) { return false; }
+		if (!_renderEncoder) { return false; }
 		endRenderEncoding();
 		return true;
 	}
@@ -2111,6 +2108,23 @@ private:
 		_computeEncoder = [[_commandBuffer computeCommandEncoder] retain];
 		if (!_computeEncoder) { return false; }
 		applyPendingBarriers(_computeEncoder, MTLStageDispatch | MTLStageBlit);
+		if (_boundComputePipeline) {
+			auto pipeline = _computePipelines.find(_boundComputePipeline);
+			if (pipeline == _computePipelines.end()) { return false; }
+			[_computeEncoder setComputePipelineState:pipeline->second];
+			_computeResourcesBoundForEncoder = false;
+		}
+		return true;
+	}
+
+	bool applyActiveVisibilityQuery() {
+		if (!_activeQueryPool || !_renderEncoder) { return true; }
+		MTLVisibilityResultMode mode = mvkAreAllFlagsEnabled(
+			_activeQueryFlags, VK_QUERY_CONTROL_PRECISE_BIT)
+			? MTLVisibilityResultModeCounting
+			: MTLVisibilityResultModeBoolean;
+		[_renderEncoder setVisibilityResultMode:mode
+								 offset:MVKOcclusionQueryPool::getVisibilityResultOffset(_activeQuery)];
 		return true;
 	}
 
@@ -2159,7 +2173,6 @@ private:
 		[_computeEncoder endEncoding];
 		[_computeEncoder release];
 		_computeEncoder = nil;
-		_boundComputePipeline = nullptr;
 		_computeResourcesBoundForEncoder = false;
 	}
 
@@ -2536,6 +2549,7 @@ private:
 	MVKQueryPool* _visibilityQueryPool = nullptr;
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;
+	VkQueryControlFlags _activeQueryFlags = 0;
 	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
 	uint32_t _currentColorAttachmentCount = 0;
 	bool _computeResourcesBoundForEncoder = false;

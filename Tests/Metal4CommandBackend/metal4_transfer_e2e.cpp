@@ -3475,6 +3475,31 @@ int main() {
                            {255, 0, 0, 255});
         std::cout << "DYNAMIC_STENCIL_VALUES_OK" << std::endl;
 
+        // Vulkan compute bindings persist across intervening render scopes in
+        // the same command buffer. A new Metal encoder must rematerialize the
+        // previously bound compute pipeline without another Vulkan bind.
+        VkCommandBuffer computeAcrossRender = beginCommandBuffer(device, commandPool);
+        vkCmdBindPipeline(computeAcrossRender, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          computePipeline);
+        vkCmdDispatch(computeAcrossRender, 1, 1, 1);
+        vkCmdBeginRendering(computeAcrossRender, &renderingInfo);
+        vkCmdBindPipeline(computeAcrossRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          graphicsPipeline);
+        vkCmdDraw(computeAcrossRender, 3, 1, 0, 0);
+        vkCmdEndRendering(computeAcrossRender);
+        vkCmdDispatch(computeAcrossRender, 1, 1, 1);
+        endCommandBuffer(computeAcrossRender);
+        VkSubmitInfo computeAcrossRenderSubmit =
+            makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        computeAcrossRenderSubmit.commandBufferCount = 1;
+        computeAcrossRenderSubmit.pCommandBuffers = &computeAcrossRender;
+        VkFence computeAcrossRenderFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &computeAcrossRenderSubmit,
+                            computeAcrossRenderFence),
+              "vkQueueSubmit(compute across render)");
+        waitFence(device, computeAcrossRenderFence);
+        std::cout << "COMPUTE_REBIND_AFTER_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -3541,6 +3566,36 @@ int main() {
             fail("Occlusion query result or availability was not published");
         }
         std::cout << "QUERY_OCCLUSION_OK" << std::endl;
+
+        // Ryujinx records the logical query around a render scope. MoltenVK
+        // must defer the Metal visibility mode until the render encoder exists.
+        Buffer outsideQueryCopy = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        writeBytes(device, outsideQueryCopy,
+                   std::vector<uint8_t>(sizeof(uint64_t), 0));
+        VkCommandBuffer outsideQuery = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(outsideQuery, queryPool, 2, 1);
+        vkCmdBeginQuery(outsideQuery, queryPool, 2, 0);
+        vkCmdBeginRendering(outsideQuery, &renderingInfo);
+        vkCmdBindPipeline(outsideQuery, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          graphicsPipeline);
+        vkCmdDraw(outsideQuery, 3, 1, 0, 0);
+        vkCmdEndRendering(outsideQuery);
+        vkCmdEndQuery(outsideQuery, queryPool, 2);
+        vkCmdCopyQueryPoolResults(outsideQuery, queryPool, 2, 1,
+                                  outsideQueryCopy.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        endCommandBuffer(outsideQuery);
+        VkSubmitInfo outsideQuerySubmit =
+            makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        outsideQuerySubmit.commandBufferCount = 1;
+        outsideQuerySubmit.pCommandBuffers = &outsideQuery;
+        VkFence outsideQueryFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &outsideQuerySubmit, outsideQueryFence),
+              "vkQueueSubmit(query around render scope)");
+        waitFence(device, outsideQueryFence);
+        validateNonZeroUint64(device, outsideQueryCopy,
+                              "vkCmdCopyQueryPoolResults(query around render scope)");
+        std::cout << "QUERY_OUTSIDE_RENDER_SCOPE_OK" << std::endl;
 
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The
         // MTL4 preflight must create resident staging storage before commit.
@@ -3638,9 +3693,11 @@ int main() {
         vkDestroyFence(device, updateFence, nullptr);
         updated.destroy();
         vkDestroyFence(device, queryFence, nullptr);
+        vkDestroyFence(device, outsideQueryFence, nullptr);
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         queryCopyResult.destroy();
+        outsideQueryCopy.destroy();
         vkDestroyFence(device, renderFence, nullptr);
         vkDestroyFence(device, discardFence, nullptr);
         vkDestroyPipeline(device, rasterizerDiscardPipeline, nullptr);
@@ -3652,6 +3709,7 @@ int main() {
         renderReadback.destroy();
         vkDestroyFence(device, imageFence, nullptr);
         vkDestroyFence(device, computeFence, nullptr);
+        vkDestroyFence(device, computeAcrossRenderFence, nullptr);
         vkDestroyPipeline(device, computePipeline, nullptr);
         vkDestroyPipelineLayout(device, computeLayout, nullptr);
         vkDestroyShaderModule(device, computeModule, nullptr);

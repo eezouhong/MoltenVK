@@ -1172,40 +1172,65 @@ static bool mvkMetal4BufferImageLayoutSupported(VkImageLayout layout, bool toIma
 }
 
 template <typename Regions>
-static bool supportsMetal4BufferImageCopy(MVKBuffer* buffer,
-										  MVKImage* image,
-										  VkImageLayout imageLayout,
-										  bool toImage,
-										  const Regions& regions) {
-	if (!buffer || !image ||
-		!mvkMetal4BufferImageLayoutSupported(imageLayout, toImage) ||
-		image->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
-		image->getPlaneCount() != 1 ||
-		(image->getMTLTextureType() != MTLTextureType2D &&
-		 image->getMTLTextureType() != MTLTextureType2DArray) ||
-		image->getIsCompressed() || image->getIsDepthStencil() ||
-		image->needsSwizzle() || !image->hasExpectedTexelSize()) {
-		return false;
+static const char* getMetal4BufferImageCopyUnsupportedReason(
+	MVKBuffer* buffer,
+	MVKImage* image,
+	VkImageLayout imageLayout,
+	bool toImage,
+	const Regions& regions) {
+	if (!buffer || !image) { return "buffer_image_missing_resource"; }
+	if (!mvkMetal4BufferImageLayoutSupported(imageLayout, toImage)) {
+		return "buffer_image_layout";
 	}
+	if (image->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		return "buffer_image_multisample";
+	}
+	if (image->getPlaneCount() != 1) { return "buffer_image_multiplane"; }
+	if (image->getMTLTextureType() != MTLTextureType2D &&
+		image->getMTLTextureType() != MTLTextureType2DArray) {
+		return "buffer_image_texture_type";
+	}
+	if (image->getIsCompressed()) { return "buffer_image_compressed"; }
+	if (image->getIsDepthStencil()) { return "buffer_image_depth_stencil"; }
+	if (image->needsSwizzle()) { return "buffer_image_swizzle"; }
+	if (!image->hasExpectedTexelSize()) { return "buffer_image_texel_size"; }
 
 	for (const auto& region : regions) {
-		if (region.imageSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
-			region.imageSubresource.layerCount != 1 ||
-			region.imageSubresource.mipLevel >= image->getMipLevelCount() ||
-			region.imageSubresource.baseArrayLayer >= image->getLayerCount() ||
-			region.imageOffset.x < 0 || region.imageOffset.y < 0 || region.imageOffset.z != 0 ||
-			!region.imageExtent.width || !region.imageExtent.height || region.imageExtent.depth != 1 ||
-			(region.bufferRowLength && region.bufferRowLength < region.imageExtent.width) ||
-			(region.bufferImageHeight && region.bufferImageHeight < region.imageExtent.height)) {
-			return false;
+		if (region.imageSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT) {
+			return "buffer_image_aspect";
+		}
+		if (region.imageSubresource.layerCount != 1) {
+			return "buffer_image_layer_count";
+		}
+		if (region.imageSubresource.mipLevel >= image->getMipLevelCount()) {
+			return "buffer_image_mip_level";
+		}
+		if (region.imageSubresource.baseArrayLayer >= image->getLayerCount()) {
+			return "buffer_image_base_layer";
+		}
+		if (region.imageOffset.x < 0 || region.imageOffset.y < 0 ||
+			region.imageOffset.z != 0) {
+			return "buffer_image_offset";
+		}
+		if (!region.imageExtent.width || !region.imageExtent.height ||
+			region.imageExtent.depth != 1) {
+			return "buffer_image_extent";
+		}
+		if (region.bufferRowLength &&
+			region.bufferRowLength < region.imageExtent.width) {
+			return "buffer_image_row_length";
+		}
+		if (region.bufferImageHeight &&
+			region.bufferImageHeight < region.imageExtent.height) {
+			return "buffer_image_height";
 		}
 		VkExtent3D mipExtent = image->getExtent3D(0, region.imageSubresource.mipLevel);
 		if ((uint64_t)region.imageOffset.x + region.imageExtent.width > mipExtent.width ||
 			(uint64_t)region.imageOffset.y + region.imageExtent.height > mipExtent.height) {
-			return false;
+			return "buffer_image_bounds";
 		}
 	}
-	return true;
+	return nullptr;
 }
 
 template <size_t N>
@@ -1235,8 +1260,11 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     }
 
 	VkResult result = validate(cmdBuff);
-	_supportsMetal4Encoding = result == VK_SUCCESS && supportsMetal4BufferImageCopy(
-		_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
 	return result;
 }
 
@@ -1252,8 +1280,11 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _bufferImageCopyRegions.resize(pCopyBufferToImageInfo->regionCount);
     std::memcpy(_bufferImageCopyRegions.data(), pCopyBufferToImageInfo->pRegions, pCopyBufferToImageInfo->regionCount * sizeof(VkBufferImageCopy2));
 	VkResult result = validate(cmdBuff);
-	_supportsMetal4Encoding = result == VK_SUCCESS && supportsMetal4BufferImageCopy(
-		_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
 	return result;
 }
 
@@ -1269,8 +1300,11 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _bufferImageCopyRegions.resize(pCopyImageToBufferInfo->regionCount);
     std::memcpy(_bufferImageCopyRegions.data(), pCopyImageToBufferInfo->pRegions, pCopyImageToBufferInfo->regionCount * sizeof(VkBufferImageCopy2));
 	VkResult result = validate(cmdBuff);
-	_supportsMetal4Encoding = result == VK_SUCCESS && supportsMetal4BufferImageCopy(
-		_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
 	return result;
 }
 

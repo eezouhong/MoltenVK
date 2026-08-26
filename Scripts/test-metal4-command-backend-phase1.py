@@ -262,7 +262,7 @@ def main() -> int:
     )
     require(
         transfer_mm,
-        r"supportsMetal4BufferImageCopy[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?MTLTextureType2DArray[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT[\s\S]*?layerCount\s*!=\s*1[\s\S]*?baseArrayLayer",
+        r"getMetal4BufferImageCopyUnsupportedReason[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?MTLTextureType2DArray[\s\S]*?getIsCompressed[\s\S]*?needsSwizzle[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT[\s\S]*?layerCount\s*!=\s*1[\s\S]*?baseArrayLayer",
         "buffer/image-copy preflight does not fail closed on unsupported formats/aspects",
     )
 
@@ -876,6 +876,11 @@ def main() -> int:
             transfer_h + transfer_mm,
             r"MVKCmdClearAttachments[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?dynamic_clear_flags[\s\S]*?dynamic_clear_multiview[\s\S]*?dynamic_clear_layer_count[\s\S]*?dynamic_clear_rect[\s\S]*?dynamic_clear_color_attachment_missing[\s\S]*?dynamic_clear_multisample[\s\S]*?dynamic_clear_depth_stencil_attachment_missing[\s\S]*?classic_clear_framebuffer_missing[\s\S]*?classic_clear_multisample[\s\S]*?classic_clear_framebuffer_layer_count[\s\S]*?classic_clear_layer_count[\s\S]*?classic_clear_negative_offset[\s\S]*?classic_clear_zero_extent",
             "clear-attachment fallback telemetry does not identify the actual unsupported shape",
+        ),
+        (
+            transfer_h + transfer_mm,
+            r"MVKCmdBufferImageCopy[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?buffer_image_layout[\s\S]*?buffer_image_multisample[\s\S]*?buffer_image_multiplane[\s\S]*?buffer_image_texture_type[\s\S]*?buffer_image_compressed[\s\S]*?buffer_image_depth_stencil[\s\S]*?buffer_image_swizzle[\s\S]*?buffer_image_texel_size[\s\S]*?buffer_image_aspect[\s\S]*?buffer_image_layer_count[\s\S]*?buffer_image_offset[\s\S]*?buffer_image_extent[\s\S]*?buffer_image_row_length[\s\S]*?buffer_image_height[\s\S]*?buffer_image_bounds",
+            "buffer-image fallback telemetry does not identify the actual unsupported shape",
         ),
         (
             queries_h + queries_mm + queue_mm + query_pool_h + e2e,

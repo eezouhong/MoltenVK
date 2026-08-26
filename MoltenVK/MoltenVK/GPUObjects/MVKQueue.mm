@@ -1596,11 +1596,13 @@ public:
 			return false;
 		}
 		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
-		if (!_graphicsViewportScissorAppliedForEncoder &&
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsViewportScissorAppliedForEncoder &&
 			!applyViewportScissorState()) {
 			return false;
 		}
-		if (!_graphicsBlendConstantsAppliedForEncoder &&
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsBlendConstantsAppliedForEncoder &&
 			!applyBlendConstantsState()) {
 			return false;
 		}
@@ -1637,11 +1639,13 @@ public:
 			_boundIndexBuffer.offset + static_cast<NSUInteger>(firstIndexOffset);
 		NSUInteger indexBufferLength = static_cast<NSUInteger>(indexBytes);
 		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
-		if (!_graphicsViewportScissorAppliedForEncoder &&
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsViewportScissorAppliedForEncoder &&
 			!applyViewportScissorState()) {
 			return false;
 		}
-		if (!_graphicsBlendConstantsAppliedForEncoder &&
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsBlendConstantsAppliedForEncoder &&
 			!applyBlendConstantsState()) {
 			return false;
 		}

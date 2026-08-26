@@ -491,6 +491,11 @@ def main() -> int:
         "render eligibility does not isolate supported Metal 4 dynamic state",
     )
     require(
+        pipeline_h + pipeline_mm + e2e + runner,
+        r"isRasterizationDisabled[\s\S]*?rasterizationEnabled[\s\S]*?!_isTessellationPipeline[\s\S]*?RASTERIZER_DISCARD_OK",
+        "statically disabled rasterization is not executed and read back through Metal 4",
+    )
+    require(
         pipeline_mm,
         r"getMetal4UnsupportedDynamicStateReason[\s\S]*?removingAll\(kMetal4SupportedDynamicState\)",
         "dynamic-state telemetry still reports an already-supported Metal 4 state",

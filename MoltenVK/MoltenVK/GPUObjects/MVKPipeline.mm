@@ -2811,6 +2811,7 @@ static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dy
 static const char* getMetal4UnsupportedFixedFunctionReason(
 	const VkPipelineInputAssemblyStateCreateInfo* pIA,
 	const VkPipelineRasterizationStateCreateInfo* pRS,
+	bool isRasterizing,
 	const VkPipelineMultisampleStateCreateInfo* pMS,
 	const VkPipelineViewportStateCreateInfo* pVP,
 	bool hasDynamicViewport,
@@ -2825,9 +2826,10 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 		pIA->primitiveRestartEnable) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_topology";
 	}
-	if (!pRS || pRS->rasterizerDiscardEnable ||
-		pRS->polygonMode != VK_POLYGON_MODE_FILL ||
-		pRS->cullMode == VK_CULL_MODE_FRONT_AND_BACK || hasCullBothFaces) {
+	if (!pRS || (isRasterizing &&
+		(pRS->rasterizerDiscardEnable ||
+		 pRS->polygonMode != VK_POLYGON_MODE_FILL ||
+		 pRS->cullMode == VK_CULL_MODE_FRONT_AND_BACK || hasCullBothFaces))) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_rasterization";
 	}
 	if (!pMS || pMS->rasterizationSamples != VK_SAMPLE_COUNT_1_BIT ||
@@ -2835,17 +2837,17 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 		pMS->alphaToOneEnable) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_multisample";
 	}
-	if (!pVP || pVP->viewportCount == 0 ||
+	if (isRasterizing && (!pVP || pVP->viewportCount == 0 ||
 		pVP->viewportCount > kMVKMaxViewportScissorCount ||
 		pVP->scissorCount == 0 ||
 		pVP->scissorCount > kMVKMaxViewportScissorCount ||
 		(!hasDynamicViewport && (pVP->viewportCount != 1 ||
 			!pVP->pViewports || numStaticViewports != 1)) ||
 		(!hasDynamicScissor && (pVP->scissorCount != 1 ||
-			!pVP->pScissors || numStaticScissors != 1))) {
+			!pVP->pScissors || numStaticScissors != 1)))) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
 	}
-	if (hasDepthBias || hasDepthBoundsTest || hasDepthClamp) {
+	if (isRasterizing && (hasDepthBias || hasDepthBoundsTest || hasDepthClamp)) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_depth_stencil";
 	}
 	return "MVKCmdBindGraphicsPipeline:fixed_function_unknown";
@@ -3252,32 +3254,34 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasStrictFixedFunction =
 		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
 		!pIA->primitiveRestartEnable &&
-		pRS && !pRS->rasterizerDiscardEnable &&
-		pRS->polygonMode == VK_POLYGON_MODE_FILL &&
-		pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK &&
+		pRS && (!_isRasterizing ||
+			(!pRS->rasterizerDiscardEnable &&
+			 pRS->polygonMode == VK_POLYGON_MODE_FILL &&
+			 pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK)) &&
 		pMS && pMS->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT &&
 		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
-		pVP && pVP->viewportCount > 0 &&
-		pVP->viewportCount <= kMVKMaxViewportScissorCount &&
-		pVP->scissorCount > 0 &&
-		pVP->scissorCount <= kMVKMaxViewportScissorCount &&
-		(hasDynamicViewport || pVP->pViewports) &&
-		(hasDynamicScissor || pVP->pScissors) &&
 		!hasUnsupportedDynamicState &&
-		(hasDynamicViewport || _staticStateData.numViewports == 1) &&
-		(hasDynamicScissor || _staticStateData.numScissors == 1) &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias) &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp) &&
+		(!_isRasterizing ||
+			(pVP && pVP->viewportCount > 0 &&
+			 pVP->viewportCount <= kMVKMaxViewportScissorCount &&
+			 pVP->scissorCount > 0 &&
+			 pVP->scissorCount <= kMVKMaxViewportScissorCount &&
+			 (hasDynamicViewport || pVP->pViewports) &&
+			 (hasDynamicScissor || pVP->pScissors) &&
+			 (hasDynamicViewport || _staticStateData.numViewports == 1) &&
+			 (hasDynamicScissor || _staticStateData.numScissors == 1) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp))) &&
 		hasSupportedDepthState;
 
 	_supportsMetal4DescriptorlessRenderExecution =
-		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
+		_mtlPipelineState && !_isTessellationPipeline &&
 		hasSupportedColorsWithOptionalDepth && hasDescriptorlessShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
-		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
+		_mtlPipelineState && !_isTessellationPipeline &&
 		hasSupportedColorsWithOptionalDepth && hasArgumentTableShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
@@ -3339,9 +3343,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (!_mtlPipelineState) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:missing_pipeline_state";
-	} else if (!_isRasterizing) {
-		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:rasterization_disabled";
 	} else if (_isTessellationPipeline) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:tessellation";
@@ -3351,7 +3352,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else {
 		_metal4RenderExecutionUnsupportedReason =
 			getMetal4UnsupportedFixedFunctionReason(
-				pIA, pRS, pMS, pVP, hasDynamicViewport, hasDynamicScissor,
+				pIA, pRS, _isRasterizing, pMS, pVP, hasDynamicViewport, hasDynamicScissor,
 				_staticStateData.numViewports, _staticStateData.numScissors,
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces),
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias),

@@ -1314,6 +1314,70 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "RENDER_OK" << std::endl;
 
+        // A statically rasterizer-discarded pipeline must still execute its
+        // vertex stage through MTL4 while producing no fragments. The clear
+        // color therefore remains unchanged after the draw.
+        VkPipelineRasterizationStateCreateInfo discardRasterization = rasterization;
+        discardRasterization.rasterizerDiscardEnable = VK_TRUE;
+        graphicsInfo.pRasterizationState = &discardRasterization;
+        VkPipeline rasterizerDiscardPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &rasterizerDiscardPipeline),
+              "vkCreateGraphicsPipelines(rasterizer discard)");
+        graphicsInfo.pRasterizationState = &rasterization;
+
+        VkCommandBuffer prepareDiscard = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDiscard, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareDiscard);
+        VkRenderingAttachmentInfo discardAttachment = colorAttachment;
+        discardAttachment.clearValue.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingInfo discardRenderingInfo = renderingInfo;
+        discardRenderingInfo.pColorAttachments = &discardAttachment;
+        VkCommandBuffer discardRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(discardRender, &discardRenderingInfo);
+        vkCmdBindPipeline(discardRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          rasterizerDiscardPipeline);
+        vkCmdDraw(discardRender, 3, 1, 0, 0);
+        vkCmdEndRendering(discardRender);
+        endCommandBuffer(discardRender);
+        VkCommandBuffer finishDiscard = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDiscard, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDiscard);
+        VkCommandBuffer readDiscard = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDiscard, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDiscard);
+        std::array<VkSubmitInfo, 4> discardSubmits{};
+        for (auto& submit : discardSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        discardSubmits[0].commandBufferCount = 1;
+        discardSubmits[0].pCommandBuffers = &prepareDiscard;
+        discardSubmits[1].commandBufferCount = 1;
+        discardSubmits[1].pCommandBuffers = &discardRender;
+        discardSubmits[2].commandBufferCount = 1;
+        discardSubmits[2].pCommandBuffers = &finishDiscard;
+        discardSubmits[3].commandBufferCount = 1;
+        discardSubmits[3].pCommandBuffers = &readDiscard;
+        VkFence discardFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(discardSubmits.size()),
+                            discardSubmits.data(), discardFence),
+              "vkQueueSubmit(rasterizer discard sequence)");
+        waitFence(device, discardFence);
+        validateSolidColor(device, renderReadback, {255, 0, 0, 255});
+        std::cout << "RASTERIZER_DISCARD_OK" << std::endl;
+
         // Metal 4 consumes index buffers by GPU address and explicit byte
         // length. Cover both Vulkan index widths, a non-zero firstIndex, a
         // negative vertexOffset, and a non-zero firstInstance. The selected
@@ -2850,6 +2914,8 @@ int main() {
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         vkDestroyFence(device, renderFence, nullptr);
+        vkDestroyFence(device, discardFence, nullptr);
+        vkDestroyPipeline(device, rasterizerDiscardPipeline, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, renderLayout, nullptr);
         vkDestroyShaderModule(device, fragmentModule, nullptr);

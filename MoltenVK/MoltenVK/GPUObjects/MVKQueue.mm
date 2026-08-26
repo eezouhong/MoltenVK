@@ -618,6 +618,13 @@ public:
 	struct QueryPoolBinding {
 		id<MTLBuffer> resetBuffer = nil;
 		id<MTLBuffer> resultBuffer = nil;
+		NSUInteger visibilityOffset = NSUIntegerMax;
+		NSUInteger visibilityLength = 0;
+	};
+	struct PendingVisibilityQueryCopy {
+		MVKQueryPool* queryPool = nullptr;
+		uint32_t query = 0;
+		NSUInteger sourceOffset = 0;
 	};
 	struct PendingQueryReset {
 		MVKQueryPool* queryPool = nullptr;
@@ -676,6 +683,7 @@ public:
 			[item.second.resetBuffer release];
 			[item.second.resultBuffer release];
 		}
+		[_visibilityResultBuffer release];
 		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) {
@@ -777,7 +785,17 @@ public:
 			return false;
 		}
 		auto binding = _queryPools.find(queryPool);
-		return binding != _queryPools.end() && binding->second.resetBuffer;
+		if (binding == _queryPools.end() || !binding->second.resetBuffer) { return false; }
+		if (binding->second.visibilityOffset != NSUIntegerMax) { return true; }
+		NSUInteger length = binding->second.resetBuffer.length;
+		if (!length || _visibilityResultBufferLength > NSUIntegerMax - length) {
+			recordMetal4PreparationFailure("visibility_query_scratch_size_invalid");
+			return false;
+		}
+		binding->second.visibilityOffset = _visibilityResultBufferLength;
+		binding->second.visibilityLength = length;
+		_visibilityResultBufferLength += length;
+		return true;
 	}
 
 	bool beginVisibilityQueryScopePreparation() override {
@@ -785,7 +803,6 @@ public:
 			recordMetal4PreparationFailure("visibility_query_nested_render_scope");
 			return false;
 		}
-		_visibilityQueryScopePlans.push_back(_preparingActiveQueryPool);
 		_preparingVisibilityQueryScope = true;
 		return true;
 	}
@@ -808,14 +825,6 @@ public:
 			recordMetal4PreparationFailure("visibility_query_already_active");
 			return false;
 		}
-		if (_preparingVisibilityQueryScope) {
-			MVKQueryPool*& plannedPool = _visibilityQueryScopePlans.back();
-			if (plannedPool && plannedPool != queryPool) {
-				recordMetal4PreparationFailure("visibility_query_multiple_pools_in_render_scope");
-				return false;
-			}
-			plannedPool = queryPool;
-		}
 		_preparingActiveQueryPool = queryPool;
 		return true;
 	}
@@ -826,6 +835,27 @@ public:
 			return false;
 		}
 		_preparingActiveQueryPool = nullptr;
+		return true;
+	}
+
+	bool finalizePreparation() {
+		if (_preparingActiveQueryPool || _preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_scope_unbalanced");
+			return false;
+		}
+		if (!_visibilityResultBufferLength) { return true; }
+		_visibilityResultBuffer = [_mtlDevice
+			newBufferWithLength:_visibilityResultBufferLength
+			options:MTLResourceStorageModeShared |
+					MTLResourceCPUCacheModeDefaultCache];
+		if (!_visibilityResultBuffer) {
+			recordMetal4PreparationFailure("visibility_query_scratch_unavailable");
+			return false;
+		}
+		[_visibilityResultBuffer setLabel:@"Metal 4 Visibility Query Scratch Buffer"];
+		mvkClear(static_cast<char*>(_visibilityResultBuffer.contents),
+				 _visibilityResultBufferLength);
+		_allocations.push_back((id<MTLAllocation>)_visibilityResultBuffer);
 		return true;
 	}
 
@@ -1329,6 +1359,16 @@ public:
 				return false;
 			}
 			[_computeEncoder fillBuffer:binding->second.resetBuffer range:range value:0];
+			if (binding->second.visibilityOffset != NSUIntegerMax) {
+				NSUInteger scratchOffset = binding->second.visibilityOffset + range.location;
+				if (scratchOffset > _visibilityResultBuffer.length ||
+					range.length > _visibilityResultBuffer.length - scratchOffset) {
+					return false;
+				}
+				[_computeEncoder fillBuffer:_visibilityResultBuffer
+								 range:NSMakeRange(scratchOffset, range.length)
+								 value:0];
+			}
 		}
 		_pendingQueryResets.push_back(PendingQueryReset{queryPool, firstQuery, queryCount});
 		_counters.queryResets++;
@@ -1378,7 +1418,7 @@ public:
 				dst->second.buffer.length - elementSize || !ensureComputeEncoder()) {
 			return false;
 		}
-		[_computeEncoder barrierAfterQueueStages:MTLStageFragment
+		[_computeEncoder barrierAfterQueueStages:MTLStageAll
 							 beforeStages:MTLStageBlit
 						visibilityOptions:MTL4VisibilityOptionDevice];
 
@@ -1389,6 +1429,9 @@ public:
 						destinationOffset:dstBaseOffset + query * (NSUInteger)dstStride
 									 size:elementSize];
 		}
+		[_computeEncoder barrierAfterEncoderStages:MTLStageBlit
+							 beforeEncoderStages:MTLStageBlit
+							 visibilityOptions:MTL4VisibilityOptionDevice];
 		_counters.queryCopies++;
 		return true;
 	}
@@ -1396,15 +1439,21 @@ public:
 	bool beginVisibilityQuery(MVKQueryPool* queryPool,
 							  uint32_t query,
 							  VkQueryControlFlags flags) override {
-		if (_renderEncoder && queryPool != _visibilityQueryPool) {
-			return failMetal4Encoding("begin_query_pool_mismatch");
-		}
 		if (_activeQueryPool) {
 			return failMetal4Encoding("begin_query_already_active");
+		}
+		auto binding = _queryPools.find(queryPool);
+		NSUInteger queryOffset = MVKOcclusionQueryPool::getVisibilityResultOffset(query);
+		if (binding == _queryPools.end() ||
+			binding->second.visibilityOffset == NSUIntegerMax ||
+			queryOffset > binding->second.visibilityLength ||
+			kMVKQuerySlotSizeInBytes > binding->second.visibilityLength - queryOffset) {
+			return failMetal4Encoding("begin_query_scratch_range_invalid");
 		}
 		_activeQueryPool = queryPool;
 		_activeQuery = query;
 		_activeQueryFlags = flags;
+		_activeQueryScratchOffset = binding->second.visibilityOffset + queryOffset;
 		return applyActiveVisibilityQuery();
 	}
 
@@ -1415,12 +1464,15 @@ public:
 		if (_renderEncoder) {
 			[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
 		}
+		_pendingVisibilityQueryCopies.push_back(
+			PendingVisibilityQueryCopy{queryPool, query, _activeQueryScratchOffset});
 		_completedQueries.push_back(MVKMetal4CompletedQuery{queryPool, query});
 		_activeQueryPool = nullptr;
 		_activeQuery = 0;
 		_activeQueryFlags = 0;
+		_activeQueryScratchOffset = 0;
 		_counters.visibilityQueries++;
-		return true;
+		return _renderEncoder || flushPendingVisibilityQueryCopies();
 	}
 
 	bool updateBuffer(MVKBuffer* dstBuffer,
@@ -1483,7 +1535,6 @@ public:
 			if (stencilIt == _imageViews.end()) { return false; }
 			renderAttachments.push_back(stencilIt->second.texture);
 		}
-		if (!activateNextVisibilityQueryScope()) { return false; }
 		endComputeEncoding();
 
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
@@ -1546,14 +1597,18 @@ public:
 		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
 		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
 		descriptor.renderTargetArrayLength = renderingInfo.layerCount;
-		if (_visibilityQueryPool) {
-			descriptor.visibilityResultBuffer =
-				_queryPools.find(_visibilityQueryPool)->second.resetBuffer;
+		if (_visibilityResultBuffer) {
+			descriptor.visibilityResultBuffer = _visibilityResultBuffer;
 			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
+		if (_visibilityResultBuffer) {
+			[_renderEncoder barrierAfterQueueStages:MTLStageBlit
+								 beforeStages:MTLStageFragment | MTLStageTile
+							visibilityOptions:MTL4VisibilityOptionDevice];
+		}
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 		if (!applyActiveVisibilityQuery()) { return false; }
@@ -1619,7 +1674,6 @@ public:
 			if (viewIt == _imageViews.end()) { return false; }
 			renderAttachments.push_back(viewIt->second.texture);
 		}
-		if (!activateNextVisibilityQueryScope()) { return false; }
 		endComputeEncoding();
 
 		MTLRenderPassDescriptor* legacyDescriptor =
@@ -1650,15 +1704,19 @@ public:
 		descriptor.renderTargetWidth = renderArea.extent.width;
 		descriptor.renderTargetHeight = renderArea.extent.height;
 		descriptor.renderTargetArrayLength = framebuffer->getLayerCount();
-		if (_visibilityQueryPool) {
-			descriptor.visibilityResultBuffer =
-				_queryPools.find(_visibilityQueryPool)->second.resetBuffer;
+		if (_visibilityResultBuffer) {
+			descriptor.visibilityResultBuffer = _visibilityResultBuffer;
 			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor]
 			retain];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
+		if (_visibilityResultBuffer) {
+			[_renderEncoder barrierAfterQueueStages:MTLStageBlit
+								 beforeStages:MTLStageFragment | MTLStageTile
+							visibilityOptions:MTL4VisibilityOptionDevice];
+		}
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 		if (!applyActiveVisibilityQuery()) { return false; }
@@ -1693,8 +1751,7 @@ public:
 	bool endRendering() override {
 		if (!_renderEncoder) { return false; }
 		endRenderEncoding();
-		_visibilityQueryPool = nullptr;
-		return true;
+		return flushPendingVisibilityQueryCopies();
 	}
 
 	bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
@@ -2060,10 +2117,13 @@ public:
 		ClearAttachmentsBinding& binding = item->second;
 		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
 		// Vulkan attachment clears must not contribute to an active occlusion query.
-		// MTL4 cannot safely pause and resume the query in this encoder, and splitting
-		// the render pass corrupts real game attachments. Fall back before commit.
-		if (_activeQueryPool) { return failMetal4Encoding("clear_attachments_active_query"); }
-		return encodeClearAttachmentsDraw(binding);
+		bool restoreVisibilityQuery = _activeQueryPool != nullptr;
+		if (restoreVisibilityQuery) {
+			[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled
+									 offset:_activeQueryScratchOffset];
+		}
+		if (!encodeClearAttachmentsDraw(binding)) { return false; }
+		return !restoreVisibilityQuery || applyActiveVisibilityQuery();
 	}
 
 	bool encodeClearAttachmentsDraw(ClearAttachmentsBinding& binding) {
@@ -2204,16 +2264,40 @@ private:
 		return false;
 	}
 
-	bool activateNextVisibilityQueryScope() {
-		if (_nextVisibilityQueryScopeIndex >= _visibilityQueryScopePlans.size()) {
-			return failMetal4Encoding("visibility_query_scope_plan_missing");
+	bool flushPendingVisibilityQueryCopies() {
+		if (_pendingVisibilityQueryCopies.empty()) { return true; }
+		if (!_visibilityResultBuffer || !ensureComputeEncoder()) {
+			return failMetal4Encoding("visibility_query_copy_encoder_unavailable");
 		}
-		MVKQueryPool* plannedPool =
-			_visibilityQueryScopePlans[_nextVisibilityQueryScopeIndex++];
-		if (_activeQueryPool && plannedPool != _activeQueryPool) {
-			return failMetal4Encoding("visibility_query_scope_active_pool_mismatch");
+		[_computeEncoder barrierAfterQueueStages:MTLStageAll
+							 beforeStages:MTLStageBlit
+						visibilityOptions:MTL4VisibilityOptionDevice];
+		for (const auto& query : _pendingVisibilityQueryCopies) {
+			auto binding = _queryPools.find(query.queryPool);
+			NSUInteger destinationOffset =
+				MVKOcclusionQueryPool::getVisibilityResultOffset(query.query);
+			if (binding == _queryPools.end() || !binding->second.resultBuffer ||
+				query.sourceOffset > _visibilityResultBuffer.length ||
+				kMVKQuerySlotSizeInBytes >
+					_visibilityResultBuffer.length - query.sourceOffset ||
+				destinationOffset > binding->second.resultBuffer.length ||
+				kMVKQuerySlotSizeInBytes >
+					binding->second.resultBuffer.length - destinationOffset) {
+				return failMetal4Encoding("visibility_query_copy_range_invalid");
+			}
+			[_computeEncoder copyFromBuffer:_visibilityResultBuffer
+							 sourceOffset:query.sourceOffset
+								 toBuffer:binding->second.resultBuffer
+						destinationOffset:destinationOffset
+									 size:kMVKQuerySlotSizeInBytes];
 		}
-		_visibilityQueryPool = plannedPool;
+		[_computeEncoder barrierAfterEncoderStages:MTLStageBlit
+							 beforeEncoderStages:MTLStageBlit
+							 visibilityOptions:MTL4VisibilityOptionDevice];
+		[_computeEncoder barrierAfterStages:MTLStageBlit
+						 beforeQueueStages:MTLStageBlit
+						 visibilityOptions:MTL4VisibilityOptionDevice];
+		_pendingVisibilityQueryCopies.clear();
 		return true;
 	}
 
@@ -2239,7 +2323,7 @@ private:
 			? MTLVisibilityResultModeCounting
 			: MTLVisibilityResultModeBoolean;
 		[_renderEncoder setVisibilityResultMode:mode
-								 offset:MVKOcclusionQueryPool::getVisibilityResultOffset(_activeQuery)];
+								 offset:_activeQueryScratchOffset];
 		return true;
 	}
 
@@ -2691,14 +2775,15 @@ private:
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
 	MVKComputePipeline* _preparedComputePipeline = nullptr;
 	MVKGraphicsPipeline* _preparedGraphicsPipeline = nullptr;
-	vector<MVKQueryPool*> _visibilityQueryScopePlans;
-	size_t _nextVisibilityQueryScopeIndex = 0;
 	MVKQueryPool* _preparingActiveQueryPool = nullptr;
 	bool _preparingVisibilityQueryScope = false;
-	MVKQueryPool* _visibilityQueryPool = nullptr;
+	id<MTLBuffer> _visibilityResultBuffer = nil;
+	NSUInteger _visibilityResultBufferLength = 0;
+	vector<PendingVisibilityQueryCopy> _pendingVisibilityQueryCopies;
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;
 	VkQueryControlFlags _activeQueryFlags = 0;
+	NSUInteger _activeQueryScratchOffset = 0;
 	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
 	uint32_t _currentColorAttachmentCount = 0;
 	bool _computeResourcesBoundForEncoder = false;
@@ -3717,7 +3802,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 
 	MVKMetal4TransferCommandEncoder encoder(
 		state, getDevice(), getMTLDevice(), getPixelFormats());
-	if (!prepareMetal4CommandBuffers(&encoder)) {
+	if (!prepareMetal4CommandBuffers(&encoder) || !encoder.finalizePreparation()) {
 		string preparationSummary;
 		if (state->recordPreparationFailure(
 				encoder.getMetal4PreparationFailureCommand(), &preparationSummary)) {

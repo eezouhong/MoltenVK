@@ -787,12 +787,11 @@ def main() -> int:
         "command allocators are not serially reusable before GPU completion",
     )
     for token in (
-        "begin_query_pool_mismatch",
+        "begin_query_scratch_range_invalid",
         "begin_query_already_active",
         "dispatch_compute_encoder_unavailable",
         "dispatch_pipeline_unbound",
         "dispatch_resources_unavailable",
-        "clear_attachments_active_query",
         "draw_indexed_pipeline_incompatible",
     ):
         require(
@@ -800,6 +799,16 @@ def main() -> int:
             re.escape(token),
             f"query and dispatch materialization telemetry is missing: {token}",
         )
+    require(
+        queue_mm,
+        r"Metal 4 Visibility Query Scratch Buffer[\s\S]*?visibilityResultBuffer\s*=\s*_visibilityResultBuffer[\s\S]*?copyFromBuffer:_visibilityResultBuffer",
+        "visibility queries do not share submission-local scratch storage across query pools",
+    )
+    require(
+        queue_mm + e2e,
+        r"resetQueryPool[\s\S]*?visibilityOffset[\s\S]*?fillBuffer:_visibilityResultBuffer[\s\S]*?QUERY_REUSE_AFTER_RESET_OK",
+        "submission-local visibility storage is not reset with reused Vulkan queries",
+    )
     clear_attachments = function_body(
         queue_mm,
         "bool clearAttachments(",
@@ -807,13 +816,13 @@ def main() -> int:
     )
     require(
         clear_attachments,
-        r"_activeQueryPool[\s\S]*?failMetal4Encoding\(\"clear_attachments_active_query\"\)",
-        "attachment clears inside active visibility queries do not safely fall back",
+        r"_activeQueryPool[\s\S]*?setVisibilityResultMode:MTLVisibilityResultModeDisabled[\s\S]*?encodeClearAttachmentsDraw[\s\S]*?applyActiveVisibilityQuery",
+        "attachment clears do not pause and restore active visibility queries",
     )
     reject(
         clear_attachments,
-        r"clearAttachmentsDuringVisibility|setVisibilityResultMode:MTLVisibilityResultModeDisabled",
-        "query clears still mutate or split active visibility state instead of falling back",
+        r"clear_attachments_active_query|endRenderEncoding",
+        "query clears still fall back or split the active render pass",
     )
     require(
         queue_mm,
@@ -958,8 +967,8 @@ def main() -> int:
         ),
         (
             command_h + rendering_h + rendering_mm + queries_mm + queue_mm + e2e,
-            r"beginVisibilityQueryScopePreparation[\s\S]*?beginVisibilityQueryPreparation[\s\S]*?_visibilityQueryScopePlans[\s\S]*?activateNextVisibilityQueryScope[\s\S]*?MULTI_QUERY_POOL_RENDER_SCOPES_OK",
-            "visibility query pools are not planned and selected per render scope",
+            r"beginVisibilityQueryPreparation[\s\S]*?visibilityOffset[\s\S]*?Metal 4 Visibility Query Scratch Buffer[\s\S]*?flushPendingVisibilityQueryCopies[\s\S]*?MULTI_QUERY_POOL_RENDER_SCOPES_OK[\s\S]*?MULTI_QUERY_POOL_SINGLE_RENDER_SCOPE_OK",
+            "visibility query pools are not staged through shared submission-local storage",
         ),
         (
             rendering_mm + queue_mm + transfer_mm + e2e,
@@ -1060,11 +1069,13 @@ def main() -> int:
         "RENDER_OK",
         "QUERY_RESET_OK",
         "QUERY_OCCLUSION_OK",
+        "QUERY_COPY_ACROSS_EMPTY_RENDER_OK",
         "MULTI_QUERY_POOL_RENDER_SCOPES_OK",
         "COMPUTE_REBIND_AFTER_RENDER_OK",
         "QUERY_OUTSIDE_RENDER_SCOPE_OK",
         "QUERY_CLEAR_ATTACHMENTS_OK",
         "QUERY_PARTIAL_CLEAR_ATTACHMENTS_OK",
+        "QUERY_CLEAR_EXCLUDED_FROM_OCCLUSION_OK",
         "RENDER_SCOPE_PIPELINE_BARRIER_OK",
         "RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK",
         "GRAPHICS_REBIND_AFTER_RENDER_OK",
@@ -1092,14 +1103,10 @@ def main() -> int:
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
     require(
         runner,
-        r"Metal 4 command backend summary: .*fallbacks=1, failures=0",
-        "controlled Metal 4 E2E does not strictly limit the final summary to the active-query clear fallback",
+        r"Metal 4 command backend summary: .*fallbacks=0, failures=0",
+        "controlled Metal 4 E2E does not require zero fallbacks and failures",
     )
-    require(
-        runner,
-        r"MVKCmdClearSingleAttachment1:clear_attachments_active_query",
-        "controlled Metal 4 E2E does not constrain the fallback to active-query attachment clears",
-    )
+    reject(runner, r"MVKCmdClearSingleAttachment1:clear_attachments_active_query", "controlled Metal 4 E2E still expects active-query clear fallback")
     require(runner, r"unsupported_commands=none", "controlled Metal 4 E2E permits unsupported commands")
 
     print("PASS: usable Metal 4 Phase 1C compute/transfer/render backend source contract")

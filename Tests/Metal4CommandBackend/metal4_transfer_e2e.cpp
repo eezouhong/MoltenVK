@@ -309,10 +309,10 @@ void validateUint32(VkDevice device, Buffer& buffer, uint32_t expected) {
     }
 }
 
-void validateNonZeroUint64(VkDevice device, Buffer& buffer, const char* operation) {
+uint64_t readUint64(VkDevice device, Buffer& buffer, const char* operation) {
     void* mapped = nullptr;
     check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
-          "vkMapMemory(validate uint64)");
+          operation);
     if (!buffer.coherent) {
         VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(
             VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
@@ -325,8 +325,36 @@ void validateNonZeroUint64(VkDevice device, Buffer& buffer, const char* operatio
     uint64_t actual = 0;
     std::memcpy(&actual, mapped, sizeof(actual));
     vkUnmapMemory(device, buffer.memory);
+    return actual;
+}
+
+void validateNonZeroUint64(VkDevice device, Buffer& buffer, const char* operation) {
+    uint64_t actual = readUint64(device, buffer, "vkMapMemory(validate uint64)");
     if (actual == 0 || actual == 0xfefefefefefefefeULL) {
         fail(std::string(operation) + " did not publish a query result");
+    }
+}
+
+void validateMatchingNonZeroUint64Pair(VkDevice device, Buffer& buffer,
+                                       const char* operation) {
+    void* mapped = nullptr;
+    check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
+          "vkMapMemory(validate uint64 pair)");
+    if (!buffer.coherent) {
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        range.memory = buffer.memory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check(vkInvalidateMappedMemoryRanges(device, 1, &range),
+              "vkInvalidateMappedMemoryRanges(uint64 pair)");
+    }
+    std::array<uint64_t, 2> actual{};
+    std::memcpy(actual.data(), mapped, sizeof(actual));
+    vkUnmapMemory(device, buffer.memory);
+    if (actual[0] == 0 || actual[0] == 0xfefefefefefefefeULL ||
+        actual[1] != actual[0]) {
+        fail(std::string(operation) + " did not reset submission-local query state");
     }
 }
 
@@ -3584,6 +3612,11 @@ int main() {
         vkCmdDraw(queryCommand, 3, 1, 0, 0);
         vkCmdEndQuery(queryCommand, queryPool, 1);
         vkCmdEndRendering(queryCommand);
+        // Close the visibility scratch-copy encoder with an intervening render
+        // scope. The subsequent result copy must observe the earlier blit even
+        // though it is encoded by a new MTL4 compute command encoder.
+        vkCmdBeginRendering(queryCommand, &renderingInfo);
+        vkCmdEndRendering(queryCommand);
         vkCmdCopyQueryPoolResults(queryCommand, queryPool, 1, 1,
                                   queryCopyResult.buffer, 0, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
@@ -3598,6 +3631,7 @@ int main() {
         validateNonZeroUint64(device, queryCopyResult,
                               "vkCmdCopyQueryPoolResults(occlusion)");
         std::cout << "QUERY_COPY_RESULTS_OK" << std::endl;
+        std::cout << "QUERY_COPY_ACROSS_EMPTY_RENDER_OK" << std::endl;
         std::array<uint64_t, 2> occlusionResult{{0, 0}};
         check(vkGetQueryPoolResults(
                   device, queryPool, 1, 1, sizeof(occlusionResult), occlusionResult.data(),
@@ -3651,6 +3685,94 @@ int main() {
         validateNonZeroUint64(device, multiPoolFirstResult, "first visibility pool result");
         validateNonZeroUint64(device, multiPoolSecondResult, "second visibility pool result");
         std::cout << "MULTI_QUERY_POOL_RENDER_SCOPES_OK" << std::endl;
+
+        // A single Vulkan render scope may switch between occlusion query pools
+        // as long as only one query is active at a time. Metal permits only one
+        // visibility-result buffer per render encoder, so the Metal 4 backend
+        // must stage both queries through submission-local visibility storage.
+        Buffer sameScopeFirstResult = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        Buffer sameScopeSecondResult = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        VkCommandBuffer sameScopeQueries = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(sameScopeQueries, queryPool, 0, 1);
+        vkCmdResetQueryPool(sameScopeQueries, secondQueryPool, 0, 1);
+        vkCmdBeginRendering(sameScopeQueries, &renderingInfo);
+        vkCmdBindPipeline(sameScopeQueries, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          graphicsPipeline);
+        vkCmdBeginQuery(sameScopeQueries, queryPool, 0,
+                        VK_QUERY_CONTROL_PRECISE_BIT);
+        vkCmdDraw(sameScopeQueries, 3, 1, 0, 0);
+        vkCmdEndQuery(sameScopeQueries, queryPool, 0);
+        vkCmdBeginQuery(sameScopeQueries, secondQueryPool, 0,
+                        VK_QUERY_CONTROL_PRECISE_BIT);
+        vkCmdDraw(sameScopeQueries, 3, 1, 0, 0);
+        vkCmdDraw(sameScopeQueries, 3, 1, 0, 0);
+        vkCmdEndQuery(sameScopeQueries, secondQueryPool, 0);
+        vkCmdEndRendering(sameScopeQueries);
+        vkCmdCopyQueryPoolResults(sameScopeQueries, queryPool, 0, 1,
+                                  sameScopeFirstResult.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        vkCmdCopyQueryPoolResults(sameScopeQueries, secondQueryPool, 0, 1,
+                                  sameScopeSecondResult.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        endCommandBuffer(sameScopeQueries);
+        VkSubmitInfo sameScopeSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        sameScopeSubmit.commandBufferCount = 1;
+        sameScopeSubmit.pCommandBuffers = &sameScopeQueries;
+        VkFence sameScopeFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &sameScopeSubmit, sameScopeFence),
+              "vkQueueSubmit(multiple query pools in one render scope)");
+        waitFence(device, sameScopeFence);
+        uint64_t sameScopeFirst = readUint64(
+            device, sameScopeFirstResult,
+            "vkMapMemory(first same-scope visibility pool result)");
+        uint64_t sameScopeSecond = readUint64(
+            device, sameScopeSecondResult,
+            "vkMapMemory(second same-scope visibility pool result)");
+        if (sameScopeFirst == 0 || sameScopeSecond != sameScopeFirst * 2) {
+            fail("Same-scope visibility pools did not preserve distinct precise counts: " +
+                 std::to_string(sameScopeFirst) + " vs " +
+                 std::to_string(sameScopeSecond));
+        }
+        std::cout << "MULTI_QUERY_POOL_SINGLE_RENDER_SCOPE_OK" << std::endl;
+
+        Buffer reusedQueryResults = createBuffer(physicalDevice, device,
+                                                  sizeof(uint64_t) * 2);
+        VkCommandBuffer reusedQuery = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(reusedQuery, queryPool, 0, 1);
+        vkCmdBeginRendering(reusedQuery, &renderingInfo);
+        vkCmdBindPipeline(reusedQuery, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          graphicsPipeline);
+        vkCmdBeginQuery(reusedQuery, queryPool, 0, 0);
+        vkCmdDraw(reusedQuery, 3, 1, 0, 0);
+        vkCmdEndQuery(reusedQuery, queryPool, 0);
+        vkCmdEndRendering(reusedQuery);
+        vkCmdCopyQueryPoolResults(reusedQuery, queryPool, 0, 1,
+                                  reusedQueryResults.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        vkCmdResetQueryPool(reusedQuery, queryPool, 0, 1);
+        vkCmdBeginRendering(reusedQuery, &renderingInfo);
+        vkCmdBindPipeline(reusedQuery, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          graphicsPipeline);
+        vkCmdBeginQuery(reusedQuery, queryPool, 0, 0);
+        vkCmdDraw(reusedQuery, 3, 1, 0, 0);
+        vkCmdEndQuery(reusedQuery, queryPool, 0);
+        vkCmdEndRendering(reusedQuery);
+        vkCmdCopyQueryPoolResults(reusedQuery, queryPool, 0, 1,
+                                  reusedQueryResults.buffer, sizeof(uint64_t),
+                                  sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        endCommandBuffer(reusedQuery);
+        VkSubmitInfo reusedQuerySubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        reusedQuerySubmit.commandBufferCount = 1;
+        reusedQuerySubmit.pCommandBuffers = &reusedQuery;
+        VkFence reusedQueryFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &reusedQuerySubmit, reusedQueryFence),
+              "vkQueueSubmit(reused query in one submission)");
+        waitFence(device, reusedQueryFence);
+        validateMatchingNonZeroUint64Pair(device, reusedQueryResults,
+                                          "reused visibility query");
+        std::cout << "QUERY_REUSE_AFTER_RESET_OK" << std::endl;
 
         // Ryujinx records the logical query around a render scope. MoltenVK
         // must defer the Metal visibility mode until the render encoder exists.
@@ -3719,6 +3841,43 @@ int main() {
         std::cout << "RENDER_SCOPE_PIPELINE_BARRIER_OK" << std::endl;
         std::cout << "RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK" << std::endl;
         std::cout << "QUERY_OUTSIDE_RENDER_SCOPE_OK" << std::endl;
+
+        // vkCmdClearAttachments uses an internal helper draw on Metal. That
+        // implementation detail must not contribute samples to the Vulkan
+        // occlusion query when the application records no draws of its own.
+        Buffer clearOnlyQueryCopy = createBuffer(physicalDevice, device,
+                                                  sizeof(uint64_t));
+        writeBytes(device, clearOnlyQueryCopy,
+                   std::vector<uint8_t>(sizeof(uint64_t), 0xfe));
+        VkCommandBuffer clearOnlyQuery = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(clearOnlyQuery, queryPool, 3, 1);
+        vkCmdBeginQuery(clearOnlyQuery, queryPool, 3,
+                        VK_QUERY_CONTROL_PRECISE_BIT);
+        vkCmdBeginRendering(clearOnlyQuery, &renderingInfo);
+        vkCmdClearAttachments(clearOnlyQuery, 1, &queryClearAttachment,
+                              1, &queryClearRect);
+        vkCmdEndRendering(clearOnlyQuery);
+        vkCmdEndQuery(clearOnlyQuery, queryPool, 3);
+        vkCmdCopyQueryPoolResults(clearOnlyQuery, queryPool, 3, 1,
+                                  clearOnlyQueryCopy.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        endCommandBuffer(clearOnlyQuery);
+        VkSubmitInfo clearOnlyQuerySubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        clearOnlyQuerySubmit.commandBufferCount = 1;
+        clearOnlyQuerySubmit.pCommandBuffers = &clearOnlyQuery;
+        VkFence clearOnlyQueryFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &clearOnlyQuerySubmit, clearOnlyQueryFence),
+              "vkQueueSubmit(clear-only occlusion query)");
+        waitFence(device, clearOnlyQueryFence);
+        uint64_t clearOnlyResult = readUint64(
+            device, clearOnlyQueryCopy,
+            "vkMapMemory(clear-only occlusion query result)");
+        if (clearOnlyResult != 0) {
+            fail("vkCmdClearAttachments helper draw leaked into occlusion query: " +
+                 std::to_string(clearOnlyResult));
+        }
+        std::cout << "QUERY_CLEAR_EXCLUDED_FROM_OCCLUSION_OK" << std::endl;
 
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The
         // MTL4 preflight must create resident staging storage before commit.
@@ -3817,14 +3976,21 @@ int main() {
         updated.destroy();
         vkDestroyFence(device, queryFence, nullptr);
         vkDestroyFence(device, multiPoolFence, nullptr);
+        vkDestroyFence(device, sameScopeFence, nullptr);
+        vkDestroyFence(device, reusedQueryFence, nullptr);
         vkDestroyFence(device, outsideQueryFence, nullptr);
+        vkDestroyFence(device, clearOnlyQueryFence, nullptr);
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, secondQueryPool, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         queryCopyResult.destroy();
         multiPoolFirstResult.destroy();
         multiPoolSecondResult.destroy();
+        sameScopeFirstResult.destroy();
+        sameScopeSecondResult.destroy();
+        reusedQueryResults.destroy();
         outsideQueryCopy.destroy();
+        clearOnlyQueryCopy.destroy();
         vkDestroyFence(device, renderFence, nullptr);
         vkDestroyFence(device, discardFence, nullptr);
         vkDestroyPipeline(device, rasterizerDiscardPipeline, nullptr);

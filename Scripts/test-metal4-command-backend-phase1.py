@@ -85,6 +85,22 @@ def main() -> int:
     require(queue_mm, r"supportsMetal4", "Metal 4 device capability gate is missing")
     require(queue_mm, r"mvkOSVersionIsAtLeast\(\s*26\.0\s*\)", "OS 26 gate is missing")
 
+    init_metal4 = function_body(
+        queue_mm,
+        "void MVKQueue::initMTL4CommandQueue()",
+        "MVKQueue::~MVKQueue()",
+    )
+    reject(
+        init_metal4,
+        r"getMetalFeatures\(\)\.residencySets",
+        "the independent Metal 4 residency set is incorrectly gated by the fork-disabled legacy residency flag",
+    )
+    require(
+        init_metal4,
+        r"respondsToSelector:@selector\(newResidencySetWithDescriptor:error:\)",
+        "the public Metal 4 residency factory is not probed directly",
+    )
+
     # Use the exact public Xcode 26 descriptor/error factories, not guessed factories.
     for token in (
         "newMTL4CommandQueueWithDescriptor",
@@ -211,6 +227,16 @@ def main() -> int:
     )
     require(
         pipeline_cmd_mm,
+        r"supportsMetal4PipelineBarriers[\s\S]*?barrier\.type\s*==\s*MVKPipelineBarrier::Image[\s\S]*?return\s+false",
+        "image barriers with unimplemented layout side effects do not fail closed",
+    )
+    require(
+        pipeline_cmd_mm,
+        r"supportsMetal4PipelineBarriers[\s\S]*?VK_PIPELINE_STAGE_2_HOST_BIT[\s\S]*?VK_ACCESS_2_HOST_READ_BIT[\s\S]*?return\s+false",
+        "host-read barrier side effects do not fail closed",
+    )
+    require(
+        pipeline_cmd_mm,
         r"srcIgnored\s*&&\s*dstIgnored[\s\S]*?srcQueueFamilyIndex\s*==\s*barrier\.dstQueueFamilyIndex",
         "queue-family ownership barriers do not fail closed on a half-ignored transfer",
     )
@@ -325,6 +351,21 @@ def main() -> int:
         r"atomic<bool>\s+probeAllocatorCompleted\s*=\s*false[\s\S]*?probeAllocatorCompleted\.exchange[\s\S]*?completeAllocator",
         "late probe feedback lacks a declared idempotent allocator release guard",
     )
+    acquire_allocator = function_body(
+        queue_mm,
+        "bool acquireAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator)",
+        "void finishEncoding",
+    )
+    require(
+        acquire_allocator,
+        r"nextAllocatorIndex[\s\S]*?inFlightCount\s*!=\s*0[\s\S]*?continue",
+        "allocator selection is not bounded round-robin or reuses in-flight allocator memory",
+    )
+    require(
+        execute_metal4,
+        r"queueSideEffectsStarted\s*=\s*true[\s\S]*?waitForEvent:[\s\S]*?@catch[\s\S]*?if\s*\(!queueSideEffectsStarted\)",
+        "legacy replay remains possible after a Metal 4 queue wait side effect",
+    )
     require(
         execute_metal4,
         r"commitAttempted\s*=\s*true[\s\S]*?commit:[\s\S]*?@catch[\s\S]*?if\s*\(!commitAttempted\)[\s\S]*?endMetal4CommandBuffers\(false\)",
@@ -339,6 +380,16 @@ def main() -> int:
         ambiguous_catch,
         r"hostSignalOrdering\(_submissionSequence\)|completion->complete\(\)|completeAllocator\(allocatorIndex\)|releaseResidency\(allocations\)",
         "ambiguous post-commit failure releases or advances work before real Metal feedback",
+    )
+    require(
+        queue_mm,
+        r"struct\s+CommandCounters[\s\S]*?publishCommittedCounters",
+        "command telemetry is not accumulated per submission",
+    )
+    require(
+        execute_metal4,
+        r"commit:[\s\S]*?publishCommittedCounters",
+        "command telemetry is published before a successful Metal 4 commit",
     )
 
     # Hybrid backends are totally ordered, including fallback, present, and wait-idle.

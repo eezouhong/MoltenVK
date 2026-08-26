@@ -71,6 +71,7 @@ struct MVKMetal4CommandQueueState {
 	mutex lock;
 	condition_variable probeReady;
 	vector<AllocatorSlot> allocators;
+	size_t nextAllocatorIndex = 0;
 	unordered_map<uintptr_t, ResidencyEntry> residentAllocations;
 	id<MTLResidencySet> residencySet = nil;
 	id<MTLSharedEvent> orderingEvent = nil;
@@ -178,16 +179,18 @@ struct MVKMetal4CommandQueueState {
 
 	bool acquireAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator) {
 		lock_guard<mutex> guard(lock);
-		if (shuttingDown.load(memory_order_acquire)) { return false; }
+		if (shuttingDown.load(memory_order_acquire) || allocators.empty()) { return false; }
 
-		for (size_t idx = 0; idx < allocators.size(); idx++) {
+		for (size_t offset = 0; offset < allocators.size(); offset++) {
+			size_t idx = (nextAllocatorIndex + offset) % allocators.size();
 			auto& slot = allocators[idx];
-			if (slot.encoding) { continue; }
+			if (slot.encoding || slot.inFlightCount != 0) { continue; }
 			if (slot.resetPending && slot.inFlightCount == 0) {
 				[slot.allocator reset];
 				slot.resetPending = false;
 			}
 			slot.encoding = true;
+			nextAllocatorIndex = (idx + 1) % allocators.size();
 			*slotIndex = idx;
 			*allocator = [slot.allocator retain];
 			return true;
@@ -328,14 +331,14 @@ struct MVKMetal4CommandQueueState {
 
 	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
 	void recordFallback() { fallbackCount.fetch_add(1, memory_order_relaxed); }
-	void recordBufferCopy() { bufferCopyCount.fetch_add(1, memory_order_relaxed); }
-	void recordBufferFill() { bufferFillCount.fetch_add(1, memory_order_relaxed); }
-	void recordImageCopy() { imageCopyCount.fetch_add(1, memory_order_relaxed); }
-	void recordComputeDispatch() { computeDispatchCount.fetch_add(1, memory_order_relaxed); }
+	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
+	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
+	void recordImageCopy(uint64_t count = 1) { imageCopyCount.fetch_add(count, memory_order_relaxed); }
+	void recordComputeDispatch(uint64_t count = 1) { computeDispatchCount.fetch_add(count, memory_order_relaxed); }
 	void recordRenderSubmission() { renderSubmissionCount.fetch_add(1, memory_order_relaxed); }
-	void recordRenderPass() { renderPassCount.fetch_add(1, memory_order_relaxed); }
-	void recordDraw() { drawCount.fetch_add(1, memory_order_relaxed); }
-	void recordBarrier() { barrierCount.fetch_add(1, memory_order_relaxed); }
+	void recordRenderPass(uint64_t count = 1) { renderPassCount.fetch_add(count, memory_order_relaxed); }
+	void recordDraw(uint64_t count = 1) { drawCount.fetch_add(count, memory_order_relaxed); }
+	void recordBarrier(uint64_t count = 1) { barrierCount.fetch_add(count, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
 		lock_guard<mutex> guard(lock);
@@ -417,6 +420,15 @@ public:
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		NSUInteger width = 0;
 		NSUInteger height = 0;
+	};
+	struct CommandCounters {
+		uint64_t bufferCopies = 0;
+		uint64_t bufferFills = 0;
+		uint64_t imageCopies = 0;
+		uint64_t computeDispatches = 0;
+		uint64_t renderPasses = 0;
+		uint64_t draws = 0;
+		uint64_t barriers = 0;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
@@ -547,7 +559,7 @@ public:
 					  destinationLevel:dstLevel
 							 sliceCount:layerCount
 							 levelCount:1];
-			_state->recordImageCopy();
+			_counters.imageCopies++;
 			return true;
 		}
 
@@ -581,7 +593,7 @@ public:
 					  destinationSlice:dstSlice
 					  destinationLevel:dstLevel
 					 destinationOrigin:layerDstOrigin];
-			_state->recordImageCopy();
+			_counters.imageCopies++;
 		}
 		return true;
 	}
@@ -600,7 +612,7 @@ public:
 		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
 		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
 					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
-		_state->recordComputeDispatch();
+		_counters.computeDispatches++;
 		return true;
 	}
 
@@ -635,7 +647,7 @@ public:
 		// stages to a render encoder.
 		endComputeEncoding();
 		_pendingBarriers.push_back(PendingBarrier{after, before, visibility});
-		_state->recordBarrier();
+		_counters.barriers++;
 		return true;
 	}
 
@@ -652,7 +664,7 @@ public:
 							 toBuffer:dst->second.buffer
 					destinationOffset:(dst->second.offset + (NSUInteger)dstOffset)
 								 size:(NSUInteger)size];
-		_state->recordBufferCopy();
+		_counters.bufferCopies++;
 		return true;
 	}
 
@@ -666,7 +678,7 @@ public:
 						  range:NSMakeRange(dst->second.offset + (NSUInteger)dstOffset,
 											 (NSUInteger)size)
 						  value:value];
-		_state->recordBufferFill();
+		_counters.bufferFills++;
 		return true;
 	}
 
@@ -705,7 +717,7 @@ public:
 		_currentRenderWidth = binding.width;
 		_currentRenderHeight = binding.height;
 		_graphicsPipelineBoundForEncoder = false;
-		_state->recordRenderPass();
+		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
 
@@ -735,7 +747,7 @@ public:
 						 vertexCount:vertexCount
 					   instanceCount:instanceCount
 						baseInstance:firstInstance];
-		_state->recordDraw();
+		_counters.draws++;
 		_renderWork = true;
 		return true;
 	}
@@ -747,6 +759,15 @@ public:
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
 	bool hasRenderWork() const { return _renderWork; }
+	void publishCommittedCounters() {
+		_state->recordBufferCopy(_counters.bufferCopies);
+		_state->recordBufferFill(_counters.bufferFills);
+		_state->recordImageCopy(_counters.imageCopies);
+		_state->recordComputeDispatch(_counters.computeDispatches);
+		_state->recordRenderPass(_counters.renderPasses);
+		_state->recordDraw(_counters.draws);
+		_state->recordBarrier(_counters.barriers);
+	}
 
 private:
 	bool ensureComputeEncoder() {
@@ -840,6 +861,7 @@ private:
 	NSUInteger _currentRenderHeight = 0;
 	bool _graphicsPipelineBoundForEncoder = false;
 	bool _renderWork = false;
+	CommandCounters _counters;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
@@ -1441,12 +1463,6 @@ void MVKQueue::initMTL4CommandQueue() {
 		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
 						  "Metal 4 command validation override bypassed only the GPU-family advertisement; public factories and the bounded commit probe must still pass.");
 	}
-	if (!getMetalFeatures().residencySets) {
-		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 command backend requested but residency sets are unavailable.");
-		return;
-	}
-
 	if (@available(macOS 26.0, iOS 26.0, *)) {
 		id<MTLDevice> mtlDevice = getMTLDevice();
 		if (![mtlDevice respondsToSelector:@selector(newMTL4CommandQueueWithDescriptor:error:)] ||
@@ -1857,12 +1873,17 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	id<MTLSharedEvent> orderingEvent = state->copyOrderingEvent();
 	bool allocatorInFlight = false;
 	bool commitAttempted = false;
+	bool queueSideEffectsStarted = false;
 	VkResult result = getConfigurationResult();
 	@try {
 		if (_submissionSequence > 1) {
+			queueSideEffectsStarted = true;
 			[commandQueue waitForEvent:orderingEvent value:_submissionSequence - 1];
 		}
-		for (auto& wait : _waitSemaphores) { wait.encodeMetal4Wait(commandQueue); }
+		for (auto& wait : _waitSemaphores) {
+			queueSideEffectsStarted = true;
+			wait.encodeMetal4Wait(commandQueue);
+		}
 
 		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
 		state->finishEncoding(allocatorIndex, true);
@@ -1871,6 +1892,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[commandQueue commit:commandBuffers count:1 options:options];
 		endMetal4CommandBuffers(true);
 		claimedCommandBuffers = false;
+		encoder.publishCommittedCounters();
 		state->recordRealSubmission();
 		if (encoder.hasRenderWork()) { state->recordRenderSubmission(); }
 
@@ -1884,7 +1906,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 							  (unsigned long long)_submissionSequence);
 		}
 	} @catch (NSException* exception) {
-		if (!commitAttempted) {
+		if (!queueSideEffectsStarted) {
 			if (claimedCommandBuffers) {
 				endMetal4CommandBuffers(false);
 				claimedCommandBuffers = false;
@@ -1903,6 +1925,34 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			[allocator release];
 			*handled = false;
 			return VK_SUCCESS;
+		}
+
+		if (!commitAttempted) {
+			if (claimedCommandBuffers) {
+				endMetal4CommandBuffers(false);
+				claimedCommandBuffers = false;
+			}
+			if (allocatorInFlight) {
+				state->completeAllocator(allocatorIndex);
+			} else {
+				state->finishEncoding(allocatorIndex, false);
+			}
+			state->releaseResidency(allocations);
+			state->recordFailure(exception.reason);
+			setConfigurationResult(VK_ERROR_DEVICE_LOST);
+			_queue->reportResult(VK_ERROR_DEVICE_LOST,
+							 MVK_CONFIG_LOG_LEVEL_ERROR,
+							 "Metal 4 queue wait produced a non-replayable side effect: %s",
+							 exception.reason.UTF8String ?: "unknown exception");
+			_queue->getDevice()->markLost(false);
+			[orderingEvent release];
+			[options release];
+			[residencySet release];
+			[commandBuffer release];
+			[allocator release];
+			*handled = true;
+			finish();
+			return VK_ERROR_DEVICE_LOST;
 		}
 
 		if (claimedCommandBuffers) {

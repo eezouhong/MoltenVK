@@ -61,6 +61,15 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 	if (barriers.empty()) { return true; }
 	for (const auto& barrier : barriers) {
 		if (barrier.type == MVKPipelineBarrier::None) { return false; }
+		// The legacy path applies image-layout state transitions and host-read
+		// synchronization in addition to encoding a GPU barrier. Until the MTL4
+		// materializer preserves those side effects, fail closed for every image
+		// barrier and for memory/buffer barriers visible to the host.
+		if (barrier.type == MVKPipelineBarrier::Image) { return false; }
+		if (mvkIsAnyFlagEnabled(barrier.dstStageMask, VK_PIPELINE_STAGE_2_HOST_BIT) ||
+			mvkIsAnyFlagEnabled(barrier.dstAccessMask, VK_ACCESS_2_HOST_READ_BIT)) {
+			return false;
+		}
 		if (barrier.type == MVKPipelineBarrier::Buffer ||
 			barrier.type == MVKPipelineBarrier::Image) {
 			bool srcIgnored = barrier.srcQueueFamilyIndex == UINT8_MAX;

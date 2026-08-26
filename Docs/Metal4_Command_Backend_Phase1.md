@@ -32,13 +32,14 @@ until real Vulkan commands execute on the Metal 4 queue.
 
 | Checkpoint | Status | What is real |
 |---|---|---|
-| Phase 1A | Implemented; build/device validation pending | MTL4 queue, allocator, and command-buffer creation plus begin/end lifecycle |
-| Phase 1B.1 | Implemented; build/device validation pending | Independent command residency, bounded allocator arena, one internal empty MTL4 commit, feedback completion, allocator reset, teardown-safe late callback |
-| Phase 1B.2 | Not implemented | Vulkan fence/semaphore/event submission ownership, resource collection, and queue-to-queue ordering |
-| Phase 1C | Not implemented | Real Vulkan transfer, compute, render, descriptor, barrier, and present commands on MTL4 |
+| Phase 1A | Implemented and built for macOS/iOS | MTL4 queue, allocator, and command-buffer creation plus begin/end lifecycle |
+| Phase 1B.1 | Implemented and E2E validated | Independent command residency, bounded round-robin allocator arena, one internal empty MTL4 commit, feedback completion, allocator reset, teardown-safe late callback |
+| Phase 1B.2 | Implemented for the supported slice | Vulkan fence/semaphore/event ownership, resource collection, hybrid queue ordering, and non-replayable queue-side-effect boundary |
+| Phase 1C | Implemented for a strict initial slice | Real buffer transfer, image copy, descriptorless compute, side-effect-free barriers, and basic descriptorless rendering on MTL4 |
 
-All ordinary Vulkan submissions and presentation remain on the legacy Metal
-queue at the current checkpoint.
+Unsupported commands, image-layout barriers, host-read barriers, presentation,
+and broader game rendering continue to use the legacy Metal queue. Backend
+selection is whole-submission and occurs before Metal 4 encoding.
 
 ## Phase 1A: command-object boundary
 
@@ -59,7 +60,7 @@ Eligibility requires all of the following:
 - Xcode 26 SDK build support;
 - macOS 26 or iOS 26 runtime;
 - a Metal 4-capable GPU;
-- Metal residency-set capability;
+- availability of the public residency-set and Metal 4 command factories;
 - no Metal private-API build or runtime mode;
 - a real device target, not Simulator, tvOS, or visionOS;
 - explicit opt-in through the environment variable.
@@ -99,37 +100,34 @@ Vulkan workload and is not a performance result.
 
 ## Phase 1B.2: Vulkan submission ownership
 
-The next submission checkpoint introduces:
+Implemented for the current execution slice:
 
-- `MVKMetal4SubmissionContext`, with no raw callback capture of `MVKDevice` or
-  queue-owned state;
-- a materialized `MTL4CommandBuffer` per in-flight Vulkan command-buffer
-  execution;
-- collection of buffers, images, heaps, pipeline states, argument tables, and
-  temporary resources referenced by a submission;
+- a self-contained completion object with no unsafe late callback access to a
+  destroyed queue;
+- a materialized `MTL4CommandBuffer` per supported Vulkan submission;
+- collection of buffers, images, image views, and pipeline states referenced by
+  the supported command slice;
 - batched updates of the command residency set before commit, with removal
   deferred until all referencing submissions complete;
-- empty and fence-only Vulkan submission support;
 - MTLEvent/MTLSharedEvent ordering for queue waits and signals;
 - completion tokens that retain every object needed until GPU completion;
 - whole-submission fallback selected before any Metal 4 encoding starts.
 
-Phase 1B.2 must not replay a Vulkan submission on legacy after an MTL4 command
-buffer has been committed. Post-commit failure is a submission/device error, not
-a fallback opportunity.
+Phase 1B.2 does not replay after the first MTL4 queue-side wait or commit call.
+An exception after that boundary is a device error, not a fallback opportunity.
 
 ## Phase 1C: first real command execution
 
-The first execution slice is intentionally narrow:
+The implemented execution slice is intentionally narrow:
 
 1. buffer fill and buffer copy;
 2. compute dispatch;
-3. image copy/clear paths that map to `MTL4ComputeCommandEncoder`;
-4. ordinary single-view rendering and dynamic rendering;
-5. drawable wait/signal and present;
-6. basic Vulkan synchronization2 barriers;
-7. argument-table materialization for the descriptor types used by the selected
-   smoke workload.
+3. supported color image copies that map to `MTL4ComputeCommandEncoder`;
+4. descriptorless compute dispatch;
+5. one-color, single-sample dynamic rendering without vertex input or
+   depth/stencil;
+6. memory/buffer barriers that do not require image-layout or host-read side
+   effects.
 
 The initial execution slice excludes:
 
@@ -140,6 +138,10 @@ The initial execution slice excludes:
 - simultaneous-use materialization caching;
 - sparse resources;
 - query/timestamp migration;
+- image-layout transitions and host-read synchronization;
+- descriptor and argument-table materialization;
+- indexed drawing, vertex-buffer input, depth/stencil, and multiple attachments;
+- drawable presentation on MTL4;
 - archive or pipeline-binary persistence;
 - ray tracing and machine-learning encoders.
 
@@ -179,6 +181,9 @@ Every checkpoint must preserve these invariants:
    and descriptor locks.
 10. No MTL4 failure causes duplicate Vulkan side effects.
 11. Toggle-off and unsupported targets remain on the legacy execution path.
+12. Telemetry is published only after `commit` returns successfully.
+13. Each allocator has at most one in-flight command buffer and exhaustion
+    falls back instead of allowing unbounded allocator growth.
 
 ## Validation gates
 

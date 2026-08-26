@@ -911,35 +911,48 @@ int main() {
         renderingInfo.colorAttachmentCount = 1;
         renderingInfo.pColorAttachments = &colorAttachment;
 
-        VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
-        imageBarrier(renderCommand, renderTarget.image,
+        // Keep image-layout side effects on the legacy path. The isolated draw
+        // submission can then prove real MTL4 rendering without asking the
+        // experimental barrier materializer to mutate MoltenVK layout state.
+        VkCommandBuffer prepareRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareRender, renderTarget.image,
                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                      0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareRender);
+
+        VkCommandBuffer renderCommand = beginCommandBuffer(device, commandPool);
         vkCmdBeginRendering(renderCommand, &renderingInfo);
         vkCmdBindPipeline(renderCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         vkCmdDraw(renderCommand, 3, 1, 0, 0);
         vkCmdEndRendering(renderCommand);
-        imageBarrier(renderCommand, renderTarget.image,
+        endCommandBuffer(renderCommand);
+
+        VkCommandBuffer finishRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishRender, renderTarget.image,
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT);
-        endCommandBuffer(renderCommand);
+        endCommandBuffer(finishRender);
 
         VkCommandBuffer readRender = beginCommandBuffer(device, commandPool);
         vkCmdCopyImageToBuffer(readRender, renderTarget.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                renderReadback.buffer, 1, &imageRegion);
         endCommandBuffer(readRender);
-        std::array<VkSubmitInfo, 2> renderSubmits{};
+        std::array<VkSubmitInfo, 4> renderSubmits{};
         for (auto& submit : renderSubmits) { submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; }
         renderSubmits[0].commandBufferCount = 1;
-        renderSubmits[0].pCommandBuffers = &renderCommand;
+        renderSubmits[0].pCommandBuffers = &prepareRender;
         renderSubmits[1].commandBufferCount = 1;
-        renderSubmits[1].pCommandBuffers = &readRender;
+        renderSubmits[1].pCommandBuffers = &renderCommand;
+        renderSubmits[2].commandBufferCount = 1;
+        renderSubmits[2].pCommandBuffers = &finishRender;
+        renderSubmits[3].commandBufferCount = 1;
+        renderSubmits[3].pCommandBuffers = &readRender;
         VkFence renderFence = createFence(device);
         check(vkQueueSubmit(queue, static_cast<uint32_t>(renderSubmits.size()),
                             renderSubmits.data(), renderFence),

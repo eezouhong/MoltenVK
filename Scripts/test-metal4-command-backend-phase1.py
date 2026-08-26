@@ -286,7 +286,7 @@ def main() -> int:
 
     require(
         pipeline_cmd_h + pipeline_cmd_mm,
-        r"MVKCmdPipelineBarrier[\s\S]*?supportsMetal4PipelineBarriers[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
+        r"MVKCmdPipelineBarrier[\s\S]*?getMetal4PipelineBarrierUnsupportedReason[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
         "buffer/memory pipeline barriers are not materialized",
     )
     require(
@@ -301,7 +301,7 @@ def main() -> int:
     )
     require(
         pipeline_cmd_mm,
-        r"_dependencyFlags\s*==\s*0[\s\S]*?supportsMetal4PipelineBarriers",
+        r"dependencyFlags\s*!=\s*0[\s\S]*?barrier_dependency_flags[\s\S]*?_supportsMetal4Encoding\s*=\s*!_metal4UnsupportedReason",
         "unsupported dependency flags do not fail closed",
     )
     require(
@@ -311,7 +311,7 @@ def main() -> int:
     )
     require(
         pipeline_cmd_mm,
-        r"supportsMetal4PipelineBarriers[\s\S]*?VK_PIPELINE_STAGE_2_HOST_BIT[\s\S]*?VK_ACCESS_2_HOST_READ_BIT[\s\S]*?return\s+false",
+        r"getMetal4PipelineBarrierUnsupportedReason[\s\S]*?VK_PIPELINE_STAGE_2_HOST_BIT[\s\S]*?VK_ACCESS_2_HOST_READ_BIT[\s\S]*?barrier_host_access",
         "host-read barrier side effects do not fail closed",
     )
     require(
@@ -328,6 +328,11 @@ def main() -> int:
         pipeline_cmd_mm,
         r"MVKCmdPipelineBarrier<[^>]+>::encodeMetal4[\s\S]*?pipelineBarrier\(",
         "image/buffer/memory barriers are not encoded through the backend-neutral barrier boundary",
+    )
+    require(
+        pipeline_cmd_h + pipeline_cmd_mm,
+        r"getMetal4UnsupportedReason[\s\S]*?barrier_dependency_flags[\s\S]*?barrier_missing_type[\s\S]*?barrier_host_access[\s\S]*?barrier_image_layout[\s\S]*?barrier_image_range[\s\S]*?barrier_queue_family",
+        "Metal 4 barrier fallbacks are not split into actionable reason groups",
     )
 
     # Strict ordinary-render slice: one dynamic-rendering color attachment, an optional

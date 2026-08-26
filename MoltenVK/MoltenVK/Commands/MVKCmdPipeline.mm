@@ -57,15 +57,18 @@ template class MVKCmdExecuteCommands<16>;
 #pragma mark MVKCmdPipelineBarrier
 
 template <typename Barriers>
-static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
-	if (barriers.empty()) { return true; }
+static const char* getMetal4PipelineBarrierUnsupportedReason(
+	VkDependencyFlags dependencyFlags,
+	const Barriers& barriers) {
+	if (dependencyFlags != 0) { return "barrier_dependency_flags"; }
+	if (barriers.empty()) { return nullptr; }
 	for (const auto& barrier : barriers) {
-		if (barrier.type == MVKPipelineBarrier::None) { return false; }
+		if (barrier.type == MVKPipelineBarrier::None) { return "barrier_missing_type"; }
 		// Host synchronization remains on the legacy path. Ordinary image layout
 		// metadata is staged by the MTL4 materializer and published only after commit.
 		if (mvkIsAnyFlagEnabled(barrier.dstStageMask, VK_PIPELINE_STAGE_2_HOST_BIT) ||
 			mvkIsAnyFlagEnabled(barrier.dstAccessMask, VK_ACCESS_2_HOST_READ_BIT)) {
-			return false;
+			return "barrier_host_access";
 		}
 		if (barrier.type == MVKPipelineBarrier::Image) {
 			bool colorLayout = barrier.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT &&
@@ -81,13 +84,16 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
 				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
 				: barrier.layerCount;
-			if (!barrier.mvkImage || (!colorLayout && !depthLayout) ||
+			if (!colorLayout && !depthLayout) {
+				return "barrier_image_layout";
+			}
+			if (!barrier.mvkImage ||
 				barrier.baseMipLevel >= barrier.mvkImage->getMipLevelCount() ||
 				barrier.baseArrayLayer >= barrier.mvkImage->getLayerCount() ||
 				!mipLevelCount || !layerCount ||
 				mipLevelCount > barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel ||
 				layerCount > barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer) {
-				return false;
+				return "barrier_image_range";
 			}
 		}
 		if (barrier.type == MVKPipelineBarrier::Buffer ||
@@ -96,11 +102,11 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 			bool dstIgnored = barrier.dstQueueFamilyIndex == UINT8_MAX;
 			if (!((srcIgnored && dstIgnored) ||
 				  barrier.srcQueueFamilyIndex == barrier.dstQueueFamilyIndex)) {
-				return false;
+				return "barrier_queue_family";
 			}
 		}
 	}
-	return true;
+	return nullptr;
 }
 
 template <size_t N>
@@ -122,7 +128,9 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pDependencyInfo->pImageMemoryBarriers[i]);
 	}
-	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
+	_metal4UnsupportedReason =
+		getMetal4PipelineBarrierUnsupportedReason(_dependencyFlags, _barriers);
+	_supportsMetal4Encoding = !_metal4UnsupportedReason;
 
 	return VK_SUCCESS;
 }
@@ -152,7 +160,9 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pImageMemoryBarriers[i], srcStageMask, dstStageMask);
 	}
-	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
+	_metal4UnsupportedReason =
+		getMetal4PipelineBarrierUnsupportedReason(_dependencyFlags, _barriers);
+	_supportsMetal4Encoding = !_metal4UnsupportedReason;
 
 	return VK_SUCCESS;
 }

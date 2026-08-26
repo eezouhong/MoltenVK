@@ -3594,6 +3594,16 @@ int main() {
         vkCmdBindPipeline(outsideQuery, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           graphicsPipeline);
         vkCmdDraw(outsideQuery, 3, 1, 0, 0);
+        VkClearAttachment queryClearAttachment{};
+        queryClearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        queryClearAttachment.colorAttachment = 0;
+        queryClearAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        VkClearRect queryClearRect{};
+        queryClearRect.rect = renderingInfo.renderArea;
+        queryClearRect.layerCount = 1;
+        vkCmdClearAttachments(outsideQuery, 1, &queryClearAttachment,
+                              1, &queryClearRect);
+        vkCmdDraw(outsideQuery, 3, 1, 0, 0);
         vkCmdEndRendering(outsideQuery);
         vkCmdEndQuery(outsideQuery, queryPool, 2);
         vkCmdCopyQueryPoolResults(outsideQuery, queryPool, 2, 1,
@@ -3610,6 +3620,7 @@ int main() {
         waitFence(device, outsideQueryFence);
         validateNonZeroUint64(device, outsideQueryCopy,
                               "vkCmdCopyQueryPoolResults(query around render scope)");
+        std::cout << "QUERY_CLEAR_ATTACHMENTS_OK" << std::endl;
         std::cout << "QUERY_OUTSIDE_RENDER_SCOPE_OK" << std::endl;
 
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The

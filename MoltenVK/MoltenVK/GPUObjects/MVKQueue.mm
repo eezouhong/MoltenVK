@@ -640,6 +640,9 @@ public:
 	};
 	struct ClearAttachmentsBinding {
 		MVKRPSKeyClearAtt pipelineKey = {};
+		MTLClearColor colorClearValues[kMVKMaxColorAttachmentCount] = {};
+		double depthClearValue = 0.0;
+		uint32_t stencilClearValue = 0;
 		id<MTLRenderPipelineState> pipelineState = nil;
 		id<MTLDepthStencilState> depthStencilState = nil;
 		id<MTLBuffer> clearColors = nil;
@@ -676,6 +679,7 @@ public:
 		}
 		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
 		[_argumentTable release];
+		[_currentRenderPassDescriptor release];
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -1468,6 +1472,8 @@ public:
 			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
+		[_currentRenderPassDescriptor release];
+		_currentRenderPassDescriptor = [descriptor copy];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
@@ -1572,6 +1578,8 @@ public:
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor]
 			retain];
+		[_currentRenderPassDescriptor release];
+		_currentRenderPassDescriptor = [descriptor copy];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
@@ -1917,6 +1925,7 @@ public:
 				binding.pipelineKey.enableAttachment(colorIndex);
 				MTLClearColor color =
 					pixelFormats->getMTLClearColor(info.colorValues[colorIndex], format);
+				binding.colorClearValues[colorIndex] = color;
 				clearColors[colorIndex] = {
 					(float)color.red, (float)color.green,
 					(float)color.blue, (float)color.alpha,
@@ -1930,10 +1939,12 @@ public:
 		if (info.clearDepth) {
 			binding.pipelineKey.enableAttachment(kMVKClearAttachmentDepthIndex);
 			float depth = info.depthStencilValue.depth;
+			binding.depthClearValue = depth;
 			clearColors[kMVKClearAttachmentDepthIndex] = { depth, depth, depth, depth };
 		}
 		if (info.clearStencil) {
 			binding.pipelineKey.enableAttachment(kMVKClearAttachmentStencilIndex);
+			binding.stencilClearValue = info.depthStencilValue.stencil;
 		}
 
 		if (binding.pipelineKey.isAnyAttachmentEnabled()) {
@@ -1971,9 +1982,9 @@ public:
 		auto item = _clearAttachments.find(commandKey);
 		if (!_renderEncoder) { return failMetal4Encoding("clear_attachments_render_encoder_unavailable"); }
 		if (item == _clearAttachments.end()) { return failMetal4Encoding("clear_attachments_unprepared"); }
-		if (_activeQueryPool) { return failMetal4Encoding("clear_attachments_active_query"); }
 		ClearAttachmentsBinding& binding = item->second;
 		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
+		if (_activeQueryPool) { return clearAttachmentsDuringVisibility(binding); }
 		if (!binding.pipelineState || !binding.depthStencilState ||
 			!binding.clearColors || !binding.vertices ||
 			!_currentRenderWidth || !_currentRenderHeight) {
@@ -2056,6 +2067,8 @@ public:
 		_renderEncoder = nil;
 		[_computeEncoder release];
 		_computeEncoder = nil;
+		[_currentRenderPassDescriptor release];
+		_currentRenderPassDescriptor = nil;
 		_commandBuffer = nil;
 		_boundComputePipeline = nullptr;
 		_currentColorAttachmentCount = 0;
@@ -2109,6 +2122,125 @@ private:
 			_encodingFailureDetail = detail ?: "unknown";
 		}
 		return false;
+	}
+
+	bool clearAttachmentsDuringVisibility(ClearAttachmentsBinding& binding) {
+		// Metal visibility state cannot be paused inside one render encoder without
+		// losing the accumulated result. Preserve the attachments, perform a full
+		// load-action clear without a visibility buffer, then resume with accumulation.
+		if (!_currentRenderPassDescriptor || !_commandBuffer ||
+			_currentRenderArea.offset.x != 0 || _currentRenderArea.offset.y != 0) {
+			return failMetal4Encoding("clear_attachments_query_render_pass_unavailable");
+		}
+		for (const VkClearRect& rect : binding.rects) {
+			if (rect.rect.offset.x != _currentRenderArea.offset.x ||
+				rect.rect.offset.y != _currentRenderArea.offset.y ||
+				rect.rect.extent.width != _currentRenderArea.extent.width ||
+				rect.rect.extent.height != _currentRenderArea.extent.height ||
+				rect.baseArrayLayer != 0 || rect.layerCount != _currentRenderLayerCount) {
+				return failMetal4Encoding("clear_attachments_active_query_partial_rect");
+			}
+		}
+
+		MTL4RenderPassDescriptor* clearDescriptor = [_currentRenderPassDescriptor copy];
+		MTL4RenderPassDescriptor* resumeDescriptor = [_currentRenderPassDescriptor copy];
+		if (!clearDescriptor || !resumeDescriptor) {
+			[clearDescriptor release];
+			[resumeDescriptor release];
+			return failMetal4Encoding("clear_attachments_query_descriptor_unavailable");
+		}
+
+		bool valid = true;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			MTLRenderPassColorAttachmentDescriptor* current =
+				_currentRenderPassDescriptor.colorAttachments[colorIndex];
+			if (!current.texture) {
+				if (binding.pipelineKey.isAttachmentEnabled(colorIndex)) { valid = false; }
+				continue;
+			}
+			if (current.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
+			[_renderEncoder setColorStoreAction:MTLStoreActionStore atIndex:colorIndex];
+			MTLRenderPassColorAttachmentDescriptor* clear =
+				clearDescriptor.colorAttachments[colorIndex];
+			clear.loadAction = binding.pipelineKey.isAttachmentEnabled(colorIndex)
+				? MTLLoadActionClear : MTLLoadActionLoad;
+			clear.storeAction = MTLStoreActionStore;
+			clear.resolveTexture = nil;
+			if (binding.pipelineKey.isAttachmentEnabled(colorIndex)) {
+				clear.clearColor = binding.colorClearValues[colorIndex];
+			}
+			resumeDescriptor.colorAttachments[colorIndex].loadAction = MTLLoadActionLoad;
+		}
+
+		MTLRenderPassDepthAttachmentDescriptor* currentDepth =
+			_currentRenderPassDescriptor.depthAttachment;
+		if (currentDepth.texture) {
+			if (currentDepth.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
+			[_renderEncoder setDepthStoreAction:MTLStoreActionStore];
+			clearDescriptor.depthAttachment.loadAction =
+				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentDepthIndex)
+				? MTLLoadActionClear : MTLLoadActionLoad;
+			clearDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+			clearDescriptor.depthAttachment.resolveTexture = nil;
+			clearDescriptor.depthAttachment.clearDepth = binding.depthClearValue;
+			resumeDescriptor.depthAttachment.loadAction = MTLLoadActionLoad;
+		} else if (binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentDepthIndex)) {
+			valid = false;
+		}
+
+		MTLRenderPassStencilAttachmentDescriptor* currentStencil =
+			_currentRenderPassDescriptor.stencilAttachment;
+		if (currentStencil.texture) {
+			if (currentStencil.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
+			[_renderEncoder setStencilStoreAction:MTLStoreActionStore];
+			clearDescriptor.stencilAttachment.loadAction =
+				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentStencilIndex)
+				? MTLLoadActionClear : MTLLoadActionLoad;
+			clearDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
+			clearDescriptor.stencilAttachment.resolveTexture = nil;
+			clearDescriptor.stencilAttachment.clearStencil = binding.stencilClearValue;
+			resumeDescriptor.stencilAttachment.loadAction = MTLLoadActionLoad;
+		} else if (binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentStencilIndex)) {
+			valid = false;
+		}
+
+		if (!valid) {
+			[clearDescriptor release];
+			[resumeDescriptor release];
+			return failMetal4Encoding("clear_attachments_query_attachment_unsupported");
+		}
+
+		clearDescriptor.visibilityResultBuffer = nil;
+		[_renderEncoder endEncoding];
+		[_renderEncoder release];
+		_renderEncoder = nil;
+
+		id<MTL4RenderCommandEncoder> clearEncoder =
+			[[_commandBuffer renderCommandEncoderWithDescriptor:clearDescriptor] retain];
+		if (!clearEncoder) {
+			[clearDescriptor release];
+			[resumeDescriptor release];
+			return failMetal4Encoding("clear_attachments_query_clear_encoder_unavailable");
+		}
+		[clearEncoder endEncoding];
+		[clearEncoder release];
+
+		_renderEncoder =
+			[[_commandBuffer renderCommandEncoderWithDescriptor:resumeDescriptor] retain];
+		[clearDescriptor release];
+		[resumeDescriptor release];
+		if (!_renderEncoder || !applyActiveVisibilityQuery()) {
+			return failMetal4Encoding("clear_attachments_query_resume_encoder_unavailable");
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		_counters.renderPasses += 2;
+		_renderWork = true;
+		return true;
 	}
 
 	bool ensureComputeEncoder() {
@@ -2190,6 +2322,8 @@ private:
 		[_renderEncoder endEncoding];
 		[_renderEncoder release];
 		_renderEncoder = nil;
+		[_currentRenderPassDescriptor release];
+		_currentRenderPassDescriptor = nil;
 		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentStencilFormat = VK_FORMAT_UNDEFINED;
@@ -2580,6 +2714,7 @@ private:
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
 	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
+	MTL4RenderPassDescriptor* _currentRenderPassDescriptor = nil;
 	id<MTL4ArgumentTable> _argumentTable = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;

@@ -107,6 +107,9 @@ public:
 						uint32_t queryCount);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _queryPool && _queryCount > 0; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

@@ -53,7 +53,11 @@ def main() -> int:
     rendering_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm")
     pipeline_cmd_h = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h")
     pipeline_cmd_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm")
+    queries_h = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.h")
+    queries_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.mm")
     pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
+    query_pool_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.h")
+    query_pool_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.mm")
     queue_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.h")
     queue_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm")
     sync_h = read("MoltenVK/MoltenVK/GPUObjects/MVKSync.h")
@@ -64,7 +68,8 @@ def main() -> int:
     implementation = "\n".join(
         (command_h, command_buffer_h, command_buffer_mm, transfer_h, transfer_mm,
          dispatch_h, dispatch_mm, draw_h, draw_mm, rendering_h, rendering_mm,
-         pipeline_cmd_h, pipeline_cmd_mm, pipeline_h, queue_h, queue_mm, sync_h, sync_mm)
+         pipeline_cmd_h, pipeline_cmd_mm, queries_h, queries_mm, pipeline_h,
+         query_pool_h, query_pool_mm, queue_h, queue_mm, sync_h, sync_mm)
     )
 
     # Private, fail-closed enablement and supported-target boundary.
@@ -177,6 +182,28 @@ def main() -> int:
     require(queue_mm, r"MTL4ComputeCommandEncoder", "real MTL4 compute/transfer encoder is missing")
     require(queue_mm, r"copyFromBuffer:[\s\S]*?destinationOffset:[\s\S]*?size:", "MTL4 buffer copy is missing")
     require(queue_mm, r"fillBuffer:[\s\S]*?range:[\s\S]*?value:", "MTL4 buffer fill is missing")
+    require(
+        queries_h + queries_mm,
+        r"MVKCmdResetQueryPool[\s\S]*?supportsMetal4Encoding",
+        "query-pool reset is not materialized by the Metal 4 backend",
+    )
+    for token in ("MVKCmdResetQueryPool::prepareMetal4Encoding", "MVKCmdResetQueryPool::encodeMetal4"):
+        require(queries_mm, re.escape(token), f"query-pool reset is missing: {token}")
+    require(
+        command_h + queue_mm,
+        r"useQueryPool[\s\S]*?resetQueryPool[\s\S]*?pendingQueryResets[\s\S]*?publishCommittedState",
+        "query-pool reset resources or deferred state publication are missing",
+    )
+    require(
+        query_pool_h + query_pool_mm,
+        r"applyMetal4Reset[\s\S]*?resetAvailability",
+        "query availability is not reset through the post-commit path",
+    )
+    require(
+        queue_mm,
+        r"getMetal4ResetMTLBuffer[\s\S]*?fillBuffer:[\s\S]*?getMetal4ResetRange",
+        "occlusion-query result bytes are not cleared by MTL4",
+    )
     for token in (
         "MVKCmdCopyImage",
         "supportsMetal4CopyImage",
@@ -566,6 +593,7 @@ def main() -> int:
     # pixel readback, and exact path telemetry.
     for token in (
         "vkCmdFillBuffer",
+        "vkCmdResetQueryPool",
         "vkCmdPipelineBarrier",
         "vkCmdCopyBuffer",
         "vkCmdCopyImage",
@@ -583,6 +611,7 @@ def main() -> int:
         "COMPUTE_OK",
         "IMAGE_DATA_OK",
         "RENDER_OK",
+        "QUERY_RESET_OK",
         "METAL4_PHASE1C_E2E_PASS",
     ):
         require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")

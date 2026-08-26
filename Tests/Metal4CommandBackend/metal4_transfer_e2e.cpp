@@ -961,8 +961,42 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "RENDER_OK" << std::endl;
 
+        // An isolated query reset must stay on the MTL4 backend and publish the
+        // unavailable state only after the reset command buffer commits.
+        VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
+            VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO);
+        queryPoolInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
+        queryPoolInfo.queryCount = 4;
+        VkQueryPool queryPool = VK_NULL_HANDLE;
+        check(vkCreateQueryPool(device, &queryPoolInfo, nullptr, &queryPool),
+              "vkCreateQueryPool(occlusion)");
+        VkCommandBuffer resetQueries = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(resetQueries, queryPool, 1, 2);
+        endCommandBuffer(resetQueries);
+        VkSubmitInfo queryResetSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        queryResetSubmit.commandBufferCount = 1;
+        queryResetSubmit.pCommandBuffers = &resetQueries;
+        VkFence queryResetFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &queryResetSubmit, queryResetFence),
+              "vkQueueSubmit(query reset)");
+        waitFence(device, queryResetFence);
+        std::array<uint64_t, 4> queryResults{{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX}};
+        VkResult queryResult = vkGetQueryPoolResults(
+            device, queryPool, 1, 2, sizeof(queryResults), queryResults.data(),
+            sizeof(uint64_t) * 2,
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_PARTIAL_BIT |
+                VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        check(queryResult, "vkGetQueryPoolResults(after reset)");
+        if (queryResults[0] != 0 || queryResults[1] != 0 ||
+            queryResults[2] != 0 || queryResults[3] != 0) {
+            fail("Query reset did not clear result bytes and availability");
+        }
+        std::cout << "QUERY_RESET_OK" << std::endl;
+
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, queryResetFence, nullptr);
+        vkDestroyQueryPool(device, queryPool, nullptr);
         vkDestroyFence(device, renderFence, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, renderLayout, nullptr);

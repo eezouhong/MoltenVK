@@ -27,6 +27,7 @@
 #include "MVKBuffer.h"
 #include "MVKImage.h"
 #include "MVKPipeline.h"
+#include "MVKQueryPool.h"
 #include "mvk_datatypes.hpp"
 #include <algorithm>
 #include <array>
@@ -149,6 +150,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> renderPassCount = 0;
 	atomic<uint64_t> drawCount = 0;
 	atomic<uint64_t> barrierCount = 0;
+	atomic<uint64_t> queryResetCount = 0;
 	string lastError;
 
 	MVKMetal4CommandQueueState() {
@@ -464,6 +466,7 @@ struct MVKMetal4CommandQueueState {
 	void recordRenderPass(uint64_t count = 1) { renderPassCount.fetch_add(count, memory_order_relaxed); }
 	void recordDraw(uint64_t count = 1) { drawCount.fetch_add(count, memory_order_relaxed); }
 	void recordBarrier(uint64_t count = 1) { barrierCount.fetch_add(count, memory_order_relaxed); }
+	void recordQueryReset(uint64_t count = 1) { queryResetCount.fetch_add(count, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
 		lock_guard<mutex> guard(lock);
@@ -554,6 +557,15 @@ public:
 		uint64_t renderPasses = 0;
 		uint64_t draws = 0;
 		uint64_t barriers = 0;
+		uint64_t queryResets = 0;
+	};
+	struct QueryPoolBinding {
+		id<MTLBuffer> resetBuffer = nil;
+	};
+	struct PendingQueryReset {
+		MVKQueryPool* queryPool = nullptr;
+		uint32_t firstQuery = 0;
+		uint32_t queryCount = 0;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
@@ -563,6 +575,7 @@ public:
 			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
 		}
 		for (auto& item : _imageViews) { [item.second.texture release]; }
+		for (auto& item : _queryPools) { [item.second.resetBuffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) { [item.second release]; }
 	}
@@ -619,6 +632,15 @@ public:
 		[descriptor release];
 		_imageViews.emplace(imageView, binding);
 		_allocations.push_back((id<MTLAllocation>)texture);
+		return true;
+	}
+
+	bool useQueryPool(MVKQueryPool* queryPool) override {
+		if (!queryPool) { return false; }
+		if (_queryPools.count(queryPool)) { return true; }
+		id<MTLBuffer> resetBuffer = queryPool->getMetal4ResetMTLBuffer();
+		_queryPools.emplace(queryPool, QueryPoolBinding{[resetBuffer retain]});
+		if (resetBuffer) { _allocations.push_back((id<MTLAllocation>)resetBuffer); }
 		return true;
 	}
 
@@ -876,6 +898,25 @@ public:
 		return true;
 	}
 
+	bool resetQueryPool(MVKQueryPool* queryPool,
+						uint32_t firstQuery,
+						uint32_t queryCount) override {
+		auto binding = _queryPools.find(queryPool);
+		if (binding == _queryPools.end() || !queryCount) { return false; }
+		if (binding->second.resetBuffer) {
+			NSRange range = queryPool->getMetal4ResetRange(firstQuery, queryCount);
+			if (!range.length || range.location > binding->second.resetBuffer.length ||
+				range.length > binding->second.resetBuffer.length - range.location ||
+				!ensureComputeEncoder()) {
+				return false;
+			}
+			[_computeEncoder fillBuffer:binding->second.resetBuffer range:range value:0];
+		}
+		_pendingQueryResets.push_back(PendingQueryReset{queryPool, firstQuery, queryCount});
+		_counters.queryResets++;
+		return true;
+	}
+
 	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
 		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
 			!renderingInfo.pColorAttachments) {
@@ -974,11 +1015,15 @@ public:
 		_state->recordRenderPass(_counters.renderPasses);
 		_state->recordDraw(_counters.draws);
 		_state->recordBarrier(_counters.barriers);
+		_state->recordQueryReset(_counters.queryResets);
 	}
 
 	void publishCommittedState() {
 		for (const auto& barrier : _pendingImageBarriers) {
 			barrier.mvkImage->applyMetal4ImageLayoutTransition(barrier);
+		}
+		for (const auto& reset : _pendingQueryResets) {
+			reset.queryPool->applyMetal4Reset(reset.firstQuery, reset.queryCount);
 		}
 	}
 
@@ -1060,10 +1105,12 @@ private:
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
 	unordered_map<MVKImage*, ImageBinding> _images;
 	unordered_map<MVKImageView*, ImageViewBinding> _imageViews;
+	unordered_map<MVKQueryPool*, QueryPoolBinding> _queryPools;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
 	vector<PendingBarrier> _pendingBarriers;
 	vector<MVKPipelineBarrier> _pendingImageBarriers;
+	vector<PendingQueryReset> _pendingQueryResets;
 	vector<id<MTLAllocation>> _allocations;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
@@ -1805,7 +1852,7 @@ MVKQueue::~MVKQueue() {
 		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, unsupported_commands=%s.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, unsupported_commands=%s.",
 			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
@@ -1818,6 +1865,7 @@ MVKQueue::~MVKQueue() {
 			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->queryResetCount.load(memory_order_relaxed),
 			unsupportedCommandSummary.c_str());
 		_metal4CommandState->shutdown();
 		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();

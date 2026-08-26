@@ -63,6 +63,14 @@ void MVKQueryPool::finishQueries(MVKArrayRef<const uint32_t> queries) {
 }
 
 void MVKQueryPool::resetResults(uint32_t firstQuery, uint32_t queryCount, MVKCommandEncoder* cmdEncoder) {
+	resetAvailability(firstQuery, queryCount);
+}
+
+void MVKQueryPool::applyMetal4Reset(uint32_t firstQuery, uint32_t queryCount) {
+	resetAvailability(firstQuery, queryCount);
+}
+
+void MVKQueryPool::resetAvailability(uint32_t firstQuery, uint32_t queryCount) {
     lock_guard<mutex> lock(_availabilityLock);
     uint32_t endQuery = firstQuery + queryCount;
     for (uint32_t query = firstQuery; query < endQuery; query++) {

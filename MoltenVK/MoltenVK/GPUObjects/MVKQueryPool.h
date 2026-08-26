@@ -61,6 +61,15 @@ public:
 	/** Resets the results and availability status of the specified queries. */
 	virtual void resetResults(uint32_t firstQuery, uint32_t queryCount, MVKCommandEncoder* cmdEncoder);
 
+	/** Applies only the CPU-side availability part of a committed Metal 4 reset. */
+	void applyMetal4Reset(uint32_t firstQuery, uint32_t queryCount);
+
+	/** Returns storage and byte range that Metal 4 must clear for this reset, if any. */
+	virtual id<MTLBuffer> getMetal4ResetMTLBuffer() { return nil; }
+	virtual NSRange getMetal4ResetRange(uint32_t firstQuery, uint32_t queryCount) {
+		return NSMakeRange(0, 0);
+	}
+
 	/** Copies the results of the specified queries into host memory. */
 	VkResult getResults(uint32_t firstQuery,
 						uint32_t queryCount,
@@ -104,6 +113,7 @@ public:
                     _queryElementCount(queryElementCount) {}
 
 protected:
+	void resetAvailability(uint32_t firstQuery, uint32_t queryCount);
 	bool areQueriesHostAvailable(uint32_t firstQuery, uint32_t endQuery);
 	virtual NSData* getQuerySourceData(uint32_t firstQuery, uint32_t queryCount) { return nil; }
     VkResult getResult(uint32_t query, NSData* srcData, uint32_t srcDataQueryOffset, void* pDstData, VkQueryResultFlags flags);
@@ -154,6 +164,12 @@ public:
     void beginQuery(uint32_t query, VkQueryControlFlags flags, MVKCommandEncoder* cmdEncoder) override;
     void endQuery(uint32_t query, MVKCommandEncoder* cmdEncoder) override;
     void resetResults(uint32_t firstQuery, uint32_t queryCount, MVKCommandEncoder* cmdEncoder) override;
+	id<MTLBuffer> getMetal4ResetMTLBuffer() override { return _visibilityResultMTLBuffer; }
+	NSRange getMetal4ResetRange(uint32_t firstQuery, uint32_t queryCount) override {
+		NSUInteger firstOffset = getVisibilityResultOffset(firstQuery);
+		NSUInteger lastOffset = getVisibilityResultOffset(firstQuery + queryCount);
+		return NSMakeRange(firstOffset, lastOffset - firstOffset);
+	}
     void beginQueryAddedTo(uint32_t query, MVKCommandBuffer* cmdBuffer) override;
 
 
@@ -255,4 +271,3 @@ public:
 protected:
 	void propagateDebugName() override {}
 };
-

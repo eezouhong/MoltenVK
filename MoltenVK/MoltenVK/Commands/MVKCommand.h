@@ -29,6 +29,7 @@ class MVKComputePipeline;
 class MVKGraphicsPipeline;
 class MVKImage;
 class MVKImageView;
+class MVKQueryPool;
 struct MVKPipelineBarrier;
 
 
@@ -55,6 +56,9 @@ public:
 	/** Registers an image view used as a render attachment before execution is claimed. */
 	virtual bool useImageView(MVKImageView* imageView) = 0;
 
+	/** Registers query-pool storage before a reset is claimed. */
+	virtual bool useQueryPool(MVKQueryPool* queryPool) = 0;
+
 	/** Registers a compute pipeline before execution is claimed. */
 	virtual bool useComputePipeline(MVKComputePipeline* pipeline) = 0;
 
@@ -71,6 +75,10 @@ public:
 							VkDeviceSize dstOffset,
 							VkDeviceSize size,
 							uint8_t value) = 0;
+
+	virtual bool resetQueryPool(MVKQueryPool* queryPool,
+							uint32_t firstQuery,
+							uint32_t queryCount) = 0;
 
 	virtual bool copyImage(MVKImage* srcImage,
 						   uint8_t srcPlane,

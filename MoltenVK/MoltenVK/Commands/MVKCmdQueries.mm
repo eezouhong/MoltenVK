@@ -118,6 +118,15 @@ void MVKCmdResetQueryPool::encode(MVKCommandEncoder* cmdEncoder) {
     _queryPool->resetResults(_query, _queryCount, cmdEncoder);
 }
 
+bool MVKCmdResetQueryPool::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useQueryPool(_queryPool);
+}
+
+bool MVKCmdResetQueryPool::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->resetQueryPool(_queryPool, _query, _queryCount);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdCopyQueryPoolResults
@@ -151,4 +160,3 @@ void MVKCmdCopyQueryPoolResults::encode(MVKCommandEncoder* cmdEncoder) {
         _queryPool->encodeCopyResults(cmdEncoder, _query, _queryCount, _destBuffer, _destOffset, _destStride, _flags);
     }
 }
-

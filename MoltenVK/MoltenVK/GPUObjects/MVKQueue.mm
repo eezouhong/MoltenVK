@@ -166,7 +166,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> queryCopyCount = 0;
 	atomic<uint64_t> visibilityQueryCount = 0;
 	string lastError;
-	string lastReplayableException;
+	unordered_set<string> replayableExceptions;
 
 	MVKMetal4CommandQueueState() {
 		for (auto& counter : fallbackReasonCounts) { counter.store(0, memory_order_relaxed); }
@@ -483,8 +483,8 @@ struct MVKMetal4CommandQueueState {
 			", name=" + exceptionName +
 			", reason=" + exceptionReason;
 		lock_guard<mutex> guard(lock);
-		bool changed = nextSummary != lastReplayableException;
-		lastReplayableException = nextSummary;
+		bool changed = replayableExceptions.size() < kMetal4UnsupportedCommandCapacity &&
+			replayableExceptions.insert(nextSummary).second;
 		if (summary) { *summary = nextSummary; }
 		return changed;
 	}
@@ -833,13 +833,18 @@ public:
 	}
 
 	void recordMetal4EncodingFailure(const char* commandType) override {
-		if (!_encodingFailureCommand) {
-			_encodingFailureCommand = commandType ?: "MVKCommand";
+		if (_encodingFailureSummary.empty()) {
+			_encodingFailureSummary = commandType ?: "MVKCommand";
+			if (!_encodingFailureDetail.empty()) {
+				_encodingFailureSummary += ":" + _encodingFailureDetail;
+			}
 		}
 	}
 
 	const char* getMetal4EncodingFailureCommand() const {
-		return _encodingFailureCommand ?: "MVKCommand";
+		return _encodingFailureSummary.empty()
+			? "MVKCommand"
+			: _encodingFailureSummary.c_str();
 	}
 
 	bool useDescriptorSet(VkPipelineBindPoint bindPoint,
@@ -1138,8 +1143,15 @@ public:
 	bool dispatchThreadgroups(uint32_t groupCountX,
 							 uint32_t groupCountY,
 							 uint32_t groupCountZ) override {
-		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
-		if (!_computeResourcesBoundForEncoder && !applyComputeResources()) { return false; }
+		if (!ensureComputeEncoder()) {
+			return failMetal4Encoding("dispatch_compute_encoder_unavailable");
+		}
+		if (!_boundComputePipeline) {
+			return failMetal4Encoding("dispatch_pipeline_unbound");
+		}
+		if (!_computeResourcesBoundForEncoder && !applyComputeResources()) {
+			return failMetal4Encoding("dispatch_resources_unavailable");
+		}
 		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
 					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
 		_counters.computeDispatches++;
@@ -1301,8 +1313,14 @@ public:
 	bool beginVisibilityQuery(MVKQueryPool* queryPool,
 							  uint32_t query,
 							  VkQueryControlFlags flags) override {
-		if (!_renderEncoder || queryPool != _visibilityQueryPool || _activeQueryPool) {
-			return false;
+		if (!_renderEncoder) {
+			return failMetal4Encoding("begin_query_no_render_encoder");
+		}
+		if (queryPool != _visibilityQueryPool) {
+			return failMetal4Encoding("begin_query_pool_mismatch");
+		}
+		if (_activeQueryPool) {
+			return failMetal4Encoding("begin_query_already_active");
 		}
 		MTLVisibilityResultMode mode = mvkAreAllFlagsEnabled(
 			flags, VK_QUERY_CONTROL_PRECISE_BIT)
@@ -2080,6 +2098,13 @@ public:
 	}
 
 private:
+	bool failMetal4Encoding(const char* detail) {
+		if (_encodingFailureDetail.empty()) {
+			_encodingFailureDetail = detail ?: "unknown";
+		}
+		return false;
+	}
+
 	bool ensureComputeEncoder() {
 		if (!_commandBuffer || _renderEncoder) { return false; }
 		if (_computeEncoder) { return true; }
@@ -2536,7 +2561,8 @@ private:
 	bool _hasDynamicDepthBias = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
-	const char* _encodingFailureCommand = nullptr;
+	string _encodingFailureDetail;
+	string _encodingFailureSummary;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */

@@ -761,6 +761,19 @@ def main() -> int:
         r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
         "replayable materialization failures do not identify the concrete Vulkan command",
     )
+    for token in (
+        "begin_query_no_render_encoder",
+        "begin_query_pool_mismatch",
+        "begin_query_already_active",
+        "dispatch_compute_encoder_unavailable",
+        "dispatch_pipeline_unbound",
+        "dispatch_resources_unavailable",
+    ):
+        require(
+            queue_mm,
+            re.escape(token),
+            f"query and dispatch materialization telemetry is missing: {token}",
+        )
     require(
         queue_mm,
         r"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu",

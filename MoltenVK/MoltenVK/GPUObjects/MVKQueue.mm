@@ -773,13 +773,59 @@ public:
 
 	bool useVisibilityQueryPool(MVKQueryPool* queryPool) override {
 		if (!queryPool || !queryPool->supportsMetal4VisibilityQueries() ||
-			(_visibilityQueryPool && _visibilityQueryPool != queryPool) ||
 			!useQueryPool(queryPool)) {
 			return false;
 		}
 		auto binding = _queryPools.find(queryPool);
-		if (binding == _queryPools.end() || !binding->second.resetBuffer) { return false; }
-		_visibilityQueryPool = queryPool;
+		return binding != _queryPools.end() && binding->second.resetBuffer;
+	}
+
+	bool beginVisibilityQueryScopePreparation() override {
+		if (_preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_nested_render_scope");
+			return false;
+		}
+		_visibilityQueryScopePlans.push_back(_preparingActiveQueryPool);
+		_preparingVisibilityQueryScope = true;
+		return true;
+	}
+
+	bool endVisibilityQueryScopePreparation() override {
+		if (!_preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_render_scope_end_without_begin");
+			return false;
+		}
+		_preparingVisibilityQueryScope = false;
+		return true;
+	}
+
+	bool beginVisibilityQueryPreparation(MVKQueryPool* queryPool) override {
+		if (!useVisibilityQueryPool(queryPool)) {
+			recordMetal4PreparationFailure("visibility_query_pool_unavailable");
+			return false;
+		}
+		if (_preparingActiveQueryPool) {
+			recordMetal4PreparationFailure("visibility_query_already_active");
+			return false;
+		}
+		if (_preparingVisibilityQueryScope) {
+			MVKQueryPool*& plannedPool = _visibilityQueryScopePlans.back();
+			if (plannedPool && plannedPool != queryPool) {
+				recordMetal4PreparationFailure("visibility_query_multiple_pools_in_render_scope");
+				return false;
+			}
+			plannedPool = queryPool;
+		}
+		_preparingActiveQueryPool = queryPool;
+		return true;
+	}
+
+	bool endVisibilityQueryPreparation(MVKQueryPool* queryPool) override {
+		if (!useVisibilityQueryPool(queryPool) || _preparingActiveQueryPool != queryPool) {
+			recordMetal4PreparationFailure("visibility_query_end_mismatch");
+			return false;
+		}
+		_preparingActiveQueryPool = nullptr;
 		return true;
 	}
 
@@ -846,6 +892,8 @@ public:
 		_preparedGraphicsPipeline = nullptr;
 		_preparedComputeDescriptorSets.fill(nullptr);
 		_preparedGraphicsDescriptorSets.fill(nullptr);
+		_preparingActiveQueryPool = nullptr;
+		_preparingVisibilityQueryScope = false;
 		_preparationFailureSummary.clear();
 	}
 
@@ -1348,7 +1396,7 @@ public:
 	bool beginVisibilityQuery(MVKQueryPool* queryPool,
 							  uint32_t query,
 							  VkQueryControlFlags flags) override {
-		if (queryPool != _visibilityQueryPool) {
+		if (_renderEncoder && queryPool != _visibilityQueryPool) {
 			return failMetal4Encoding("begin_query_pool_mismatch");
 		}
 		if (_activeQueryPool) {
@@ -1435,6 +1483,7 @@ public:
 			if (stencilIt == _imageViews.end()) { return false; }
 			renderAttachments.push_back(stencilIt->second.texture);
 		}
+		if (!activateNextVisibilityQueryScope()) { return false; }
 		endComputeEncoding();
 
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
@@ -1570,6 +1619,7 @@ public:
 			if (viewIt == _imageViews.end()) { return false; }
 			renderAttachments.push_back(viewIt->second.texture);
 		}
+		if (!activateNextVisibilityQueryScope()) { return false; }
 		endComputeEncoding();
 
 		MTLRenderPassDescriptor* legacyDescriptor =
@@ -1643,6 +1693,7 @@ public:
 	bool endRendering() override {
 		if (!_renderEncoder) { return false; }
 		endRenderEncoding();
+		_visibilityQueryPool = nullptr;
 		return true;
 	}
 
@@ -2153,6 +2204,19 @@ private:
 		return false;
 	}
 
+	bool activateNextVisibilityQueryScope() {
+		if (_nextVisibilityQueryScopeIndex >= _visibilityQueryScopePlans.size()) {
+			return failMetal4Encoding("visibility_query_scope_plan_missing");
+		}
+		MVKQueryPool* plannedPool =
+			_visibilityQueryScopePlans[_nextVisibilityQueryScopeIndex++];
+		if (_activeQueryPool && plannedPool != _activeQueryPool) {
+			return failMetal4Encoding("visibility_query_scope_active_pool_mismatch");
+		}
+		_visibilityQueryPool = plannedPool;
+		return true;
+	}
+
 	bool ensureComputeEncoder() {
 		if (!_commandBuffer || _renderEncoder) { return false; }
 		if (_computeEncoder) { return true; }
@@ -2627,6 +2691,10 @@ private:
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
 	MVKComputePipeline* _preparedComputePipeline = nullptr;
 	MVKGraphicsPipeline* _preparedGraphicsPipeline = nullptr;
+	vector<MVKQueryPool*> _visibilityQueryScopePlans;
+	size_t _nextVisibilityQueryScopeIndex = 0;
+	MVKQueryPool* _preparingActiveQueryPool = nullptr;
+	bool _preparingVisibilityQueryScope = false;
 	MVKQueryPool* _visibilityQueryPool = nullptr;
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;

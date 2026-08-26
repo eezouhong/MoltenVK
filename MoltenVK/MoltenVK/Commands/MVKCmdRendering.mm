@@ -176,7 +176,7 @@ bool MVKCmdBeginRenderPass<N_CV, N_A>::prepareMetal4Encoding(
 	for (MVKImageView* attachment : _attachments) {
 		if (!cmdEncoder->useImageView(attachment)) { return false; }
 	}
-	return true;
+	return cmdEncoder->beginVisibilityQueryScopePreparation();
 }
 
 template <size_t N_CV, size_t N_A>
@@ -378,7 +378,7 @@ bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmd
 			(MVKImageView*)_renderingInfo.pStencilAttachment->imageView)) {
 		return false;
 	}
-	return true;
+	return cmdEncoder->beginVisibilityQueryScopePreparation();
 }
 
 template <size_t N>

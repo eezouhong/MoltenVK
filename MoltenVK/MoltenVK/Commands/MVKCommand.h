@@ -85,8 +85,12 @@ public:
 	virtual bool useQueryPool(MVKQueryPool* queryPool) = 0;
 	virtual bool useQueryResultPool(MVKQueryPool* queryPool) = 0;
 
-	/** Registers the single visibility-result buffer used by this strict slice. */
+	/** Registers one visibility-result buffer used by this command submission. */
 	virtual bool useVisibilityQueryPool(MVKQueryPool* queryPool) = 0;
+	virtual bool beginVisibilityQueryScopePreparation() = 0;
+	virtual bool endVisibilityQueryScopePreparation() = 0;
+	virtual bool beginVisibilityQueryPreparation(MVKQueryPool* queryPool) = 0;
+	virtual bool endVisibilityQueryPreparation(MVKQueryPool* queryPool) = 0;
 
 	/** Creates resident staging storage for recorded vkCmdUpdateBuffer bytes. */
 	virtual bool useUpdateBufferData(const void* data, size_t size) = 0;

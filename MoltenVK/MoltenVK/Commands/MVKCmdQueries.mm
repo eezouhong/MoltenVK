@@ -67,7 +67,7 @@ bool MVKCmdBeginQuery::supportsMetal4Encoding() const {
 
 bool MVKCmdBeginQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	return cmdEncoder && supportsMetal4Encoding() &&
-		cmdEncoder->useVisibilityQueryPool(_queryPool);
+		cmdEncoder->beginVisibilityQueryPreparation(_queryPool);
 }
 
 bool MVKCmdBeginQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -93,7 +93,7 @@ bool MVKCmdEndQuery::supportsMetal4Encoding() const {
 
 bool MVKCmdEndQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	return cmdEncoder && supportsMetal4Encoding() &&
-		cmdEncoder->useVisibilityQueryPool(_queryPool);
+		cmdEncoder->endVisibilityQueryPreparation(_queryPool);
 }
 
 bool MVKCmdEndQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {

@@ -140,7 +140,9 @@ public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
 	bool supportsMetal4Encoding() const override { return true; }
-	bool prepareMetal4Encoding(MVKMetal4CommandEncoder*) override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && cmdEncoder->endVisibilityQueryScopePreparation();
+	}
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
@@ -237,7 +239,9 @@ public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
 	bool supportsMetal4Encoding() const override { return true; }
-	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override { return cmdEncoder != nullptr; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && cmdEncoder->endVisibilityQueryScopePreparation();
+	}
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:

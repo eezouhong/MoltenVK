@@ -957,6 +957,11 @@ def main() -> int:
             "packed WAIT query results are not copied through the Metal 4 path",
         ),
         (
+            command_h + rendering_h + rendering_mm + queries_mm + queue_mm + e2e,
+            r"beginVisibilityQueryScopePreparation[\s\S]*?beginVisibilityQueryPreparation[\s\S]*?_visibilityQueryScopePlans[\s\S]*?activateNextVisibilityQueryScope[\s\S]*?MULTI_QUERY_POOL_RENDER_SCOPES_OK",
+            "visibility query pools are not planned and selected per render scope",
+        ),
+        (
             rendering_mm + queue_mm + transfer_mm + e2e,
             r"framebufferLayerCount[\s\S]*?MTLTextureType2DArray[\s\S]*?texture\.arrayLength[\s\S]*?renderTargetArrayLength\s*=\s*framebuffer->getLayerCount\(\)[\s\S]*?CLASSIC_LAYERED_RENDER_OK",
             "classic layered render passes are not admitted and exercised through the Metal 4 path",
@@ -977,6 +982,11 @@ def main() -> int:
         rendering_mm,
         r"_supportsMetal4Encoding\s*=\s*subpass[\s\S]*?!subpass->isStencilAttachmentUsed\(\)",
         "classic render commands still reject an inert stencil attachment before pipeline eligibility can fail closed",
+    )
+    reject(
+        queue_mm,
+        r"_visibilityQueryPool\s*&&\s*_visibilityQueryPool\s*!=\s*queryPool",
+        "visibility-query preparation still rejects a second pool globally instead of planning per render scope",
     )
     reject(
         pipeline_mm,
@@ -1050,6 +1060,7 @@ def main() -> int:
         "RENDER_OK",
         "QUERY_RESET_OK",
         "QUERY_OCCLUSION_OK",
+        "MULTI_QUERY_POOL_RENDER_SCOPES_OK",
         "COMPUTE_REBIND_AFTER_RENDER_OK",
         "QUERY_OUTSIDE_RENDER_SCOPE_OK",
         "QUERY_CLEAR_ATTACHMENTS_OK",
@@ -1079,13 +1090,16 @@ def main() -> int:
         "buffer_updates",
     ):
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
-    require(runner, r"fallbacks=1", "controlled Metal 4 E2E does not require the active-query clear fallback")
+    require(
+        runner,
+        r"Metal 4 command backend summary: .*fallbacks=1, failures=0",
+        "controlled Metal 4 E2E does not strictly limit the final summary to the active-query clear fallback",
+    )
     require(
         runner,
         r"MVKCmdClearSingleAttachment1:clear_attachments_active_query",
         "controlled Metal 4 E2E does not constrain the fallback to active-query attachment clears",
     )
-    require(runner, r"failures=0", "controlled Metal 4 E2E permits unrecoverable failures")
     require(runner, r"unsupported_commands=none", "controlled Metal 4 E2E permits unsupported commands")
 
     print("PASS: usable Metal 4 Phase 1C compute/transfer/render backend source contract")

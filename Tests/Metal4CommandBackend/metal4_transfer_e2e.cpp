@@ -3609,6 +3609,49 @@ int main() {
         }
         std::cout << "QUERY_OCCLUSION_OK" << std::endl;
 
+        // Real games can record multiple render scopes backed by different
+        // occlusion query pools into one Vulkan command buffer. Metal 4 must
+        // select the visibility buffer per render scope instead of rejecting
+        // the entire command buffer after seeing the second pool.
+        VkQueryPool secondQueryPool = VK_NULL_HANDLE;
+        queryPoolInfo.queryCount = 1;
+        check(vkCreateQueryPool(device, &queryPoolInfo, nullptr, &secondQueryPool),
+              "vkCreateQueryPool(second occlusion)");
+        Buffer multiPoolFirstResult = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        Buffer multiPoolSecondResult = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        VkCommandBuffer multiPoolQueries = beginCommandBuffer(device, commandPool);
+        vkCmdResetQueryPool(multiPoolQueries, queryPool, 0, 1);
+        vkCmdResetQueryPool(multiPoolQueries, secondQueryPool, 0, 1);
+        vkCmdBeginRendering(multiPoolQueries, &renderingInfo);
+        vkCmdBindPipeline(multiPoolQueries, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBeginQuery(multiPoolQueries, queryPool, 0, 0);
+        vkCmdDraw(multiPoolQueries, 3, 1, 0, 0);
+        vkCmdEndQuery(multiPoolQueries, queryPool, 0);
+        vkCmdEndRendering(multiPoolQueries);
+        vkCmdBeginRendering(multiPoolQueries, &renderingInfo);
+        vkCmdBindPipeline(multiPoolQueries, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBeginQuery(multiPoolQueries, secondQueryPool, 0, 0);
+        vkCmdDraw(multiPoolQueries, 3, 1, 0, 0);
+        vkCmdEndQuery(multiPoolQueries, secondQueryPool, 0);
+        vkCmdEndRendering(multiPoolQueries);
+        vkCmdCopyQueryPoolResults(multiPoolQueries, queryPool, 0, 1,
+                                  multiPoolFirstResult.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        vkCmdCopyQueryPoolResults(multiPoolQueries, secondQueryPool, 0, 1,
+                                  multiPoolSecondResult.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        endCommandBuffer(multiPoolQueries);
+        VkSubmitInfo multiPoolSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        multiPoolSubmit.commandBufferCount = 1;
+        multiPoolSubmit.pCommandBuffers = &multiPoolQueries;
+        VkFence multiPoolFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &multiPoolSubmit, multiPoolFence),
+              "vkQueueSubmit(multiple query pools)");
+        waitFence(device, multiPoolFence);
+        validateNonZeroUint64(device, multiPoolFirstResult, "first visibility pool result");
+        validateNonZeroUint64(device, multiPoolSecondResult, "second visibility pool result");
+        std::cout << "MULTI_QUERY_POOL_RENDER_SCOPES_OK" << std::endl;
+
         // Ryujinx records the logical query around a render scope. MoltenVK
         // must defer the Metal visibility mode until the render encoder exists.
         Buffer outsideQueryCopy = createBuffer(physicalDevice, device, sizeof(uint64_t));
@@ -3773,10 +3816,14 @@ int main() {
         vkDestroyFence(device, updateFence, nullptr);
         updated.destroy();
         vkDestroyFence(device, queryFence, nullptr);
+        vkDestroyFence(device, multiPoolFence, nullptr);
         vkDestroyFence(device, outsideQueryFence, nullptr);
         vkDestroyFence(device, queryResetFence, nullptr);
+        vkDestroyQueryPool(device, secondQueryPool, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         queryCopyResult.destroy();
+        multiPoolFirstResult.destroy();
+        multiPoolSecondResult.destroy();
         outsideQueryCopy.destroy();
         vkDestroyFence(device, renderFence, nullptr);
         vkDestroyFence(device, discardFence, nullptr);

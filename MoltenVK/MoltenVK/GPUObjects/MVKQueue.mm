@@ -1131,6 +1131,7 @@ public:
 		_currentRenderHeight = binding.height;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
 		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
@@ -1193,6 +1194,7 @@ public:
 		_currentRenderHeight = extent.height;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
 		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
@@ -1207,7 +1209,28 @@ public:
 		if (_graphicsPipelines.find(pipeline) == _graphicsPipelines.end()) { return false; }
 		_boundGraphicsPipeline = pipeline;
 		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
 		return !_renderEncoder || applyGraphicsPipeline();
+	}
+
+	bool setViewports(uint32_t firstViewport,
+					  uint32_t viewportCount,
+					  const VkViewport* viewports) override {
+		if (firstViewport != 0 || viewportCount != 1 || !viewports) { return false; }
+		_dynamicViewport = viewports[0];
+		_hasDynamicViewport = true;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		return true;
+	}
+
+	bool setScissors(uint32_t firstScissor,
+					 uint32_t scissorCount,
+					 const VkRect2D* scissors) override {
+		if (firstScissor != 0 || scissorCount != 1 || !scissors) { return false; }
+		_dynamicScissor = scissors[0];
+		_hasDynamicScissor = true;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		return true;
 	}
 
 	bool bindVertexBuffers(uint32_t firstBinding,
@@ -1272,6 +1295,10 @@ public:
 			!vertexCount || !instanceCount) {
 			return false;
 		}
+		if (!_graphicsViewportScissorAppliedForEncoder &&
+			!applyViewportScissorState()) {
+			return false;
+		}
 		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
@@ -1302,6 +1329,7 @@ public:
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
 	}
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
@@ -1383,6 +1411,7 @@ private:
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
 	}
 
 	bool ensureArgumentTable() {
@@ -1419,22 +1448,42 @@ private:
 			return false;
 		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
-		const VkViewport& viewport = _boundGraphicsPipeline->getViewports()[0];
-		const VkRect2D& scissor = _boundGraphicsPipeline->getScissors()[0];
-		if (stateData.numViewports != 1 || stateData.numScissors != 1 ||
-			scissor.offset.x < 0 || scissor.offset.y < 0 ||
-			(uint64_t)scissor.offset.x + scissor.extent.width > _currentRenderWidth ||
-			(uint64_t)scissor.offset.y + scissor.extent.height > _currentRenderHeight) {
-			return false;
-		}
 		[_renderEncoder setRenderPipelineState:it->second.pipelineState];
 		[_renderEncoder setDepthStencilState:it->second.depthStencilState];
-		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(viewport)];
-		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(scissor)];
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
 		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
 		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
 		_graphicsPipelineBoundForEncoder = true;
+		return true;
+	}
+
+	bool applyViewportScissorState() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		const VkViewport* viewport = nullptr;
+		const VkRect2D* scissor = nullptr;
+		if (_boundGraphicsPipeline->usesMetal4DynamicViewport()) {
+			if (!_hasDynamicViewport) { return false; }
+			viewport = &_dynamicViewport;
+		} else {
+			if (stateData.numViewports != 1) { return false; }
+			viewport = _boundGraphicsPipeline->getViewports();
+		}
+		if (_boundGraphicsPipeline->usesMetal4DynamicScissor()) {
+			if (!_hasDynamicScissor) { return false; }
+			scissor = &_dynamicScissor;
+		} else {
+			if (stateData.numScissors != 1) { return false; }
+			scissor = _boundGraphicsPipeline->getScissors();
+		}
+		if (!viewport || !scissor || scissor->offset.x < 0 || scissor->offset.y < 0 ||
+			(uint64_t)scissor->offset.x + scissor->extent.width > _currentRenderWidth ||
+			(uint64_t)scissor->offset.y + scissor->extent.height > _currentRenderHeight) {
+			return false;
+		}
+		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(*viewport)];
+		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(*scissor)];
+		_graphicsViewportScissorAppliedForEncoder = true;
 		return true;
 	}
 
@@ -1521,8 +1570,13 @@ private:
 	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
+	VkViewport _dynamicViewport = {};
+	VkRect2D _dynamicScissor = {};
 	bool _graphicsPipelineBoundForEncoder = false;
 	bool _graphicsResourcesBoundForEncoder = false;
+	bool _graphicsViewportScissorAppliedForEncoder = false;
+	bool _hasDynamicViewport = false;
+	bool _hasDynamicScissor = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
 };

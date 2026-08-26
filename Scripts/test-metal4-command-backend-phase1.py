@@ -51,6 +51,12 @@ def main() -> int:
     draw_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm")
     rendering_h = read("MoltenVK/MoltenVK/Commands/MVKCmdRendering.h")
     rendering_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm")
+    viewport_command = function_body(
+        rendering_h, "class MVKCmdSetViewport", "#pragma mark MVKCmdSetScissor"
+    )
+    scissor_command = function_body(
+        rendering_h, "class MVKCmdSetScissor", "#pragma mark MVKCmdSetDepthBias"
+    )
     pipeline_cmd_h = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h")
     pipeline_cmd_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm")
     queries_h = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.h")
@@ -362,6 +368,31 @@ def main() -> int:
         "static Vulkan depth state is not bound to the Metal 4 render encoder",
     )
     require(
+        viewport_command,
+        r"supportsMetal4Encoding[\s\S]*?encodeMetal4",
+        "dynamic viewport commands are not materialized on Metal 4",
+    )
+    require(
+        rendering_mm,
+        r"MVKCmdSetViewport<N>::encodeMetal4[\s\S]*?setViewports",
+        "dynamic viewport commands do not reach the Metal 4 encoder",
+    )
+    require(
+        scissor_command,
+        r"supportsMetal4Encoding[\s\S]*?encodeMetal4",
+        "dynamic scissor commands are not materialized on Metal 4",
+    )
+    require(
+        rendering_mm,
+        r"MVKCmdSetScissor<N>::encodeMetal4[\s\S]*?setScissors",
+        "dynamic scissor commands do not reach the Metal 4 encoder",
+    )
+    require(
+        command_h + queue_mm,
+        r"setViewports[\s\S]*?setScissors[\s\S]*?setViewport:[\s\S]*?setScissorRect:",
+        "the Metal 4 encoder boundary does not apply dynamic viewport and scissor state",
+    )
+    require(
         pipeline_cmd_h + pipeline_cmd_mm,
         r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4RenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
         "eligible graphics-pipeline binding is not materialized",
@@ -378,8 +409,8 @@ def main() -> int:
     )
     require(
         pipeline_h + pipeline_mm,
-        r"hasSupportedVertexInput[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)[\s\S]*?removing\(MVKRenderStateFlag::VertexStride\)",
-        "vertex-input eligibility does not isolate dynamic stride from unsupported translations",
+        r"hasSupportedVertexInput[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)[\s\S]*?metal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors",
+        "render eligibility does not isolate supported Metal 4 dynamic state",
     )
     require(
         draw_h + draw_mm,

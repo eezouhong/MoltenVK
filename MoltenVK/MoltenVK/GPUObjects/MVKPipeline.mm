@@ -3153,8 +3153,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasSupportedDepthState = hasSupportedDepthFormat &&
 		(!needsDepthAttachment ||
 		 pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED);
+	static constexpr MVKRenderStateFlags metal4SupportedDynamicState {
+		MVKRenderStateFlag::VertexStride,
+		MVKRenderStateFlag::Viewports,
+		MVKRenderStateFlag::Scissors,
+	};
 	bool hasUnsupportedDynamicState =
-		!_dynamicStateFlags.removing(MVKRenderStateFlag::VertexStride).empty();
+		!_dynamicStateFlags.removingAll(metal4SupportedDynamicState).empty();
+	bool hasDynamicViewport =
+		_dynamicStateFlags.has(MVKRenderStateFlag::Viewports);
+	bool hasDynamicScissor =
+		_dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
 	bool hasStrictFixedFunction =
 		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
 		!pIA->primitiveRestartEnable &&
@@ -3164,9 +3173,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		pMS && pMS->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT &&
 		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
 		pVP && pVP->viewportCount == 1 && pVP->scissorCount == 1 &&
-		pVP->pViewports && pVP->pScissors &&
+		(hasDynamicViewport || pVP->pViewports) &&
+		(hasDynamicScissor || pVP->pScissors) &&
 		!hasUnsupportedDynamicState &&
-		_staticStateData.numViewports == 1 && _staticStateData.numScissors == 1 &&
+		(hasDynamicViewport || _staticStateData.numViewports == 1) &&
+		(hasDynamicScissor || _staticStateData.numScissors == 1) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&

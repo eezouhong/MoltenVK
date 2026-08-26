@@ -291,6 +291,13 @@ public:
 						const VkViewport* pViewports);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override {
+		return _firstViewport == 0 && _viewports.size() == 1;
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && supportsMetal4Encoding();
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -321,6 +328,13 @@ public:
 						const VkRect2D* pScissors);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override {
+		return _firstScissor == 0 && _scissors.size() == 1;
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && supportsMetal4Encoding();
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

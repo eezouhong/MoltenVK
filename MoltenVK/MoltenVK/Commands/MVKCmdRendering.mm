@@ -436,6 +436,13 @@ void MVKCmdSetViewport<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		state._viewports[i] = _viewports[i - _firstViewport];
 }
 
+template <size_t N>
+bool MVKCmdSetViewport<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->setViewports(
+			_firstViewport, static_cast<uint32_t>(_viewports.size()), _viewports.data());
+}
+
 template class MVKCmdSetViewport<1>;
 template class MVKCmdSetViewport<kMVKMaxViewportScissorCount>;
 
@@ -465,6 +472,13 @@ void MVKCmdSetScissor<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	state._renderState.numScissors = std::max(static_cast<uint8_t>(end), cmdEncoder->getVkGraphics()._renderState.numScissors);
 	for (uint32_t i = _firstScissor; i < end; i++)
 		state._scissors[i] = _scissors[i - _firstScissor];
+}
+
+template <size_t N>
+bool MVKCmdSetScissor<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->setScissors(
+			_firstScissor, static_cast<uint32_t>(_scissors.size()), _scissors.data());
 }
 
 template class MVKCmdSetScissor<1>;

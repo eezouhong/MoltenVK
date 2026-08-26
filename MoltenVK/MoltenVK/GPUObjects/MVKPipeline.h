@@ -418,6 +418,12 @@ public:
 	bool usesMetal4DynamicVertexStride() const {
 		return _dynamicStateFlags.has(MVKRenderStateFlag::VertexStride);
 	}
+	bool usesMetal4DynamicViewport() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::Viewports);
+	}
+	bool usesMetal4DynamicScissor() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
+	}
 
 	/** Returns whether this pipeline needs the shared MTL4 argument table. */
 	bool requiresMetal4ArgumentTable() const {

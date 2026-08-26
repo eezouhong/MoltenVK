@@ -139,6 +139,12 @@ public:
 								 size_t attachmentCount) = 0;
 	virtual bool endRendering() = 0;
 	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+	virtual bool setViewports(uint32_t firstViewport,
+						 uint32_t viewportCount,
+						 const VkViewport* viewports) = 0;
+	virtual bool setScissors(uint32_t firstScissor,
+						uint32_t scissorCount,
+						const VkRect2D* scissors) = 0;
 	virtual bool bindVertexBuffers(uint32_t firstBinding,
 							   uint32_t bindingCount,
 							   const MVKVertexMTLBufferBinding* bindings) = 0;

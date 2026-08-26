@@ -345,6 +345,49 @@ void validateSolidColor(VkDevice device,
     vkUnmapMemory(device, buffer.memory);
 }
 
+void validateLeftHalfColor(VkDevice device,
+                           Buffer& buffer,
+                           uint32_t width,
+                           uint32_t height,
+                           std::array<uint8_t, 4> color,
+                           uint8_t tolerance = 1) {
+    void* mapped = nullptr;
+    check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
+          "vkMapMemory(validate dynamic viewport/scissor)");
+    if (!buffer.coherent) {
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        range.memory = buffer.memory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check(vkInvalidateMappedMemoryRanges(device, 1, &range),
+              "vkInvalidateMappedMemoryRanges(dynamic viewport/scissor)");
+    }
+    const auto* bytes = static_cast<const uint8_t*>(mapped);
+    const std::array<uint8_t, 4> clear{{0, 0, 0, 255}};
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            const auto& expected = x < width / 2 ? color : clear;
+            const size_t pixelOffset = (static_cast<size_t>(y) * width + x) * 4;
+            for (uint32_t channel = 0; channel < 4; ++channel) {
+                const int delta = static_cast<int>(bytes[pixelOffset + channel]) -
+                                  expected[channel];
+                if (delta < -static_cast<int>(tolerance) ||
+                    delta > static_cast<int>(tolerance)) {
+                    const uint8_t actual = bytes[pixelOffset + channel];
+                    vkUnmapMemory(device, buffer.memory);
+                    fail("Dynamic viewport/scissor mismatch at pixel (" +
+                         std::to_string(x) + ", " + std::to_string(y) +
+                         ") channel " + std::to_string(channel) +
+                         ": expected near " + std::to_string(expected[channel]) +
+                         ", got " + std::to_string(actual));
+                }
+            }
+        }
+    }
+    vkUnmapMemory(device, buffer.memory);
+}
+
 void imageBarrier(VkCommandBuffer commandBuffer,
                   VkImage image,
                   VkImageLayout oldLayout,
@@ -1338,6 +1381,107 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "DYNAMIC_VERTEX_RENDER_OK" << std::endl;
 
+        // The XC3 trace declares viewport and scissor dynamic on most otherwise
+        // eligible graphics pipelines. Prove both commands independently: a
+        // half-width viewport with a full scissor, then a full viewport with a
+        // half-width scissor. Both must paint exactly the left half.
+        std::array<VkDynamicState, 2> dynamicViewportScissorStates{{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+        }};
+        VkPipelineDynamicStateCreateInfo dynamicViewportScissorState =
+            makeVkStruct<VkPipelineDynamicStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+        dynamicViewportScissorState.dynamicStateCount =
+            static_cast<uint32_t>(dynamicViewportScissorStates.size());
+        dynamicViewportScissorState.pDynamicStates =
+            dynamicViewportScissorStates.data();
+        vertexInput.vertexBindingDescriptionCount = 0;
+        vertexInput.pVertexBindingDescriptions = nullptr;
+        vertexInput.vertexAttributeDescriptionCount = 0;
+        vertexInput.pVertexAttributeDescriptions = nullptr;
+        renderStages[0].module = vertexModule;
+        viewportState.pViewports = nullptr;
+        viewportState.pScissors = nullptr;
+        graphicsInfo.pDynamicState = &dynamicViewportScissorState;
+        VkPipeline dynamicViewportScissorPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &dynamicViewportScissorPipeline),
+              "vkCreateGraphicsPipelines(dynamic viewport/scissor)");
+
+        auto runDynamicViewportScissor = [&](const VkViewport& dynamicViewport,
+                                             const VkRect2D& dynamicScissor,
+                                             const char* operation) {
+            VkCommandBuffer prepare = beginCommandBuffer(device, commandPool);
+            imageBarrier(prepare, renderTarget.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            endCommandBuffer(prepare);
+
+            VkCommandBuffer render = beginCommandBuffer(device, commandPool);
+            vkCmdBeginRendering(render, &renderingInfo);
+            vkCmdBindPipeline(render, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              dynamicViewportScissorPipeline);
+            vkCmdSetViewport(render, 0, 1, &dynamicViewport);
+            vkCmdSetScissor(render, 0, 1, &dynamicScissor);
+            vkCmdDraw(render, 3, 1, 0, 0);
+            vkCmdEndRendering(render);
+            endCommandBuffer(render);
+
+            VkCommandBuffer finish = beginCommandBuffer(device, commandPool);
+            imageBarrier(finish, renderTarget.image,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            endCommandBuffer(finish);
+            VkCommandBuffer read = beginCommandBuffer(device, commandPool);
+            vkCmdCopyImageToBuffer(read, renderTarget.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   renderReadback.buffer, 1, &imageRegion);
+            endCommandBuffer(read);
+
+            std::array<VkSubmitInfo, 4> submits{};
+            for (auto& submit : submits) {
+                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            }
+            submits[0].commandBufferCount = 1;
+            submits[0].pCommandBuffers = &prepare;
+            submits[1].commandBufferCount = 1;
+            submits[1].pCommandBuffers = &render;
+            submits[2].commandBufferCount = 1;
+            submits[2].pCommandBuffers = &finish;
+            submits[3].commandBufferCount = 1;
+            submits[3].pCommandBuffers = &read;
+            VkFence fence = createFence(device);
+            check(vkQueueSubmit(queue, static_cast<uint32_t>(submits.size()),
+                                submits.data(), fence), operation);
+            waitFence(device, fence);
+            validateLeftHalfColor(device, renderReadback, kImageWidth, kImageHeight,
+                                  {64, 128, 191, 255});
+            vkDestroyFence(device, fence, nullptr);
+        };
+
+        VkViewport halfViewport = viewport;
+        halfViewport.width = static_cast<float>(kImageWidth / 2);
+        runDynamicViewportScissor(halfViewport, scissor,
+                                  "vkQueueSubmit(dynamic viewport)");
+        VkRect2D halfScissor = scissor;
+        halfScissor.extent.width = kImageWidth / 2;
+        runDynamicViewportScissor(viewport, halfScissor,
+                                  "vkQueueSubmit(dynamic scissor)");
+        std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
+
+        viewportState.pViewports = &viewport;
+        viewportState.pScissors = &scissor;
+        graphicsInfo.pDynamicState = nullptr;
+
         // A depth attachment plus a static NEVER comparison must execute on
         // MTL4 without painting the color target. Leaving the MTL4 depth state
         // unbound would draw the fragment and make this readback fail.
@@ -1634,6 +1778,7 @@ int main() {
         vkDestroyFence(device, depthFence, nullptr);
         vkDestroyPipeline(device, depthPipeline, nullptr);
         depthTarget.destroy();
+        vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);
         vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);

@@ -3120,9 +3120,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (!hasSupportedVertexInput) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
+	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
+			   pRendInfo->colorAttachmentCount != 1) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
+	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
+			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE) {
 		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:attachment_render_pass";
+			"MVKCmdBindGraphicsPipeline:attachment_render_pass_simple";
 	} else if (!pRendInfo) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_rendering_info";

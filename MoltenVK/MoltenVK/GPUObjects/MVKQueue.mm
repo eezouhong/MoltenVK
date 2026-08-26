@@ -2420,9 +2420,10 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			(fallback.totalCount & (fallback.totalCount - 1)) == 0;
 		bool isFirstUnsupportedCommand = fallback.unsupportedCommandCount == 1;
 		if (fallback.reasonCount == 1 || isPowerOfTwo || isFirstUnsupportedCommand) {
+			string unsupportedCommands = state->unsupportedCommandSummary();
 			_queue->reportMessage(
 				MVK_CONFIG_LOG_LEVEL_INFO,
-				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu, latest_unsupported_command=%s, latest_unsupported_command_count=%llu.",
+				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu, latest_unsupported_command=%s, latest_unsupported_command_count=%llu, unsupported_commands=%s.",
 				(unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)state->realSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)fallback.totalCount,
@@ -2430,7 +2431,8 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 				mvkMetal4FallbackReasonName(reason),
 				(unsigned long long)fallback.reasonCount,
 				fallback.unsupportedCommand,
-				(unsigned long long)fallback.unsupportedCommandCount);
+				(unsigned long long)fallback.unsupportedCommandCount,
+				unsupportedCommands.c_str());
 		}
 	};
 

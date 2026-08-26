@@ -767,6 +767,8 @@ def main() -> int:
         "dispatch_compute_encoder_unavailable",
         "dispatch_pipeline_unbound",
         "dispatch_resources_unavailable",
+        "clear_attachments_active_query",
+        "draw_indexed_pipeline_incompatible",
     ):
         require(
             queue_mm,

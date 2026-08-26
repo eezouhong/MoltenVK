@@ -1832,33 +1832,37 @@ public:
 						 int32_t vertexOffset,
 						 uint32_t firstInstance,
 						 uint32_t instanceCount) override {
-		if (!_renderEncoder || !_boundGraphicsPipeline || !_boundIndexBuffer.buffer ||
-			!indexCount || !instanceCount) {
-			return false;
-		}
+		if (!_renderEncoder) { return failMetal4Encoding("draw_indexed_render_encoder_unavailable"); }
+		if (!_boundGraphicsPipeline) { return failMetal4Encoding("draw_indexed_pipeline_unbound"); }
+		if (!_boundIndexBuffer.buffer) { return failMetal4Encoding("draw_indexed_index_buffer_unbound"); }
+		if (!indexCount || !instanceCount) { return failMetal4Encoding("draw_indexed_empty_range"); }
 		NSUInteger indexSize = _boundIndexBuffer.type == MTLIndexTypeUInt16 ? 2 : 4;
 		uint64_t firstIndexOffset = uint64_t(firstIndex) * indexSize;
 		uint64_t indexBytes = uint64_t(indexCount) * indexSize;
 		if (firstIndexOffset > _boundIndexBuffer.size ||
 			indexBytes > _boundIndexBuffer.size - firstIndexOffset ||
 			firstIndexOffset > NSUIntegerMax - _boundIndexBuffer.offset) {
-			return false;
+			return failMetal4Encoding("draw_indexed_index_range_invalid");
 		}
 		NSUInteger indexBufferOffset =
 			_boundIndexBuffer.offset + static_cast<NSUInteger>(firstIndexOffset);
 		NSUInteger indexBufferLength = static_cast<NSUInteger>(indexBytes);
-		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
+		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) {
+			return failMetal4Encoding("draw_indexed_pipeline_incompatible");
+		}
 		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
 			!_graphicsViewportScissorAppliedForEncoder &&
 			!applyViewportScissorState()) {
-			return false;
+			return failMetal4Encoding("draw_indexed_viewport_scissor_unavailable");
 		}
 		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
 			!_graphicsBlendConstantsAppliedForEncoder &&
 			!applyBlendConstantsState()) {
-			return false;
+			return failMetal4Encoding("draw_indexed_blend_constants_unavailable");
 		}
-		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
+		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) {
+			return failMetal4Encoding("draw_indexed_resources_unavailable");
+		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder drawIndexedPrimitives:(MTLPrimitiveType)stateData.primitiveType
 								 indexCount:indexCount
@@ -1963,15 +1967,15 @@ public:
 
 	bool clearAttachments(const void* commandKey) override {
 		auto item = _clearAttachments.find(commandKey);
-		if (!_renderEncoder || item == _clearAttachments.end() || _activeQueryPool) {
-			return false;
-		}
+		if (!_renderEncoder) { return failMetal4Encoding("clear_attachments_render_encoder_unavailable"); }
+		if (item == _clearAttachments.end()) { return failMetal4Encoding("clear_attachments_unprepared"); }
+		if (_activeQueryPool) { return failMetal4Encoding("clear_attachments_active_query"); }
 		ClearAttachmentsBinding& binding = item->second;
 		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
 		if (!binding.pipelineState || !binding.depthStencilState ||
 			!binding.clearColors || !binding.vertices ||
 			!_currentRenderWidth || !_currentRenderHeight) {
-			return false;
+			return failMetal4Encoding("clear_attachments_materialization_unavailable");
 		}
 
 		auto* vertices = static_cast<simd::float4*>(binding.vertices.contents);
@@ -1985,7 +1989,7 @@ public:
 				clearRect.layerCount >
 					_currentRenderLayerCount - clearRect.baseArrayLayer ||
 				right > _currentRenderWidth || bottom > _currentRenderHeight) {
-				return false;
+				return failMetal4Encoding("clear_attachments_rect_invalid");
 			}
 			float leftPos = (float)clearRect.rect.offset.x / _currentRenderWidth;
 			float rightPos = (float)right / _currentRenderWidth;

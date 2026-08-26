@@ -1985,6 +1985,10 @@ public:
 		ClearAttachmentsBinding& binding = item->second;
 		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
 		if (_activeQueryPool) { return clearAttachmentsDuringVisibility(binding); }
+		return encodeClearAttachmentsDraw(binding);
+	}
+
+	bool encodeClearAttachmentsDraw(ClearAttachmentsBinding& binding) {
 		if (!binding.pipelineState || !binding.depthStencilState ||
 			!binding.clearColors || !binding.vertices ||
 			!_currentRenderWidth || !_currentRenderHeight) {
@@ -2126,19 +2130,20 @@ private:
 
 	bool clearAttachmentsDuringVisibility(ClearAttachmentsBinding& binding) {
 		// Metal visibility state cannot be paused inside one render encoder without
-		// losing the accumulated result. Preserve the attachments, perform a full
-		// load-action clear without a visibility buffer, then resume with accumulation.
+		// losing the accumulated result. Preserve the attachments, perform the clear
+		// in an encoder without a visibility buffer, then resume with accumulation.
 		if (!_currentRenderPassDescriptor || !_commandBuffer ||
 			_currentRenderArea.offset.x != 0 || _currentRenderArea.offset.y != 0) {
 			return failMetal4Encoding("clear_attachments_query_render_pass_unavailable");
 		}
+		bool useLoadActionClear = true;
 		for (const VkClearRect& rect : binding.rects) {
 			if (rect.rect.offset.x != _currentRenderArea.offset.x ||
 				rect.rect.offset.y != _currentRenderArea.offset.y ||
 				rect.rect.extent.width != _currentRenderArea.extent.width ||
 				rect.rect.extent.height != _currentRenderArea.extent.height ||
 				rect.baseArrayLayer != 0 || rect.layerCount != _currentRenderLayerCount) {
-				return failMetal4Encoding("clear_attachments_active_query_partial_rect");
+				useLoadActionClear = false;
 			}
 		}
 
@@ -2164,7 +2169,8 @@ private:
 			[_renderEncoder setColorStoreAction:MTLStoreActionStore atIndex:colorIndex];
 			MTLRenderPassColorAttachmentDescriptor* clear =
 				clearDescriptor.colorAttachments[colorIndex];
-			clear.loadAction = binding.pipelineKey.isAttachmentEnabled(colorIndex)
+			clear.loadAction = useLoadActionClear &&
+				binding.pipelineKey.isAttachmentEnabled(colorIndex)
 				? MTLLoadActionClear : MTLLoadActionLoad;
 			clear.storeAction = MTLStoreActionStore;
 			clear.resolveTexture = nil;
@@ -2179,9 +2185,9 @@ private:
 		if (currentDepth.texture) {
 			if (currentDepth.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
 			[_renderEncoder setDepthStoreAction:MTLStoreActionStore];
-			clearDescriptor.depthAttachment.loadAction =
+			clearDescriptor.depthAttachment.loadAction = useLoadActionClear &&
 				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentDepthIndex)
-				? MTLLoadActionClear : MTLLoadActionLoad;
+					? MTLLoadActionClear : MTLLoadActionLoad;
 			clearDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
 			clearDescriptor.depthAttachment.resolveTexture = nil;
 			clearDescriptor.depthAttachment.clearDepth = binding.depthClearValue;
@@ -2195,9 +2201,9 @@ private:
 		if (currentStencil.texture) {
 			if (currentStencil.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
 			[_renderEncoder setStencilStoreAction:MTLStoreActionStore];
-			clearDescriptor.stencilAttachment.loadAction =
+			clearDescriptor.stencilAttachment.loadAction = useLoadActionClear &&
 				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentStencilIndex)
-				? MTLLoadActionClear : MTLLoadActionLoad;
+					? MTLLoadActionClear : MTLLoadActionLoad;
 			clearDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
 			clearDescriptor.stencilAttachment.resolveTexture = nil;
 			clearDescriptor.stencilAttachment.clearStencil = binding.stencilClearValue;
@@ -2224,8 +2230,15 @@ private:
 			[resumeDescriptor release];
 			return failMetal4Encoding("clear_attachments_query_clear_encoder_unavailable");
 		}
-		[clearEncoder endEncoding];
-		[clearEncoder release];
+		_renderEncoder = clearEncoder;
+		if (!useLoadActionClear && !encodeClearAttachmentsDraw(binding)) {
+			[clearDescriptor release];
+			[resumeDescriptor release];
+			return false;
+		}
+		[_renderEncoder endEncoding];
+		[_renderEncoder release];
+		_renderEncoder = nil;
 
 		_renderEncoder =
 			[[_commandBuffer renderCommandEncoderWithDescriptor:resumeDescriptor] retain];

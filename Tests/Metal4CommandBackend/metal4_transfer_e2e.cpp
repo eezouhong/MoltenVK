@@ -3603,6 +3603,11 @@ int main() {
         queryClearRect.layerCount = 1;
         vkCmdClearAttachments(outsideQuery, 1, &queryClearAttachment,
                               1, &queryClearRect);
+        VkClearRect queryPartialClearRect = queryClearRect;
+        queryPartialClearRect.rect.extent.width /= 2;
+        queryPartialClearRect.rect.extent.height /= 2;
+        vkCmdClearAttachments(outsideQuery, 1, &queryClearAttachment,
+                              1, &queryPartialClearRect);
         vkCmdDraw(outsideQuery, 3, 1, 0, 0);
         vkCmdEndRendering(outsideQuery);
         vkCmdEndQuery(outsideQuery, queryPool, 2);
@@ -3621,6 +3626,7 @@ int main() {
         validateNonZeroUint64(device, outsideQueryCopy,
                               "vkCmdCopyQueryPoolResults(query around render scope)");
         std::cout << "QUERY_CLEAR_ATTACHMENTS_OK" << std::endl;
+        std::cout << "QUERY_PARTIAL_CLEAR_ATTACHMENTS_OK" << std::endl;
         std::cout << "QUERY_OUTSIDE_RENDER_SCOPE_OK" << std::endl;
 
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The

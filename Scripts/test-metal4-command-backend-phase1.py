@@ -767,7 +767,7 @@ def main() -> int:
         "dispatch_compute_encoder_unavailable",
         "dispatch_pipeline_unbound",
         "dispatch_resources_unavailable",
-        "clear_attachments_active_query",
+        "clear_attachments_query_render_pass_unavailable",
         "draw_indexed_pipeline_incompatible",
     ):
         require(
@@ -1012,6 +1012,7 @@ def main() -> int:
         "COMPUTE_REBIND_AFTER_RENDER_OK",
         "QUERY_OUTSIDE_RENDER_SCOPE_OK",
         "QUERY_CLEAR_ATTACHMENTS_OK",
+        "QUERY_PARTIAL_CLEAR_ATTACHMENTS_OK",
         "GRAPHICS_REBIND_AFTER_RENDER_OK",
         "UPDATE_BUFFER_OK",
         "METAL4_PHASE1C_E2E_PASS",

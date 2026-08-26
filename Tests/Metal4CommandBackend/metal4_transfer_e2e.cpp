@@ -1320,11 +1320,15 @@ int main() {
         VkPipelineRasterizationStateCreateInfo discardRasterization = rasterization;
         discardRasterization.rasterizerDiscardEnable = VK_TRUE;
         graphicsInfo.pRasterizationState = &discardRasterization;
+        graphicsInfo.stageCount = 1;
+        graphicsInfo.pStages = &renderStages[0];
         VkPipeline rasterizerDiscardPipeline = VK_NULL_HANDLE;
         check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
                                         nullptr, &rasterizerDiscardPipeline),
               "vkCreateGraphicsPipelines(rasterizer discard)");
         graphicsInfo.pRasterizationState = &rasterization;
+        graphicsInfo.stageCount = static_cast<uint32_t>(renderStages.size());
+        graphicsInfo.pStages = renderStages.data();
 
         VkCommandBuffer prepareDiscard = beginCommandBuffer(device, commandPool);
         imageBarrier(prepareDiscard, renderTarget.image,

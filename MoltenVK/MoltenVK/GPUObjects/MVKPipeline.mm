@@ -3225,12 +3225,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
 		!pTessCtlSS && !pTessEvalSS;
-	bool hasDescriptorlessShaderStages = hasVertexFragmentStages &&
+	bool hasVertexOnlyDiscardStage =
+		!_isRasterizing && pCreateInfo->stageCount == 1 && pVertexSS &&
+		!pFragmentSS && !pTessCtlSS && !pTessEvalSS;
+	bool hasSupportedShaderStageShape =
+		hasVertexFragmentStages || hasVertexOnlyDiscardStage;
+	bool hasDescriptorlessShaderStages = hasSupportedShaderStageShape &&
 		stageIsDescriptorless(kMVKShaderStageVertex) &&
-		stageIsDescriptorless(kMVKShaderStageFragment);
-	bool hasArgumentTableShaderStages = hasVertexFragmentStages &&
+		(!pFragmentSS || stageIsDescriptorless(kMVKShaderStageFragment));
+	bool hasArgumentTableShaderStages = hasSupportedShaderStageShape &&
 		stageSupportsArgumentTable(kMVKShaderStageVertex) &&
-		stageSupportsArgumentTable(kMVKShaderStageFragment) &&
+		(!pFragmentSS || stageSupportsArgumentTable(kMVKShaderStageFragment)) &&
 		(_stageResources[kMVKShaderStageVertex].resources.descriptorSetData.areAnyBitsSet() ||
 		 _stageResources[kMVKShaderStageFragment].resources.descriptorSetData.areAnyBitsSet());
 	bool hasSupportedVertexInput = pVI &&
@@ -3295,7 +3300,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		_metal4DepthAttachmentFormat = pRendInfo->depthAttachmentFormat;
 		_metal4StencilAttachmentFormat = pRendInfo->stencilAttachmentFormat;
 		_metal4RenderExecutionUnsupportedReason = nullptr;
-	} else if (hasVertexFragmentStages &&
+	} else if (hasSupportedShaderStageShape &&
 			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:descriptor_resources";
@@ -3346,7 +3351,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (_isTessellationPipeline) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:tessellation";
-	} else if (!hasVertexFragmentStages) {
+	} else if (!hasSupportedShaderStageShape) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:shader_stage_shape";
 	} else {

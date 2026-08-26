@@ -1196,12 +1196,14 @@ public:
 			return false;
 		}
 		const ImageViewBinding* firstColorBinding = nullptr;
+		vector<id<MTLTexture>> renderAttachments;
 		for (uint32_t colorIndex = 0;
 			 colorIndex < renderingInfo.colorAttachmentCount;
 			 colorIndex++) {
 			auto viewIt = _imageViews.find(
 				(MVKImageView*)renderingInfo.pColorAttachments[colorIndex].imageView);
 			if (viewIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(viewIt->second.texture);
 			if (!firstColorBinding) {
 				firstColorBinding = &viewIt->second;
 			} else if (viewIt->second.width != firstColorBinding->width ||
@@ -1214,12 +1216,14 @@ public:
 			depthIt = _imageViews.find(
 				(MVKImageView*)renderingInfo.pDepthAttachment->imageView);
 			if (depthIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(depthIt->second.texture);
 		}
 		auto stencilIt = _imageViews.end();
 		if (renderingInfo.pStencilAttachment) {
 			stencilIt = _imageViews.find(
 				(MVKImageView*)renderingInfo.pStencilAttachment->imageView);
 			if (stencilIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(stencilIt->second.texture);
 		}
 		endComputeEncoding();
 
@@ -1291,6 +1295,7 @@ public:
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
+		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 
 		_currentColorAttachmentCount = renderingInfo.colorAttachmentCount;
@@ -1340,6 +1345,14 @@ public:
 			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
 		}
 		if (!hasUsedColorAttachment) { return false; }
+		vector<id<MTLTexture>> renderAttachments;
+		renderAttachments.reserve(attachmentCount);
+		for (size_t attachmentIndex = 0; attachmentIndex < attachmentCount;
+			 attachmentIndex++) {
+			auto viewIt = _imageViews.find(attachments[attachmentIndex]);
+			if (viewIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(viewIt->second.texture);
+		}
 		endComputeEncoding();
 
 		MTLRenderPassDescriptor* legacyDescriptor =
@@ -1379,6 +1392,7 @@ public:
 			retain];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
+		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 
 		VkExtent2D extent = framebuffer->getExtent2D();
@@ -1897,6 +1911,27 @@ private:
 		}
 	}
 
+	void applyRenderAttachmentBarrier(
+		id<MTL4RenderCommandEncoder> encoder,
+		const vector<id<MTLTexture>>& renderAttachments) {
+		bool overlapsPreviousPass = false;
+		for (id<MTLTexture> attachment : renderAttachments) {
+			if (find(_previousRenderAttachments.begin(),
+					 _previousRenderAttachments.end(),
+					 attachment) != _previousRenderAttachments.end()) {
+				overlapsPreviousPass = true;
+				break;
+			}
+		}
+		if (overlapsPreviousPass) {
+			[encoder barrierAfterQueueStages:MTLStageVertex | MTLStageFragment
+						 beforeStages:MTLStageVertex | MTLStageFragment
+					visibilityOptions:MTL4VisibilityOptionDevice];
+			_counters.barriers++;
+		}
+		_previousRenderAttachments = renderAttachments;
+	}
+
 	void endComputeEncoding() {
 		if (!_computeEncoder) { return; }
 		[_computeEncoder endEncoding];
@@ -2247,6 +2282,7 @@ private:
 	unordered_set<const void*> _descriptorAllocationSet;
 	vector<id<MTLAllocation>> _descriptorAllocations;
 	vector<PendingBarrier> _pendingBarriers;
+	vector<id<MTLTexture>> _previousRenderAttachments;
 	vector<MVKPipelineBarrier> _pendingImageBarriers;
 	vector<PendingQueryReset> _pendingQueryResets;
 	vector<MVKMetal4CompletedQuery> _completedQueries;

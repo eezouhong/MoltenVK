@@ -307,6 +307,11 @@ def main() -> int:
         r"PendingBarrier[\s\S]*?barrierAfterQueueStages:[\s\S]*?beforeStages:[\s\S]*?visibilityOptions:",
         "cross-encoder MTL4 consumer barrier is missing",
     )
+    require(
+        queue_mm,
+        r"applyRenderAttachmentBarrier[\s\S]*?_previousRenderAttachments[\s\S]*?barrierAfterQueueStages:MTLStageVertex\s*\|\s*MTLStageFragment[\s\S]*?MTL4VisibilityOptionDevice",
+        "reused render attachments are not made visible between MTL4 render passes",
+    )
     reject(
         queue_mm,
         r"_computeEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageVertex|_renderEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageBlit",
@@ -492,8 +497,8 @@ def main() -> int:
     )
     require(
         pipeline_h + pipeline_mm + e2e + runner,
-        r"isRasterizationDisabled[\s\S]*?rasterizationEnabled[\s\S]*?!_isTessellationPipeline[\s\S]*?RASTERIZER_DISCARD_OK",
-        "statically disabled rasterization is not executed and read back through Metal 4",
+        r"isRasterizationDisabled[\s\S]*?rasterizationEnabled[\s\S]*?hasVertexOnlyDiscardStage[\s\S]*?!_isTessellationPipeline[\s\S]*?RASTERIZER_DISCARD_OK",
+        "vertex-only statically disabled rasterization is not executed and read back through Metal 4",
     )
     require(
         pipeline_mm,

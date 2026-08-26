@@ -163,6 +163,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> drawCount = 0;
 	atomic<uint64_t> barrierCount = 0;
 	atomic<uint64_t> queryResetCount = 0;
+	atomic<uint64_t> queryCopyCount = 0;
 	atomic<uint64_t> visibilityQueryCount = 0;
 	string lastError;
 
@@ -481,6 +482,7 @@ struct MVKMetal4CommandQueueState {
 	void recordDraw(uint64_t count = 1) { drawCount.fetch_add(count, memory_order_relaxed); }
 	void recordBarrier(uint64_t count = 1) { barrierCount.fetch_add(count, memory_order_relaxed); }
 	void recordQueryReset(uint64_t count = 1) { queryResetCount.fetch_add(count, memory_order_relaxed); }
+	void recordQueryCopy(uint64_t count = 1) { queryCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordVisibilityQuery(uint64_t count = 1) { visibilityQueryCount.fetch_add(count, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
@@ -578,10 +580,12 @@ public:
 		uint64_t draws = 0;
 		uint64_t barriers = 0;
 		uint64_t queryResets = 0;
+		uint64_t queryCopies = 0;
 		uint64_t visibilityQueries = 0;
 	};
 	struct QueryPoolBinding {
 		id<MTLBuffer> resetBuffer = nil;
+		id<MTLBuffer> resultBuffer = nil;
 	};
 	struct PendingQueryReset {
 		MVKQueryPool* queryPool = nullptr;
@@ -636,7 +640,10 @@ public:
 			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
 		}
 		for (auto& item : _imageViews) { [item.second.texture release]; }
-		for (auto& item : _queryPools) { [item.second.resetBuffer release]; }
+		for (auto& item : _queryPools) {
+			[item.second.resetBuffer release];
+			[item.second.resultBuffer release];
+		}
 		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) {
@@ -714,9 +721,22 @@ public:
 		if (!queryPool) { return false; }
 		if (_queryPools.count(queryPool)) { return true; }
 		id<MTLBuffer> resetBuffer = queryPool->getMetal4ResetMTLBuffer();
-		_queryPools.emplace(queryPool, QueryPoolBinding{[resetBuffer retain]});
+		NSUInteger resultOffset = 0;
+		id<MTLBuffer> resultBuffer =
+			queryPool->getMetal4ResultMTLBuffer(0, 1, resultOffset);
+		_queryPools.emplace(queryPool, QueryPoolBinding{
+			[resetBuffer retain], [resultBuffer retain]});
 		if (resetBuffer) { _allocations.push_back((id<MTLAllocation>)resetBuffer); }
+		if (resultBuffer && resultBuffer != resetBuffer) {
+			_allocations.push_back((id<MTLAllocation>)resultBuffer);
+		}
 		return true;
+	}
+
+	bool useQueryResultPool(MVKQueryPool* queryPool) override {
+		if (!useQueryPool(queryPool)) { return false; }
+		auto binding = _queryPools.find(queryPool);
+		return binding != _queryPools.end() && binding->second.resultBuffer;
 	}
 
 	bool useVisibilityQueryPool(MVKQueryPool* queryPool) override {
@@ -1133,6 +1153,64 @@ public:
 		}
 		_pendingQueryResets.push_back(PendingQueryReset{queryPool, firstQuery, queryCount});
 		_counters.queryResets++;
+		return true;
+	}
+
+	bool copyQueryPoolResults(MVKQueryPool* queryPool,
+								 uint32_t firstQuery,
+								 uint32_t queryCount,
+								 MVKBuffer* dstBuffer,
+								 VkDeviceSize dstOffset,
+								 VkDeviceSize dstStride,
+								 VkQueryResultFlags flags) override {
+		auto queryBinding = _queryPools.find(queryPool);
+		auto dst = _buffers.find(dstBuffer);
+		if (queryBinding == _queryPools.end() || dst == _buffers.end() ||
+			!queryCount || mvkIsAnyFlagEnabled(flags,
+				VK_QUERY_RESULT_WITH_AVAILABILITY_BIT | VK_QUERY_RESULT_PARTIAL_BIT)) {
+			return false;
+		}
+
+		NSUInteger srcOffset = 0;
+		id<MTLBuffer> srcBuffer =
+			queryPool->getMetal4ResultMTLBuffer(firstQuery, queryCount, srcOffset);
+		if (!srcBuffer || srcBuffer != queryBinding->second.resultBuffer) { return false; }
+
+		for (uint32_t queryIndex = 0; queryIndex < queryCount; queryIndex++) {
+			uint32_t query = firstQuery + queryIndex;
+			bool completed = std::any_of(
+				_completedQueries.begin(), _completedQueries.end(),
+				[queryPool, query](const MVKMetal4CompletedQuery& item) {
+					return item.queryPool == queryPool && item.query == query;
+				});
+			if (!completed) { return false; }
+		}
+
+		NSUInteger elementSize = mvkIsAnyFlagEnabled(flags, VK_QUERY_RESULT_64_BIT) ?
+			sizeof(uint64_t) : sizeof(uint32_t);
+		NSUInteger dstBaseOffset = dst->second.offset + (NSUInteger)dstOffset;
+		if (dstStride < elementSize || srcOffset > srcBuffer.length ||
+			queryCount > (srcBuffer.length - srcOffset) / kMVKQuerySlotSizeInBytes ||
+			dstBaseOffset > dst->second.buffer.length ||
+			elementSize > dst->second.buffer.length ||
+			(queryCount > 1 && dstStride >
+				(std::numeric_limits<NSUInteger>::max() - dstBaseOffset) / (queryCount - 1)) ||
+			dstBaseOffset + (queryCount - 1) * (NSUInteger)dstStride >
+				dst->second.buffer.length - elementSize || !ensureComputeEncoder()) {
+			return false;
+		}
+		[_computeEncoder barrierAfterQueueStages:MTLStageFragment
+							 beforeStages:MTLStageBlit
+						visibilityOptions:MTL4VisibilityOptionDevice];
+
+		for (uint32_t query = 0; query < queryCount; query++) {
+			[_computeEncoder copyFromBuffer:srcBuffer
+							 sourceOffset:srcOffset + query * kMVKQuerySlotSizeInBytes
+								 toBuffer:dst->second.buffer
+						destinationOffset:dstBaseOffset + query * (NSUInteger)dstStride
+									 size:elementSize];
+		}
+		_counters.queryCopies++;
 		return true;
 	}
 
@@ -1877,6 +1955,7 @@ public:
 		_state->recordDraw(_counters.draws);
 		_state->recordBarrier(_counters.barriers);
 		_state->recordQueryReset(_counters.queryResets);
+		_state->recordQueryCopy(_counters.queryCopies);
 		_state->recordVisibilityQuery(_counters.visibilityQueries);
 	}
 
@@ -3086,7 +3165,7 @@ MVKQueue::~MVKQueue() {
 		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, buffer_updates=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, visibility_queries=%llu, unsupported_commands=%s.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, buffer_updates=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, query_copies=%llu, visibility_queries=%llu, unsupported_commands=%s.",
 			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
@@ -3101,6 +3180,7 @@ MVKQueue::~MVKQueue() {
 			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->queryResetCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->queryCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->visibilityQueryCount.load(memory_order_relaxed),
 			unsupportedCommandSummary.c_str());
 		_metal4CommandState->shutdown();

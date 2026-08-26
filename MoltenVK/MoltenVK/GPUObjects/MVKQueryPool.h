@@ -74,6 +74,14 @@ public:
 		return NSMakeRange(0, 0);
 	}
 
+	/** Returns directly copyable result storage for the strict Metal 4 query slice. */
+	virtual id<MTLBuffer> getMetal4ResultMTLBuffer(uint32_t firstQuery,
+												 uint32_t queryCount,
+												 NSUInteger& offset) {
+		offset = 0;
+		return nil;
+	}
+
 	/** Copies the results of the specified queries into host memory. */
 	VkResult getResults(uint32_t firstQuery,
 						uint32_t queryCount,
@@ -174,6 +182,17 @@ public:
 		NSUInteger firstOffset = getVisibilityResultOffset(firstQuery);
 		NSUInteger lastOffset = getVisibilityResultOffset(firstQuery + queryCount);
 		return NSMakeRange(firstOffset, lastOffset - firstOffset);
+	}
+	id<MTLBuffer> getMetal4ResultMTLBuffer(uint32_t firstQuery,
+										 uint32_t queryCount,
+										 NSUInteger& offset) override {
+		if (!queryCount || firstQuery > _availability.size() ||
+			queryCount > _availability.size() - firstQuery) {
+			offset = 0;
+			return nil;
+		}
+		offset = getVisibilityResultOffset(firstQuery);
+		return _visibilityResultMTLBuffer;
 	}
     void beginQueryAddedTo(uint32_t query, MVKCommandBuffer* cmdBuffer) override;
 

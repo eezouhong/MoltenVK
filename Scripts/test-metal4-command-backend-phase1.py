@@ -865,6 +865,11 @@ def main() -> int:
             "active dynamic depth bias is not retained and materialized by the Metal 4 render path",
         ),
         (
+            queries_h + queries_mm + queue_mm + query_pool_h + e2e,
+            r"MVKCmdCopyQueryPoolResults[\s\S]*?prepareMetal4Encoding[\s\S]*?copyQueryPoolResults[\s\S]*?getMetal4ResultMTLBuffer[\s\S]*?QUERY_COPY_RESULTS_OK",
+            "packed WAIT query results are not copied through the Metal 4 path",
+        ),
+        (
             rendering_mm + queue_mm + transfer_mm + e2e,
             r"framebufferLayerCount[\s\S]*?MTLTextureType2DArray[\s\S]*?texture\.arrayLength[\s\S]*?renderTargetArrayLength\s*=\s*framebuffer->getLayerCount\(\)[\s\S]*?CLASSIC_LAYERED_RENDER_OK",
             "classic layered render passes are not admitted and exercised through the Metal 4 path",

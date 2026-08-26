@@ -82,6 +82,7 @@ public:
 
 	/** Registers query-pool storage before a reset is claimed. */
 	virtual bool useQueryPool(MVKQueryPool* queryPool) = 0;
+	virtual bool useQueryResultPool(MVKQueryPool* queryPool) = 0;
 
 	/** Registers the single visibility-result buffer used by this strict slice. */
 	virtual bool useVisibilityQueryPool(MVKQueryPool* queryPool) = 0;
@@ -123,6 +124,13 @@ public:
 	virtual bool resetQueryPool(MVKQueryPool* queryPool,
 							uint32_t firstQuery,
 							uint32_t queryCount) = 0;
+	virtual bool copyQueryPoolResults(MVKQueryPool* queryPool,
+									 uint32_t firstQuery,
+									 uint32_t queryCount,
+									 MVKBuffer* dstBuffer,
+									 VkDeviceSize dstOffset,
+									 VkDeviceSize dstStride,
+									 VkQueryResultFlags flags) = 0;
 
 	virtual bool beginVisibilityQuery(MVKQueryPool* queryPool,
 								 uint32_t query,

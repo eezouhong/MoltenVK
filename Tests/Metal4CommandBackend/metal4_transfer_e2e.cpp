@@ -307,6 +307,27 @@ void validateUint32(VkDevice device, Buffer& buffer, uint32_t expected) {
     }
 }
 
+void validateNonZeroUint64(VkDevice device, Buffer& buffer, const char* operation) {
+    void* mapped = nullptr;
+    check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
+          "vkMapMemory(validate uint64)");
+    if (!buffer.coherent) {
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        range.memory = buffer.memory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check(vkInvalidateMappedMemoryRanges(device, 1, &range),
+              "vkInvalidateMappedMemoryRanges(uint64)");
+    }
+    uint64_t actual = 0;
+    std::memcpy(&actual, mapped, sizeof(actual));
+    vkUnmapMemory(device, buffer.memory);
+    if (actual == 0 || actual == 0xfefefefefefefefeULL) {
+        fail(std::string(operation) + " did not publish a query result");
+    }
+}
+
 void writeBytes(VkDevice device, Buffer& buffer, const std::vector<uint8_t>& bytes) {
     if (bytes.size() > buffer.size) { fail("writeBytes payload exceeds buffer"); }
     void* mapped = nullptr;
@@ -3131,6 +3152,9 @@ int main() {
         }
         std::cout << "QUERY_RESET_OK" << std::endl;
 
+        Buffer queryCopyResult = createBuffer(physicalDevice, device, sizeof(uint64_t));
+        writeBytes(device, queryCopyResult,
+                   std::vector<uint8_t>(sizeof(uint64_t), 0xfe));
         VkCommandBuffer queryCommand = beginCommandBuffer(device, commandPool);
         vkCmdBeginRendering(queryCommand, &renderingInfo);
         vkCmdBindPipeline(queryCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
@@ -3138,6 +3162,9 @@ int main() {
         vkCmdDraw(queryCommand, 3, 1, 0, 0);
         vkCmdEndQuery(queryCommand, queryPool, 1);
         vkCmdEndRendering(queryCommand);
+        vkCmdCopyQueryPoolResults(queryCommand, queryPool, 1, 1,
+                                  queryCopyResult.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
         endCommandBuffer(queryCommand);
         VkSubmitInfo querySubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
         querySubmit.commandBufferCount = 1;
@@ -3146,6 +3173,9 @@ int main() {
         check(vkQueueSubmit(queue, 1, &querySubmit, queryFence),
               "vkQueueSubmit(occlusion query)");
         waitFence(device, queryFence);
+        validateNonZeroUint64(device, queryCopyResult,
+                              "vkCmdCopyQueryPoolResults(occlusion)");
+        std::cout << "QUERY_COPY_RESULTS_OK" << std::endl;
         std::array<uint64_t, 2> occlusionResult{{0, 0}};
         check(vkGetQueryPoolResults(
                   device, queryPool, 1, 1, sizeof(occlusionResult), occlusionResult.data(),
@@ -3254,6 +3284,7 @@ int main() {
         vkDestroyFence(device, queryFence, nullptr);
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
+        queryCopyResult.destroy();
         vkDestroyFence(device, renderFence, nullptr);
         vkDestroyFence(device, discardFence, nullptr);
         vkDestroyPipeline(device, rasterizerDiscardPipeline, nullptr);

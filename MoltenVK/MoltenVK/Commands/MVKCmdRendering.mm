@@ -348,7 +348,7 @@ VkResult MVKCmdBeginRendering<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_renderingInfo.pStencilAttachment = &_stencilAttachment;
 	}
 
-	cmdBuff->_currentSubpassInfo.beginRendering(pRenderingInfo->viewMask);
+	cmdBuff->_currentSubpassInfo.beginRendering(&_renderingInfo);
 
 	return VK_SUCCESS;
 }

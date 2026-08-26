@@ -865,6 +865,11 @@ def main() -> int:
             "active dynamic depth bias is not retained and materialized by the Metal 4 render path",
         ),
         (
+            transfer_mm + queue_mm + e2e,
+            r"MVKCmdClearAttachments<N>::setContent[\s\S]*?!subpass\s*\|\|\s*subpass->isMultiview\(\)[\s\S]*?useClearAttachments[\s\S]*?DYNAMIC_CLEAR_ATTACHMENTS_OK",
+            "dynamic-rendering single attachment clears are not admitted and exercised on Metal 4",
+        ),
+        (
             queries_h + queries_mm + queue_mm + query_pool_h + e2e,
             r"MVKCmdCopyQueryPoolResults[\s\S]*?prepareMetal4Encoding[\s\S]*?copyQueryPoolResults[\s\S]*?getMetal4ResultMTLBuffer[\s\S]*?QUERY_COPY_RESULTS_OK",
             "packed WAIT query results are not copied through the Metal 4 path",

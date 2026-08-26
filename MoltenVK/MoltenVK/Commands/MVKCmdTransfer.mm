@@ -1453,14 +1453,76 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
     }
 
 	MVKRenderPass* renderPass = cmdBuff ? cmdBuff->_currentSubpassInfo.renderpass : nullptr;
+	const VkRenderingInfo* renderingInfo =
+		cmdBuff ? cmdBuff->_currentSubpassInfo.renderingInfo : nullptr;
 	uint32_t subpassIndex = cmdBuff ? cmdBuff->_currentSubpassInfo.subpassIndex : 0;
-	if (_commandUse != kMVKCommandUseClearAttachments || !renderPass ||
-		renderPass->getSubpassCount() != 1 || subpassIndex != 0 ||
+	if (_commandUse != kMVKCommandUseClearAttachments ||
+		(!renderPass && !renderingInfo) || subpassIndex != 0 ||
 		!rectCount || !pRects) {
 		return VK_SUCCESS;
 	}
+
+	if (renderingInfo) {
+		if (renderingInfo->flags != 0 || renderingInfo->viewMask != 0 ||
+			renderingInfo->layerCount != 1 ||
+			renderingInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount ||
+			(renderingInfo->colorAttachmentCount &&
+			 !renderingInfo->pColorAttachments)) {
+			return VK_SUCCESS;
+		}
+		for (const auto& rect : _clearRects) {
+			if (rect.baseArrayLayer != 0 || rect.layerCount != 1 ||
+				rect.rect.offset.x < 0 || rect.rect.offset.y < 0 ||
+				!rect.rect.extent.width || !rect.rect.extent.height) {
+				return VK_SUCCESS;
+			}
+		}
+
+		_metal4Info.commandKey = this;
+		_metal4Info.encodingPool = cmdBuff->getCommandPool()->getCommandEncodingPool();
+		_metal4Info.colorAttachmentCount = renderingInfo->colorAttachmentCount;
+		for (uint32_t caIdx = 0; caIdx < _metal4Info.colorAttachmentCount; caIdx++) {
+			auto* imageView = (MVKImageView*)renderingInfo->pColorAttachments[caIdx].imageView;
+			if (!imageView || imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+				return VK_SUCCESS;
+			}
+			_metal4Info.colorAttachmentFormats[caIdx] = imageView->getVkFormat();
+			if (_shouldClearAtt[caIdx]) {
+				_metal4Info.clearColors[caIdx] = true;
+				_metal4Info.colorValues[caIdx] = getClearColorValue(caIdx);
+			}
+		}
+		for (uint32_t caIdx = _metal4Info.colorAttachmentCount;
+			 caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
+			if (_shouldClearAtt[caIdx]) { return VK_SUCCESS; }
+		}
+
+		auto* depthView = renderingInfo->pDepthAttachment
+			? (MVKImageView*)renderingInfo->pDepthAttachment->imageView : nullptr;
+		auto* stencilView = renderingInfo->pStencilAttachment
+			? (MVKImageView*)renderingInfo->pStencilAttachment->imageView : nullptr;
+		_metal4Info.clearDepth =
+			_shouldClearAtt[kMVKClearAttachmentDepthIndex] && depthView;
+		_metal4Info.clearStencil =
+			_shouldClearAtt[kMVKClearAttachmentStencilIndex] && stencilView;
+		if ((_shouldClearAtt[kMVKClearAttachmentDepthIndex] && !depthView) ||
+			(_shouldClearAtt[kMVKClearAttachmentStencilIndex] && !stencilView) ||
+			(depthView && depthView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) ||
+			(stencilView && stencilView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT)) {
+			return VK_SUCCESS;
+		}
+		_metal4Info.depthFormat = depthView ? depthView->getVkFormat() : VK_FORMAT_UNDEFINED;
+		_metal4Info.stencilFormat = stencilView ? stencilView->getVkFormat() : VK_FORMAT_UNDEFINED;
+		_metal4Info.depthStencilValue = _clearDepthStencilValue;
+		_metal4Info.rects = _clearRects.data();
+		_metal4Info.rectCount = _clearRects.size();
+		_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
+		return VK_SUCCESS;
+	}
+
+	if (renderPass->getSubpassCount() != 1) { return VK_SUCCESS; }
 	MVKRenderSubpass* subpass = renderPass->getSubpass(subpassIndex);
-	if (!subpass || subpass->isDynamicRendering() || subpass->isMultiview() ||
+	if (!subpass || subpass->isMultiview() ||
 		subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
 		subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
 		return VK_SUCCESS;

@@ -77,12 +77,13 @@ private:
 /** Tracks current render subpass information. */
 typedef struct MVKCurrentSubpassInfo {
 	MVKRenderPass* renderpass;
+	const VkRenderingInfo* renderingInfo;
 	uint32_t subpassIndex;
 	uint32_t subpassViewMask;
 
 	void beginRenderpass(MVKRenderPass* rp);
 	void nextSubpass();
-	void beginRendering(uint32_t viewMask);
+	void beginRendering(const VkRenderingInfo* info);
 
 private:
 	void updateViewMask();

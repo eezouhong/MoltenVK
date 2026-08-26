@@ -2349,6 +2349,68 @@ int main() {
                                         nullptr, &classicPipeline),
               "vkCreateGraphicsPipelines(classic color)");
 
+        // Ryujinx uses vkCmdClearAttachments inside dynamic rendering for
+        // transient full-screen clears. Exercise the one-attachment/one-rect
+        // command shape seen on the XC3 route without relying on a draw pipeline.
+        VkRenderingAttachmentInfo dynamicClearColor = colorAttachment;
+        dynamicClearColor.clearValue.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingInfo dynamicClearRendering = renderingInfo;
+        dynamicClearRendering.pColorAttachments = &dynamicClearColor;
+        VkClearAttachment explicitDynamicClear{};
+        explicitDynamicClear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        explicitDynamicClear.colorAttachment = 0;
+        explicitDynamicClear.clearValue.color = {{0.0f, 1.0f, 0.0f, 1.0f}};
+        VkClearRect explicitDynamicClearRect{};
+        explicitDynamicClearRect.rect = scissor;
+        explicitDynamicClearRect.baseArrayLayer = 0;
+        explicitDynamicClearRect.layerCount = 1;
+        VkCommandBuffer prepareDynamicClear = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDynamicClear, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareDynamicClear);
+        VkCommandBuffer dynamicClear = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(dynamicClear, &dynamicClearRendering);
+        vkCmdClearAttachments(dynamicClear, 1, &explicitDynamicClear, 1,
+                              &explicitDynamicClearRect);
+        vkCmdEndRendering(dynamicClear);
+        endCommandBuffer(dynamicClear);
+        VkCommandBuffer finishDynamicClear = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDynamicClear, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDynamicClear);
+        VkCommandBuffer readDynamicClear = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDynamicClear, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDynamicClear);
+        std::array<VkSubmitInfo, 4> dynamicClearSubmits{};
+        for (auto& submit : dynamicClearSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        dynamicClearSubmits[0].commandBufferCount = 1;
+        dynamicClearSubmits[0].pCommandBuffers = &prepareDynamicClear;
+        dynamicClearSubmits[1].commandBufferCount = 1;
+        dynamicClearSubmits[1].pCommandBuffers = &dynamicClear;
+        dynamicClearSubmits[2].commandBufferCount = 1;
+        dynamicClearSubmits[2].pCommandBuffers = &finishDynamicClear;
+        dynamicClearSubmits[3].commandBufferCount = 1;
+        dynamicClearSubmits[3].pCommandBuffers = &readDynamicClear;
+        VkFence dynamicClearFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(dynamicClearSubmits.size()),
+                            dynamicClearSubmits.data(), dynamicClearFence),
+              "vkQueueSubmit(dynamic clear attachments sequence)");
+        waitFence(device, dynamicClearFence);
+        validateSolidColor(device, renderReadback, {0, 255, 0, 255});
+        std::cout << "DYNAMIC_CLEAR_ATTACHMENTS_OK" << std::endl;
+
         VkCommandBuffer prepareClassicRender = beginCommandBuffer(device, commandPool);
         imageBarrier(prepareClassicRender, renderTarget.image,
                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -3212,6 +3274,7 @@ int main() {
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
         vkDestroyFence(device, classicFence, nullptr);
+        vkDestroyFence(device, dynamicClearFence, nullptr);
         vkDestroyFence(device, classicStencilFence, nullptr);
         vkDestroyFence(device, activeStencilFence, nullptr);
         vkDestroyFence(device, dynamicStencilFence, nullptr);

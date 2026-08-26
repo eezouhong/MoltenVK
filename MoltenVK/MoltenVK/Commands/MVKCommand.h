@@ -100,6 +100,9 @@ public:
 	/** Resets descriptor and pipeline tracking at a Vulkan command-buffer boundary. */
 	virtual void resetPrepareState() = 0;
 
+	/** Records the first command that failed after a successful Metal 4 preflight. */
+	virtual void recordMetal4EncodingFailure(const char*) {}
+
 	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
 	virtual bool useDescriptorSet(VkPipelineBindPoint bindPoint,
 								 MVKDescriptorSet* descriptorSet,

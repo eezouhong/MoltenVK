@@ -832,6 +832,16 @@ public:
 		_preparedGraphicsDescriptorSets.fill(nullptr);
 	}
 
+	void recordMetal4EncodingFailure(const char* commandType) override {
+		if (!_encodingFailureCommand) {
+			_encodingFailureCommand = commandType ?: "MVKCommand";
+		}
+	}
+
+	const char* getMetal4EncodingFailureCommand() const {
+		return _encodingFailureCommand ?: "MVKCommand";
+	}
+
 	bool useDescriptorSet(VkPipelineBindPoint bindPoint,
 					  MVKDescriptorSet* descriptorSet,
 					  uint32_t setIndex) override {
@@ -2526,6 +2536,7 @@ private:
 	bool _hasDynamicDepthBias = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
+	const char* _encodingFailureCommand = nullptr;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
@@ -3578,8 +3589,11 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		claimedCommandBuffers = true;
 		encodingPhase = "encode_vulkan_commands";
 		if (!encodeMetal4CommandBuffers(&encoder)) {
+			const char* failedCommand = encoder.getMetal4EncodingFailureCommand();
 			@throw [NSException exceptionWithName:@"MVKMetal4CommandEncoding"
-									 reason:@"Metal 4 command materialization failed"
+									 reason:[NSString stringWithFormat:
+										 @"Metal 4 command materialization failed for %s",
+										 failedCommand]
 								   userInfo:nil];
 		}
 		encodingPhase = "end_encoder";

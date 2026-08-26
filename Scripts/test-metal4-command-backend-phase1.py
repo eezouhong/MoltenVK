@@ -757,6 +757,11 @@ def main() -> int:
         "fallback snapshots are not rate-limited to power-of-two totals",
     )
     require(
+        command_h + command_buffer_mm + queue_mm,
+        r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
+        "replayable materialization failures do not identify the concrete Vulkan command",
+    )
+    require(
         queue_mm,
         r"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu",
         "final command-backend summary does not include total attempts",

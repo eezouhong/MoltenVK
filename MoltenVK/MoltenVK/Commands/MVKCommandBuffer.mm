@@ -371,7 +371,10 @@ void MVKCommandBuffer::endMetal4Execution(bool previousWasExecuted, bool committ
 bool MVKCommandBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->encodeMetal4(cmdEncoder)) { return false; }
+		if (!command->encodeMetal4(cmdEncoder)) {
+			cmdEncoder->recordMetal4EncodingFailure(command->getMetal4CommandTypeName());
+			return false;
+		}
 	}
 	return true;
 }

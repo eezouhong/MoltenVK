@@ -1409,8 +1409,10 @@ int main() {
                                         nullptr, &dynamicViewportScissorPipeline),
               "vkCreateGraphicsPipelines(dynamic viewport/scissor)");
 
-        auto runDynamicViewportScissor = [&](const VkViewport& dynamicViewport,
+        auto runDynamicViewportScissor = [&](VkPipeline pipeline,
+                                             const VkViewport& dynamicViewport,
                                              const VkRect2D& dynamicScissor,
+                                             bool setInactiveStencilState,
                                              const char* operation) {
             VkCommandBuffer prepare = beginCommandBuffer(device, commandPool);
             imageBarrier(prepare, renderTarget.image,
@@ -1424,10 +1426,17 @@ int main() {
 
             VkCommandBuffer render = beginCommandBuffer(device, commandPool);
             vkCmdBeginRendering(render, &renderingInfo);
-            vkCmdBindPipeline(render, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              dynamicViewportScissorPipeline);
+            vkCmdBindPipeline(render, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdSetViewport(render, 0, 1, &dynamicViewport);
             vkCmdSetScissor(render, 0, 1, &dynamicScissor);
+            if (setInactiveStencilState) {
+                vkCmdSetStencilCompareMask(render, VK_STENCIL_FACE_FRONT_BIT, 0x12);
+                vkCmdSetStencilWriteMask(render, VK_STENCIL_FACE_FRONT_BIT, 0x34);
+                vkCmdSetStencilReference(render, VK_STENCIL_FACE_FRONT_BIT, 0x56);
+                vkCmdSetStencilCompareMask(render, VK_STENCIL_FACE_BACK_BIT, 0x78);
+                vkCmdSetStencilWriteMask(render, VK_STENCIL_FACE_BACK_BIT, 0x9a);
+                vkCmdSetStencilReference(render, VK_STENCIL_FACE_BACK_BIT, 0xbc);
+            }
             vkCmdDraw(render, 3, 1, 0, 0);
             vkCmdEndRendering(render);
             endCommandBuffer(render);
@@ -1470,13 +1479,35 @@ int main() {
 
         VkViewport halfViewport = viewport;
         halfViewport.width = static_cast<float>(kImageWidth / 2);
-        runDynamicViewportScissor(halfViewport, scissor,
+        runDynamicViewportScissor(dynamicViewportScissorPipeline,
+                                  halfViewport, scissor, false,
                                   "vkQueueSubmit(dynamic viewport)");
         VkRect2D halfScissor = scissor;
         halfScissor.extent.width = kImageWidth / 2;
-        runDynamicViewportScissor(viewport, halfScissor,
+        runDynamicViewportScissor(dynamicViewportScissorPipeline,
+                                  viewport, halfScissor, false,
                                   "vkQueueSubmit(dynamic scissor)");
         std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
+
+        std::array<VkDynamicState, 5> inactiveStencilDynamicStates{{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+            VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+        }};
+        dynamicViewportScissorState.dynamicStateCount =
+            static_cast<uint32_t>(inactiveStencilDynamicStates.size());
+        dynamicViewportScissorState.pDynamicStates =
+            inactiveStencilDynamicStates.data();
+        VkPipeline inactiveStencilDynamicPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &inactiveStencilDynamicPipeline),
+              "vkCreateGraphicsPipelines(inactive dynamic stencil)");
+        runDynamicViewportScissor(inactiveStencilDynamicPipeline,
+                                  viewport, halfScissor, true,
+                                  "vkQueueSubmit(inactive dynamic stencil)");
+        std::cout << "INACTIVE_STENCIL_DYNAMIC_OK" << std::endl;
 
         viewportState.pViewports = &viewport;
         viewportState.pScissors = &scissor;
@@ -1779,6 +1810,7 @@ int main() {
         vkDestroyPipeline(device, depthPipeline, nullptr);
         depthTarget.destroy();
         vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);
+        vkDestroyPipeline(device, inactiveStencilDynamicPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);
         vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);

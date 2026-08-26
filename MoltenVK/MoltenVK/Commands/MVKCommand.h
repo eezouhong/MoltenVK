@@ -145,6 +145,12 @@ public:
 	virtual bool setScissors(uint32_t firstScissor,
 						uint32_t scissorCount,
 						const VkRect2D* scissors) = 0;
+	virtual bool setStencilCompareMask(VkStencilFaceFlags faceMask,
+								   uint32_t stencilCompareMask) = 0;
+	virtual bool setStencilWriteMask(VkStencilFaceFlags faceMask,
+								 uint32_t stencilWriteMask) = 0;
+	virtual bool setStencilReference(VkStencilFaceFlags faceMask,
+								 uint32_t stencilReference) = 0;
 	virtual bool bindVertexBuffers(uint32_t firstBinding,
 							   uint32_t bindingCount,
 							   const MVKVertexMTLBufferBinding* bindings) = 0;

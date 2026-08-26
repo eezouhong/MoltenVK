@@ -515,6 +515,11 @@ public:
 						uint32_t stencilCompareMask);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -535,6 +540,11 @@ public:
 						uint32_t stencilWriteMask);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -555,6 +565,11 @@ public:
 						uint32_t stencilReference);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

@@ -393,6 +393,16 @@ def main() -> int:
         "the Metal 4 encoder boundary does not apply dynamic viewport and scissor state",
     )
     require(
+        rendering_h + rendering_mm,
+        r"MVKCmdSetStencilCompareMask[\s\S]*?encodeMetal4[\s\S]*?MVKCmdSetStencilWriteMask[\s\S]*?encodeMetal4[\s\S]*?MVKCmdSetStencilReference[\s\S]*?encodeMetal4",
+        "inert dynamic stencil commands are not materialized on Metal 4",
+    )
+    require(
+        pipeline_mm,
+        r"StencilTestEnable[\s\S]*?stencilTestEnabled[\s\S]*?removeAll\(\{[\s\S]*?StencilCompareMask[\s\S]*?StencilWriteMask[\s\S]*?StencilReference",
+        "disabled stencil pipelines retain semantically inert dynamic stencil masks",
+    )
+    require(
         pipeline_cmd_h + pipeline_cmd_mm,
         r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4RenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
         "eligible graphics-pipeline binding is not materialized",

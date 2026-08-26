@@ -1233,6 +1233,23 @@ public:
 		return true;
 	}
 
+	bool setStencilCompareMask(VkStencilFaceFlags faceMask,
+							   uint32_t) override {
+		// Metal 4 eligibility currently admits only pipelines with stencil testing
+		// disabled, so Vulkan defines this value as inert for every encoded draw.
+		return isValidStencilFaceMask(faceMask);
+	}
+
+	bool setStencilWriteMask(VkStencilFaceFlags faceMask,
+							 uint32_t) override {
+		return isValidStencilFaceMask(faceMask);
+	}
+
+	bool setStencilReference(VkStencilFaceFlags faceMask,
+							 uint32_t) override {
+		return isValidStencilFaceMask(faceMask);
+	}
+
 	bool bindVertexBuffers(uint32_t firstBinding,
 						   uint32_t bindingCount,
 						   const MVKVertexMTLBufferBinding* bindings) override {
@@ -1412,6 +1429,11 @@ private:
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+	}
+
+	static bool isValidStencilFaceMask(VkStencilFaceFlags faceMask) {
+		constexpr VkStencilFaceFlags valid = VK_STENCIL_FACE_FRONT_AND_BACK;
+		return (faceMask & valid) != 0 && (faceMask & ~valid) == 0;
 	}
 
 	bool ensureArgumentTable() {

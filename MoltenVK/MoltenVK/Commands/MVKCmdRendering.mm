@@ -616,6 +616,10 @@ void MVKCmdSetStencilCompareMask::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.depthStencil.backFaceStencilData.readMask = _stencilCompareMask;
 }
 
+bool MVKCmdSetStencilCompareMask::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilCompareMask(_faceMask, _stencilCompareMask);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdSetStencilWriteMask
@@ -637,6 +641,10 @@ void MVKCmdSetStencilWriteMask::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.depthStencil.backFaceStencilData.writeMask = _stencilWriteMask;
 }
 
+bool MVKCmdSetStencilWriteMask::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilWriteMask(_faceMask, _stencilWriteMask);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdSetStencilReference
@@ -656,6 +664,10 @@ void MVKCmdSetStencilReference::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.stencilReference.frontFaceValue = _stencilReference;
 	if (_faceMask & VK_STENCIL_FACE_BACK_BIT)
 		state._renderState.stencilReference.backFaceValue = _stencilReference;
+}
+
+bool MVKCmdSetStencilReference::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilReference(_faceMask, _stencilReference);
 }
 
 

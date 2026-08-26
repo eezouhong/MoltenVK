@@ -3072,8 +3072,14 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	// Remove unneeded state
 	MVKRenderStateFlags needed = MVKRenderStateFlags::all();
-	if (!_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) && !_staticStateData.depthStencil.stencilTestEnabled)
-		needed.remove(MVKRenderStateFlag::StencilReference);
+	if (!_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) &&
+		!_staticStateData.depthStencil.stencilTestEnabled) {
+		needed.removeAll({
+			MVKRenderStateFlag::StencilCompareMask,
+			MVKRenderStateFlag::StencilWriteMask,
+			MVKRenderStateFlag::StencilReference,
+		});
+	}
 	if (!_isRasterizingColor || !usesConstantColor(_dynamicStateFlags, pCreateInfo->pColorBlendState))
 		needed.remove(MVKRenderStateFlag::BlendConstants);
 	if (_primitiveTopologyClass == MTLPrimitiveTopologyClassPoint || _primitiveTopologyClass == MTLPrimitiveTopologyClassLine)

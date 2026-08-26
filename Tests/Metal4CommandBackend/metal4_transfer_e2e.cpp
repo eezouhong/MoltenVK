@@ -2060,6 +2060,89 @@ int main() {
         validateSolidColor(device, renderReadback, {0, 0, 0, 255});
         std::cout << "DEPTH_RENDER_OK" << std::endl;
 
+        // Ryujinx uses classic depth-only passes for shadow maps. A fragment
+        // shader may still be present even though the subpass has no color
+        // attachment; the MTL4 backend must retain the depth attachment and
+        // execute the draw instead of classifying zero colors as MRT.
+        VkAttachmentDescription depthOnlyDescription{};
+        depthOnlyDescription.format = depthTarget.format;
+        depthOnlyDescription.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthOnlyDescription.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthOnlyDescription.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthOnlyDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthOnlyDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthOnlyDescription.initialLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthOnlyDescription.finalLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference depthOnlyReference{
+            0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkSubpassDescription depthOnlySubpass{};
+        depthOnlySubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        depthOnlySubpass.pDepthStencilAttachment = &depthOnlyReference;
+        VkRenderPassCreateInfo depthOnlyRenderPassInfo =
+            makeVkStruct<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+        depthOnlyRenderPassInfo.attachmentCount = 1;
+        depthOnlyRenderPassInfo.pAttachments = &depthOnlyDescription;
+        depthOnlyRenderPassInfo.subpassCount = 1;
+        depthOnlyRenderPassInfo.pSubpasses = &depthOnlySubpass;
+        VkRenderPass depthOnlyRenderPass = VK_NULL_HANDLE;
+        check(vkCreateRenderPass(device, &depthOnlyRenderPassInfo, nullptr,
+                                 &depthOnlyRenderPass),
+              "vkCreateRenderPass(classic depth only)");
+
+        VkFramebufferCreateInfo depthOnlyFramebufferInfo =
+            makeVkStruct<VkFramebufferCreateInfo>(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+        depthOnlyFramebufferInfo.renderPass = depthOnlyRenderPass;
+        depthOnlyFramebufferInfo.attachmentCount = 1;
+        depthOnlyFramebufferInfo.pAttachments = &depthTarget.view;
+        depthOnlyFramebufferInfo.width = kImageWidth;
+        depthOnlyFramebufferInfo.height = kImageHeight;
+        depthOnlyFramebufferInfo.layers = 1;
+        VkFramebuffer depthOnlyFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &depthOnlyFramebufferInfo, nullptr,
+                                  &depthOnlyFramebuffer),
+              "vkCreateFramebuffer(classic depth only)");
+
+        graphicsInfo.pNext = nullptr;
+        graphicsInfo.renderPass = depthOnlyRenderPass;
+        graphicsInfo.subpass = 0;
+        graphicsInfo.pDepthStencilState = &depthStencilState;
+        blendState.attachmentCount = 0;
+        blendState.pAttachments = nullptr;
+        VkPipeline depthOnlyPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &depthOnlyPipeline),
+              "vkCreateGraphicsPipelines(classic depth only)");
+
+        VkClearValue depthOnlyClear{};
+        depthOnlyClear.depthStencil = {1.0f, 0};
+        VkRenderPassBeginInfo depthOnlyBegin =
+            makeVkStruct<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+        depthOnlyBegin.renderPass = depthOnlyRenderPass;
+        depthOnlyBegin.framebuffer = depthOnlyFramebuffer;
+        depthOnlyBegin.renderArea = scissor;
+        depthOnlyBegin.clearValueCount = 1;
+        depthOnlyBegin.pClearValues = &depthOnlyClear;
+        VkCommandBuffer depthOnlyRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRenderPass(depthOnlyRender, &depthOnlyBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(depthOnlyRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          depthOnlyPipeline);
+        vkCmdDraw(depthOnlyRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(depthOnlyRender);
+        endCommandBuffer(depthOnlyRender);
+        VkSubmitInfo depthOnlySubmit =
+            makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        depthOnlySubmit.commandBufferCount = 1;
+        depthOnlySubmit.pCommandBuffers = &depthOnlyRender;
+        VkFence depthOnlyFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &depthOnlySubmit, depthOnlyFence),
+              "vkQueueSubmit(classic depth only)");
+        waitFence(device, depthOnlyFence);
+        std::cout << "CLASSIC_DEPTH_ONLY_RENDER_OK" << std::endl;
+
         // Ryujinx records its primary color pass with classic VkRenderPass
         // commands and multiple render targets. The fragment shader writes only
         // attachment zero; attachment one must retain its independent clear color.
@@ -2894,6 +2977,10 @@ int main() {
         classicMrtTarget.destroy();
         classicMrtReadback.destroy();
         vkDestroyFence(device, depthFence, nullptr);
+        vkDestroyFence(device, depthOnlyFence, nullptr);
+        vkDestroyPipeline(device, depthOnlyPipeline, nullptr);
+        vkDestroyFramebuffer(device, depthOnlyFramebuffer, nullptr);
+        vkDestroyRenderPass(device, depthOnlyRenderPass, nullptr);
         vkDestroyPipeline(device, depthPipeline, nullptr);
         depthTarget.destroy();
         vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);

@@ -100,10 +100,6 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 		return VK_SUCCESS;
 	}
 	uint32_t colorAttachmentCount = subpass->getColorAttachmentCount();
-	if (colorAttachmentCount == 0) {
-		_metal4UnsupportedReason = "classic_render_pass_no_color";
-		return VK_SUCCESS;
-	}
 	if (colorAttachmentCount > kMVKMaxColorAttachmentCount) {
 		_metal4UnsupportedReason = "classic_render_pass_color_count";
 		return VK_SUCCESS;
@@ -112,8 +108,11 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t colorIndex = 0; colorIndex < colorAttachmentCount; colorIndex++) {
 		hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
 	}
-	if (!hasUsedColorAttachment) {
-		_metal4UnsupportedReason = "classic_render_pass_unused_color";
+	if (!hasUsedColorAttachment && !subpass->isDepthAttachmentUsed() &&
+		!subpass->isStencilAttachmentUsed()) {
+		_metal4UnsupportedReason = colorAttachmentCount == 0
+			? "classic_render_pass_no_color"
+			: "classic_render_pass_unused_color";
 		return VK_SUCCESS;
 	}
 	for (MVKImageView* attachment : _attachments) {

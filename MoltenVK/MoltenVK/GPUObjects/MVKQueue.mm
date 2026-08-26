@@ -1334,7 +1334,7 @@ public:
 			return false;
 		}
 		MVKRenderSubpass* subpass = renderPass->getSubpass(0);
-		if (!subpass || subpass->getColorAttachmentCount() == 0 ||
+		if (!subpass ||
 			subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
 			return false;
 		}
@@ -1344,7 +1344,10 @@ public:
 			 colorIndex++) {
 			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
 		}
-		if (!hasUsedColorAttachment) { return false; }
+		if (!hasUsedColorAttachment && !subpass->isDepthAttachmentUsed() &&
+			!subpass->isStencilAttachmentUsed()) {
+			return false;
+		}
 		vector<id<MTLTexture>> renderAttachments;
 		renderAttachments.reserve(attachmentCount);
 		for (size_t attachmentIndex = 0; attachmentIndex < attachmentCount;

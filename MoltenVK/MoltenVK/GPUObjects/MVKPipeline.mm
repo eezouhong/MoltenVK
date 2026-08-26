@@ -3220,21 +3220,22 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		pCreateInfo->renderPass != VK_NULL_HANDLE &&
 		pRendInfo && pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
 		hasSupportedStencilAttachment;
-	bool hasSupportedColorsWithOptionalDepth =
+	bool hasSupportedRenderAttachments =
 		pRendInfo && pRendInfo->viewMask == 0 &&
-		pRendInfo->colorAttachmentCount > 0 &&
 		pRendInfo->colorAttachmentCount <= kMVKMaxColorAttachmentCount &&
-		pRendInfo->pColorAttachmentFormats &&
+		(pRendInfo->colorAttachmentCount == 0 || pRendInfo->pColorAttachmentFormats) &&
 		hasSupportedStencilAttachment;
 	bool hasAnyColorAttachment = false;
-	if (hasSupportedColorsWithOptionalDepth) {
+	if (hasSupportedRenderAttachments) {
 		for (uint32_t colorIndex = 0;
 			 colorIndex < pRendInfo->colorAttachmentCount;
 			 colorIndex++) {
 			hasAnyColorAttachment |=
 				pRendInfo->pColorAttachmentFormats[colorIndex] != VK_FORMAT_UNDEFINED;
 		}
-		hasSupportedColorsWithOptionalDepth &= hasAnyColorAttachment;
+		hasSupportedRenderAttachments &= hasAnyColorAttachment ||
+			pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED ||
+			pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED;
 	}
 	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
@@ -3296,11 +3297,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && !_isTessellationPipeline &&
-		hasSupportedColorsWithOptionalDepth && hasDescriptorlessShaderStages &&
+		hasSupportedRenderAttachments && hasDescriptorlessShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
 		_mtlPipelineState && !_isTessellationPipeline &&
-		hasSupportedColorsWithOptionalDepth && hasArgumentTableShaderStages &&
+		hasSupportedRenderAttachments && hasArgumentTableShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
 		_metal4ColorAttachmentCount = pRendInfo->colorAttachmentCount;
@@ -3321,8 +3322,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
-			   (pRendInfo->colorAttachmentCount == 0 ||
-				pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount)) {
+			   pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
@@ -3338,11 +3338,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (pRendInfo->viewMask != 0) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_multiview";
-	} else if (pRendInfo->colorAttachmentCount == 0 ||
-			   pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+	} else if (pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_color_count";
-	} else if (!pRendInfo->pColorAttachmentFormats || !hasAnyColorAttachment) {
+	} else if (pRendInfo->colorAttachmentCount > 0 &&
+			   (!pRendInfo->pColorAttachmentFormats || !hasAnyColorAttachment)) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_color_format";
 	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
@@ -3355,6 +3355,9 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (!hasSupportedDepthState) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_depth_state";
+	} else if (!hasSupportedRenderAttachments) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_no_render_target";
 	} else if (hasUnsupportedDynamicState) {
 		_metal4RenderExecutionUnsupportedReason =
 			getMetal4UnsupportedDynamicStateReason(_dynamicStateFlags);

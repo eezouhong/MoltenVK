@@ -3594,6 +3594,25 @@ int main() {
         vkCmdBindPipeline(outsideQuery, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           graphicsPipeline);
         vkCmdDraw(outsideQuery, 3, 1, 0, 0);
+        VkMemoryBarrier queryRenderBarrier = makeVkStruct<VkMemoryBarrier>(
+            VK_STRUCTURE_TYPE_MEMORY_BARRIER);
+        queryRenderBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        queryRenderBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(outsideQuery,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                             0, 1, &queryRenderBarrier, 0, nullptr, 0, nullptr);
+        std::array<VkMemoryBarrier, 4> batchedQueryRenderBarriers{};
+        for (VkMemoryBarrier& barrier : batchedQueryRenderBarriers) {
+            barrier = queryRenderBarrier;
+        }
+        vkCmdPipelineBarrier(outsideQuery,
+                             VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                             VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                             0,
+                             static_cast<uint32_t>(batchedQueryRenderBarriers.size()),
+                             batchedQueryRenderBarriers.data(),
+                             0, nullptr, 0, nullptr);
         VkClearAttachment queryClearAttachment{};
         queryClearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         queryClearAttachment.colorAttachment = 0;
@@ -3627,6 +3646,8 @@ int main() {
                               "vkCmdCopyQueryPoolResults(query around render scope)");
         std::cout << "QUERY_CLEAR_ATTACHMENTS_OK" << std::endl;
         std::cout << "QUERY_PARTIAL_CLEAR_ATTACHMENTS_OK" << std::endl;
+        std::cout << "RENDER_SCOPE_PIPELINE_BARRIER_OK" << std::endl;
+        std::cout << "RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK" << std::endl;
         std::cout << "QUERY_OUTSIDE_RENDER_SCOPE_OK" << std::endl;
 
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The

@@ -312,12 +312,22 @@ def main() -> int:
     )
     require(
         queue_mm,
+        r"VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT[\s\S]*?_renderEncoder[\s\S]*?barrierAfterEncoderStages:[\s\S]*?beforeEncoderStages:[\s\S]*?visibilityOptions:",
+        "graphics-only render-scope MTL4 barrier is missing",
+    )
+    require(
+        queue_mm,
+        r"pipeline_barrier_render_scope_non_graphics_stage",
+        "render-scope MTL4 barriers do not fail closed on non-graphics stages",
+    )
+    require(
+        queue_mm,
         r"applyRenderAttachmentBarrier[\s\S]*?_previousRenderAttachments[\s\S]*?barrierAfterQueueStages:MTLStageVertex\s*\|\s*MTLStageFragment[\s\S]*?MTL4VisibilityOptionDevice",
         "reused render attachments are not made visible between MTL4 render passes",
     )
     reject(
         queue_mm,
-        r"_computeEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageVertex|_renderEncoder\s+barrierAfterEncoderStages:[\s\S]*?MTLStageBlit",
+        r"_computeEncoder\s+barrierAfterEncoderStages:[^;]*MTLStageVertex|_renderEncoder\s+barrierAfterEncoderStages:[^;]*MTLStageBlit",
         "render/compute stage masks are passed to an incompatible intra-pass encoder barrier",
     )
     require(
@@ -1013,6 +1023,8 @@ def main() -> int:
         "QUERY_OUTSIDE_RENDER_SCOPE_OK",
         "QUERY_CLEAR_ATTACHMENTS_OK",
         "QUERY_PARTIAL_CLEAR_ATTACHMENTS_OK",
+        "RENDER_SCOPE_PIPELINE_BARRIER_OK",
+        "RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK",
         "GRAPHICS_REBIND_AFTER_RENDER_OK",
         "UPDATE_BUFFER_OK",
         "METAL4_PHASE1C_E2E_PASS",

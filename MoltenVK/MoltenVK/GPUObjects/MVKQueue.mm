@@ -521,6 +521,9 @@ struct MVKMetal4CommandQueueState {
 
 static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stages) {
 	MTLStages mtlStages = 0;
+	if (mvkIsAnyFlagEnabled(stages, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT)) {
+		mtlStages |= MTLStageVertex | MTLStageFragment;
+	}
 	if (mvkIsAnyFlagEnabled(stages,
 						  VK_PIPELINE_STAGE_2_TRANSFER_BIT |
 						  VK_PIPELINE_STAGE_2_COPY_BIT |
@@ -1166,11 +1169,6 @@ public:
 						 VkAccessFlags2 srcAccess,
 						 VkPipelineStageFlags2 dstStages,
 						 VkAccessFlags2 dstAccess) override {
-		// The strict render slice does not claim barriers from inside an active render pass.
-		// Ending that encoder here would silently terminate Vulkan rendering, while an
-		// intra-pass MTL4 barrier cannot legally name transfer/dispatch stages.
-		if (_renderEncoder) { return false; }
-
 		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
 		MTLStages before = mvkMetal4StagesFromVkPipelineStages(dstStages);
 		if (!after) { after = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
@@ -1184,6 +1182,17 @@ public:
 			VK_ACCESS_2_HOST_WRITE_BIT;
 		if (mvkIsAnyFlagEnabled(srcAccess | dstAccess, writes)) {
 			visibility |= MTL4VisibilityOptionDevice;
+		}
+		if (_renderEncoder) {
+			constexpr MTLStages renderStages = MTLStageVertex | MTLStageFragment;
+			if ((after | before) & ~renderStages) {
+				return failMetal4Encoding("pipeline_barrier_render_scope_non_graphics_stage");
+			}
+			[_renderEncoder barrierAfterEncoderStages:after
+						beforeEncoderStages:before
+						  visibilityOptions:visibility];
+			_counters.barriers++;
+			return true;
 		}
 
 		// A Vulkan barrier may cross Metal encoder classes. Defer it until the next

@@ -2829,9 +2829,14 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 		pMS->alphaToOneEnable) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_multisample";
 	}
-	if (!pVP || pVP->viewportCount != 1 || pVP->scissorCount != 1 ||
-		(!hasDynamicViewport && (!pVP->pViewports || numStaticViewports != 1)) ||
-		(!hasDynamicScissor && (!pVP->pScissors || numStaticScissors != 1))) {
+	if (!pVP || pVP->viewportCount == 0 ||
+		pVP->viewportCount > kMVKMaxViewportScissorCount ||
+		pVP->scissorCount == 0 ||
+		pVP->scissorCount > kMVKMaxViewportScissorCount ||
+		(!hasDynamicViewport && (pVP->viewportCount != 1 ||
+			!pVP->pViewports || numStaticViewports != 1)) ||
+		(!hasDynamicScissor && (pVP->scissorCount != 1 ||
+			!pVP->pScissors || numStaticScissors != 1))) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
 	}
 	if (hasDepthBias || hasDepthBoundsTest || hasDepthClamp || hasStencilTest) {
@@ -3225,7 +3230,10 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK &&
 		pMS && pMS->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT &&
 		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
-		pVP && pVP->viewportCount == 1 && pVP->scissorCount == 1 &&
+		pVP && pVP->viewportCount > 0 &&
+		pVP->viewportCount <= kMVKMaxViewportScissorCount &&
+		pVP->scissorCount > 0 &&
+		pVP->scissorCount <= kMVKMaxViewportScissorCount &&
 		(hasDynamicViewport || pVP->pViewports) &&
 		(hasDynamicScissor || pVP->pScissors) &&
 		!hasUnsupportedDynamicState &&

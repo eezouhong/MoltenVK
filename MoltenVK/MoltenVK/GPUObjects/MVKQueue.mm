@@ -1216,9 +1216,14 @@ public:
 	bool setViewports(uint32_t firstViewport,
 					  uint32_t viewportCount,
 					  const VkViewport* viewports) override {
-		if (firstViewport != 0 || viewportCount != 1 || !viewports) { return false; }
-		_dynamicViewport = viewports[0];
-		_hasDynamicViewport = true;
+		if (firstViewport != 0 || viewportCount == 0 ||
+			viewportCount > kMVKMaxViewportScissorCount || !viewports) {
+			return false;
+		}
+		for (uint32_t viewportIndex = 0; viewportIndex < viewportCount; viewportIndex++) {
+			_dynamicViewports[viewportIndex] = viewports[viewportIndex];
+		}
+		_dynamicViewportCount = viewportCount;
 		_graphicsViewportScissorAppliedForEncoder = false;
 		return true;
 	}
@@ -1226,9 +1231,14 @@ public:
 	bool setScissors(uint32_t firstScissor,
 					 uint32_t scissorCount,
 					 const VkRect2D* scissors) override {
-		if (firstScissor != 0 || scissorCount != 1 || !scissors) { return false; }
-		_dynamicScissor = scissors[0];
-		_hasDynamicScissor = true;
+		if (firstScissor != 0 || scissorCount == 0 ||
+			scissorCount > kMVKMaxViewportScissorCount || !scissors) {
+			return false;
+		}
+		for (uint32_t scissorIndex = 0; scissorIndex < scissorCount; scissorIndex++) {
+			_dynamicScissors[scissorIndex] = scissors[scissorIndex];
+		}
+		_dynamicScissorCount = scissorCount;
 		_graphicsViewportScissorAppliedForEncoder = false;
 		return true;
 	}
@@ -1484,27 +1494,47 @@ private:
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		const VkViewport* viewport = nullptr;
 		const VkRect2D* scissor = nullptr;
+		uint32_t viewportCount = 0;
+		uint32_t scissorCount = 0;
 		if (_boundGraphicsPipeline->usesMetal4DynamicViewport()) {
-			if (!_hasDynamicViewport) { return false; }
-			viewport = &_dynamicViewport;
+			if (_dynamicViewportCount == 0) { return false; }
+			viewport = _dynamicViewports.data();
+			viewportCount = _dynamicViewportCount;
 		} else {
 			if (stateData.numViewports != 1) { return false; }
 			viewport = _boundGraphicsPipeline->getViewports();
+			viewportCount = 1;
 		}
 		if (_boundGraphicsPipeline->usesMetal4DynamicScissor()) {
-			if (!_hasDynamicScissor) { return false; }
-			scissor = &_dynamicScissor;
+			if (_dynamicScissorCount == 0) { return false; }
+			scissor = _dynamicScissors.data();
+			scissorCount = _dynamicScissorCount;
 		} else {
 			if (stateData.numScissors != 1) { return false; }
 			scissor = _boundGraphicsPipeline->getScissors();
+			scissorCount = 1;
 		}
-		if (!viewport || !scissor || scissor->offset.x < 0 || scissor->offset.y < 0 ||
-			(uint64_t)scissor->offset.x + scissor->extent.width > _currentRenderWidth ||
-			(uint64_t)scissor->offset.y + scissor->extent.height > _currentRenderHeight) {
+		if (!viewport || !scissor || viewportCount == 0 || scissorCount == 0 ||
+			viewportCount > kMVKMaxViewportScissorCount ||
+			scissorCount > kMVKMaxViewportScissorCount) {
 			return false;
 		}
-		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(*viewport)];
-		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(*scissor)];
+		MTLViewport mtlViewports[kMVKMaxViewportScissorCount];
+		for (uint32_t viewportIndex = 0; viewportIndex < viewportCount; viewportIndex++) {
+			mtlViewports[viewportIndex] = mvkMTLViewportFromVkViewport(viewport[viewportIndex]);
+		}
+		MTLScissorRect mtlScissors[kMVKMaxViewportScissorCount];
+		for (uint32_t scissorIndex = 0; scissorIndex < scissorCount; scissorIndex++) {
+			const VkRect2D& vkScissor = scissor[scissorIndex];
+			if (vkScissor.offset.x < 0 || vkScissor.offset.y < 0 ||
+				(uint64_t)vkScissor.offset.x + vkScissor.extent.width > _currentRenderWidth ||
+				(uint64_t)vkScissor.offset.y + vkScissor.extent.height > _currentRenderHeight) {
+				return false;
+			}
+			mtlScissors[scissorIndex] = mvkMTLScissorRectFromVkRect2D(vkScissor);
+		}
+		[_renderEncoder setViewports:mtlViewports count:viewportCount];
+		[_renderEncoder setScissorRects:mtlScissors count:scissorCount];
 		_graphicsViewportScissorAppliedForEncoder = true;
 		return true;
 	}
@@ -1592,13 +1622,13 @@ private:
 	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
-	VkViewport _dynamicViewport = {};
-	VkRect2D _dynamicScissor = {};
+	array<VkViewport, kMVKMaxViewportScissorCount> _dynamicViewports = {};
+	array<VkRect2D, kMVKMaxViewportScissorCount> _dynamicScissors = {};
+	uint32_t _dynamicViewportCount = 0;
+	uint32_t _dynamicScissorCount = 0;
 	bool _graphicsPipelineBoundForEncoder = false;
 	bool _graphicsResourcesBoundForEncoder = false;
 	bool _graphicsViewportScissorAppliedForEncoder = false;
-	bool _hasDynamicViewport = false;
-	bool _hasDynamicScissor = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
 };

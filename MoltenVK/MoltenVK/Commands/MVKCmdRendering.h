@@ -292,7 +292,8 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 	bool supportsMetal4Encoding() const override {
-		return _firstViewport == 0 && _viewports.size() == 1;
+		return _firstViewport == 0 && !_viewports.empty() &&
+			_viewports.size() <= kMVKMaxViewportScissorCount;
 	}
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
 		return cmdEncoder && supportsMetal4Encoding();
@@ -329,7 +330,8 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 	bool supportsMetal4Encoding() const override {
-		return _firstScissor == 0 && _scissors.size() == 1;
+		return _firstScissor == 0 && !_scissors.empty() &&
+			_scissors.size() <= kMVKMaxViewportScissorCount;
 	}
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
 		return cmdEncoder && supportsMetal4Encoding();

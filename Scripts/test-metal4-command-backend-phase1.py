@@ -389,7 +389,7 @@ def main() -> int:
     )
     require(
         command_h + queue_mm,
-        r"setViewports[\s\S]*?setScissors[\s\S]*?setViewport:[\s\S]*?setScissorRect:",
+        r"setViewports[\s\S]*?setScissors[\s\S]*?setViewports:[\s\S]*?setScissorRects:",
         "the Metal 4 encoder boundary does not apply dynamic viewport and scissor state",
     )
     require(
@@ -431,6 +431,11 @@ def main() -> int:
         pipeline_mm,
         r"kMetal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors",
         "the supported Metal 4 dynamic-state set is incomplete",
+    )
+    require(
+        rendering_h + queue_mm,
+        r"MVKCmdSetViewport[\s\S]*?kMVKMaxViewportScissorCount[\s\S]*?setViewports:[\s\S]*?count:viewportCount[\s\S]*?setScissorRects:[\s\S]*?count:scissorCount",
+        "Metal 4 dynamic viewport/scissor arrays are not preserved through draw encoding",
     )
     require(
         pipeline_h + pipeline_mm,

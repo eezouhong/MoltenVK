@@ -695,14 +695,20 @@ int main() {
         if (!extendedDynamicStateFeatures.extendedDynamicState) {
             fail("Extended dynamic state feature is unavailable");
         }
+        if (!supportedFeatures.features.multiViewport) {
+            fail("Multiple viewports are unavailable");
+        }
         timelineFeatures.timelineSemaphore = VK_TRUE;
         dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
         extendedDynamicStateFeatures.extendedDynamicState = VK_TRUE;
+        VkPhysicalDeviceFeatures enabledFeatures{};
+        enabledFeatures.multiViewport = VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo = makeVkStruct<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
         deviceCreateInfo.pNext = &timelineFeatures;
         deviceCreateInfo.queueCreateInfoCount = 1;
         deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+        deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
         deviceCreateInfo.enabledExtensionCount =
             static_cast<uint32_t>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
@@ -1410,8 +1416,10 @@ int main() {
               "vkCreateGraphicsPipelines(dynamic viewport/scissor)");
 
         auto runDynamicViewportScissor = [&](VkPipeline pipeline,
-                                             const VkViewport& dynamicViewport,
-                                             const VkRect2D& dynamicScissor,
+                                             const VkViewport* dynamicViewports,
+                                             uint32_t dynamicViewportCount,
+                                             const VkRect2D* dynamicScissors,
+                                             uint32_t dynamicScissorCount,
                                              bool setInactiveStencilState,
                                              bool setInactiveDepthBias,
                                              const char* operation) {
@@ -1428,8 +1436,8 @@ int main() {
             VkCommandBuffer render = beginCommandBuffer(device, commandPool);
             vkCmdBeginRendering(render, &renderingInfo);
             vkCmdBindPipeline(render, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            vkCmdSetViewport(render, 0, 1, &dynamicViewport);
-            vkCmdSetScissor(render, 0, 1, &dynamicScissor);
+            vkCmdSetViewport(render, 0, dynamicViewportCount, dynamicViewports);
+            vkCmdSetScissor(render, 0, dynamicScissorCount, dynamicScissors);
             if (setInactiveStencilState) {
                 vkCmdSetStencilCompareMask(render, VK_STENCIL_FACE_FRONT_BIT, 0x12);
                 vkCmdSetStencilWriteMask(render, VK_STENCIL_FACE_FRONT_BIT, 0x34);
@@ -1484,14 +1492,33 @@ int main() {
         VkViewport halfViewport = viewport;
         halfViewport.width = static_cast<float>(kImageWidth / 2);
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  halfViewport, scissor, false, false,
+                                  &halfViewport, 1, &scissor, 1, false, false,
                                   "vkQueueSubmit(dynamic viewport)");
         VkRect2D halfScissor = scissor;
         halfScissor.extent.width = kImageWidth / 2;
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  viewport, halfScissor, false, false,
+                                  &viewport, 1, &halfScissor, 1, false, false,
                                   "vkQueueSubmit(dynamic scissor)");
         std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
+
+        std::array<VkViewport, 2> multiViewports{{halfViewport, viewport}};
+        std::array<VkRect2D, 2> multiScissors{{scissor, scissor}};
+        viewportState.viewportCount = static_cast<uint32_t>(multiViewports.size());
+        viewportState.scissorCount = static_cast<uint32_t>(multiScissors.size());
+        VkPipeline multiViewportScissorPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &multiViewportScissorPipeline),
+              "vkCreateGraphicsPipelines(multi viewport/scissor)");
+        runDynamicViewportScissor(multiViewportScissorPipeline,
+                                  multiViewports.data(),
+                                  static_cast<uint32_t>(multiViewports.size()),
+                                  multiScissors.data(),
+                                  static_cast<uint32_t>(multiScissors.size()),
+                                  false, false,
+                                  "vkQueueSubmit(multi viewport/scissor)");
+        std::cout << "MULTI_VIEWPORT_SCISSOR_OK" << std::endl;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
 
         std::array<VkDynamicState, 5> inactiveStencilDynamicStates{{
             VK_DYNAMIC_STATE_VIEWPORT,
@@ -1509,7 +1536,7 @@ int main() {
                                         nullptr, &inactiveStencilDynamicPipeline),
               "vkCreateGraphicsPipelines(inactive dynamic stencil)");
         runDynamicViewportScissor(inactiveStencilDynamicPipeline,
-                                  viewport, halfScissor, true, false,
+                                  &viewport, 1, &halfScissor, 1, true, false,
                                   "vkQueueSubmit(inactive dynamic stencil)");
         std::cout << "INACTIVE_STENCIL_DYNAMIC_OK" << std::endl;
 
@@ -1527,7 +1554,7 @@ int main() {
                                         nullptr, &inactiveDepthBiasDynamicPipeline),
               "vkCreateGraphicsPipelines(inactive dynamic depth bias)");
         runDynamicViewportScissor(inactiveDepthBiasDynamicPipeline,
-                                  viewport, halfScissor, false, true,
+                                  &viewport, 1, &halfScissor, 1, false, true,
                                   "vkQueueSubmit(inactive dynamic depth bias)");
         std::cout << "INACTIVE_DEPTH_BIAS_DYNAMIC_OK" << std::endl;
 
@@ -1832,6 +1859,7 @@ int main() {
         vkDestroyPipeline(device, depthPipeline, nullptr);
         depthTarget.destroy();
         vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);
+        vkDestroyPipeline(device, multiViewportScissorPipeline, nullptr);
         vkDestroyPipeline(device, inactiveStencilDynamicPipeline, nullptr);
         vkDestroyPipeline(device, inactiveDepthBiasDynamicPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);

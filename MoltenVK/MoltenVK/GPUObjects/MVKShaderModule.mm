@@ -1264,16 +1264,22 @@ MVKShaderLibraryCache::MVKShaderLibraryCache(
 
 MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  MVKShaderModule* shaderModule, MVKPipeline* pipeline,
-														  bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
+														  bool* pCacheRepresentationChanged,
+														  bool* pWasCacheHit,
+														  VkPipelineCreationFeedback* pShaderFeedback,
 														  uint64_t startTime) {
-	bool wasAdded = false;
+	bool cacheRepresentationChanged = false;
+	bool wasCacheHit = false;
 	MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
+	wasCacheHit = shLib != nullptr;
 	if (!shLib && _repository) {
+		SPIRVToMSLConversionConfiguration deferredLookupConfig = *pShaderConfig;
 		shLib = _repository->acquire(_shaderModuleKey, pShaderConfig);
 		if (shLib) {
-			bool wasDeferred = takeDeferredShaderLibrary(pShaderConfig);
+			takeDeferredShaderLibrary(deferredLookupConfig);
 			_shaderLibraries.emplace_back(*pShaderConfig, shLib);
-			wasAdded = !wasDeferred;
+			cacheRepresentationChanged = true;
+			wasCacheHit = true;
 			addPerformanceInterval(getPerformanceStats().shaderCompilation.shaderLibraryFromCache, startTime);
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
@@ -1286,6 +1292,10 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			pipeline,
 			pShaderFeedback,
 			startTime);
+		if (shLib) {
+			cacheRepresentationChanged = true;
+			wasCacheHit = true;
+		}
 	}
 	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
@@ -1294,11 +1304,14 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
-			wasAdded = shLib != nullptr;
+			cacheRepresentationChanged = shLib != nullptr;
 		}
 	}
 
-	if (pWasAdded) { *pWasAdded = wasAdded; }
+	if (pCacheRepresentationChanged) {
+		*pCacheRepresentationChanged = cacheRepresentationChanged;
+	}
+	if (pWasCacheHit) { *pWasCacheHit = wasCacheHit; }
 
 	return shLib;
 }
@@ -1331,16 +1344,14 @@ void MVKShaderLibraryCache::addDeferredShaderLibrary(
 }
 
 bool MVKShaderLibraryCache::takeDeferredShaderLibrary(
-	SPIRVToMSLConversionConfiguration* pShaderConfig,
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
 	MVKDeferredShaderLibrary* pDeferred) {
 
-	if (!pShaderConfig) { return false; }
 	for (size_t index = 0; index < _deferredShaderLibraries.size(); index++) {
-		if (!_deferredShaderLibraries[index].shaderConfig.matches(*pShaderConfig)) { continue; }
+		if (!_deferredShaderLibraries[index].shaderConfig.matches(shaderConfig)) { continue; }
 
 		MVKDeferredShaderLibrary deferred = std::move(_deferredShaderLibraries[index]);
 		_deferredShaderLibraries.erase(_deferredShaderLibraries.begin() + index);
-		pShaderConfig->alignWith(deferred.shaderConfig);
 		if (pDeferred) { *pDeferred = std::move(deferred); }
 		return true;
 	}
@@ -1358,7 +1369,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(
 	}
 
 	MVKDeferredShaderLibrary deferred;
-	if (!takeDeferredShaderLibrary(pShaderConfig, &deferred)) { return nullptr; }
+	if (!takeDeferredShaderLibrary(*pShaderConfig, &deferred)) { return nullptr; }
 
 	SPIRVToMSLConversionConfiguration alignedConfig = deferred.shaderConfig;
 	VkResult priorConfigurationResult = _owner->getConfigurationResult();
@@ -1463,9 +1474,9 @@ bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
 	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
 	MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
 	if (!shared) { return false; }
-	bool wasDeferred = takeDeferredShaderLibrary(&alignedConfig);
+	takeDeferredShaderLibrary(shaderConfig);
 	_shaderLibraries.emplace_back(alignedConfig, shared);
-	return !wasDeferred;
+	return true;
 }
 
 // Merge another shader library cache with this one. Handle null input.
@@ -1525,7 +1536,14 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 			mvkLib = pipelineCache->getShaderLibrary(pShaderConfig, this, pipeline, pShaderFeedback, startTime);
 		} else {
 			lock_guard<mutex> lock(_accessLock);
-			mvkLib = _shaderLibraryCache.getShaderLibrary(pShaderConfig, this, pipeline, nullptr, pShaderFeedback, startTime);
+			mvkLib = _shaderLibraryCache.getShaderLibrary(
+				pShaderConfig,
+				this,
+				pipeline,
+				nullptr,
+				nullptr,
+				pShaderFeedback,
+				startTime);
 		}
 	} else {
 		mvkLib->setEntryPointName(pShaderConfig->options.entryPointName);

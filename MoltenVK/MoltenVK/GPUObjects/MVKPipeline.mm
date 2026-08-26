@@ -4779,14 +4779,26 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 														 MVKPipeline* pipeline,
 														 VkPipelineCreationFeedback* pShaderFeedback,
 														 uint64_t startTime) {
-	bool wasAdded = false;
+	bool cacheRepresentationChanged = false;
+	bool wasCacheHit = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	MVKShaderLibrary* shLib = slCache->getShaderLibrary(
+		pContext,
+		shaderModule,
+		pipeline,
+		&cacheRepresentationChanged,
+		&wasCacheHit,
+		pShaderFeedback,
+		startTime);
 	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
 		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
 	}
-	if (wasAdded) { markDirty(); }
-	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
+	if (cacheRepresentationChanged) { markDirty(); }
+	if (wasCacheHit && pShaderFeedback) {
+		mvkEnableFlags(
+			pShaderFeedback->flags,
+			VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+	}
 	return shLib;
 }
 

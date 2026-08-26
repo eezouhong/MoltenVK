@@ -76,6 +76,22 @@ class PipelineContribution:
     shader_library: str
 
 
+@dataclass(frozen=True)
+class ShaderConfig:
+    resource_mask: int
+
+    def matches(self, requested: "ShaderConfig") -> bool:
+        return (self.resource_mask & requested.resource_mask) == requested.resource_mask
+
+
+@dataclass
+class PipelineCacheSerializationState:
+    data_size: int = 0
+
+    def replace_deferred_with_canonical(self) -> None:
+        self.data_size = 0
+
+
 class LogicalCacheView:
     def __init__(self) -> None:
         self.memberships: set[tuple[str, str, str]] = set()
@@ -261,6 +277,25 @@ def test_lazy_imported_library_model() -> None:
     assert "vertex-future" in view.deferred
 
 
+def test_canonical_repository_config_wins_over_deferred_match() -> None:
+    canonical = ShaderConfig(resource_mask=0b11)
+    deferred_request = ShaderConfig(resource_mask=0b01)
+
+    assert canonical.matches(deferred_request)
+    assert not deferred_request.matches(canonical)
+
+    # Removing the compatible deferred record must not realign the caller
+    # away from the canonical config returned by the repository.
+    final_config = canonical
+    assert final_config == canonical
+
+    # Replacing a deferred serialization record with a canonical one changes
+    # the cache representation even when logical membership is unchanged.
+    serialization = PipelineCacheSerializationState(data_size=4096)
+    serialization.replace_deferred_with_canonical()
+    assert serialization.data_size == 0
+
+
 def test_source_policy() -> None:
     device_h = DEVICE_H.read_text()
     device_mm = DEVICE_MM.read_text()
@@ -375,9 +410,22 @@ def test_source_policy() -> None:
         "// Finds and returns a shader library", get_library_start
     )
     get_library_body = shader_mm[get_library_start:get_library_end]
+    require(
+        get_library_body,
+        "SPIRVToMSLConversionConfiguration deferredLookupConfig = *pShaderConfig;",
+        SHADER_MM,
+    )
     repository_lookup = get_library_body.index(
         "_repository->acquire(_shaderModuleKey, pShaderConfig)"
     )
+    assert get_library_body.index("deferredLookupConfig") < repository_lookup
+    require(
+        get_library_body,
+        "takeDeferredShaderLibrary(deferredLookupConfig)",
+        SHADER_MM,
+    )
+    require(get_library_body, "cacheRepresentationChanged = true;", SHADER_MM)
+    require(get_library_body, "wasCacheHit = true;", SHADER_MM)
     deferred_materialization = get_library_body.index(
         "materializeDeferredShaderLibrary("
     )
@@ -400,6 +448,21 @@ def test_source_policy() -> None:
     assert "VkResult priorConfigurationResult = _owner->getConfigurationResult();" in materialize_body
     assert "if (!candidateResident && priorConfigurationResult == VK_SUCCESS)" in materialize_body
     assert "_owner->clearConfigurationResult();" in materialize_body
+    require(materialize_body, "if (!shLib) {", SHADER_MM)
+    assert "addDeferredShaderLibrary(" not in materialize_body
+
+    take_deferred_start = shader_mm.index(
+        "bool MVKShaderLibraryCache::takeDeferredShaderLibrary("
+    )
+    take_deferred_end = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(",
+        take_deferred_start,
+    )
+    take_deferred_body = shader_mm[take_deferred_start:take_deferred_end]
+    assert "alignWith" not in take_deferred_body
+    require(shader_h, "const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,", SHADER_H)
+    require(shader_h, "bool* pCacheRepresentationChanged", SHADER_H)
+    require(shader_h, "bool* pWasCacheHit", SHADER_H)
 
     # Serialization and merge must retain deferred logical membership without
     # forcing MTLLibrary creation merely to export or combine cache views.
@@ -487,7 +550,11 @@ def test_source_policy() -> None:
         "if (shared) { _shaderLibraries.emplace_back(alignedConfig, shared); }",
         SHADER_MM,
     )
-    require(shader_mm, "wasAdded = shLib != nullptr;", SHADER_MM)
+    require(
+        shader_mm,
+        "cacheRepresentationChanged = shLib != nullptr;",
+        SHADER_MM,
+    )
     assert shader_mm.count("priorConfigurationResult == VK_SUCCESS") == 3
     assert shader_mm.count("_owner->clearConfigurationResult();") == 3
 
@@ -893,8 +960,30 @@ def test_source_policy() -> None:
     ]
     assert "if (!_repository) { return false; }" in shader_cache_adoption_body
     assert "new MVKShaderLibrary(*shaderLibrary)" not in shader_cache_adoption_body
-    assert "bool wasDeferred = takeDeferredShaderLibrary(&alignedConfig);" in shader_cache_adoption_body
-    assert "return !wasDeferred;" in shader_cache_adoption_body
+    assert "takeDeferredShaderLibrary(shaderConfig);" in shader_cache_adoption_body
+    assert "takeDeferredShaderLibrary(&alignedConfig)" not in shader_cache_adoption_body
+    assert "return true;" in shader_cache_adoption_body
+
+    pipeline_cache_get_start = pipeline_mm.index(
+        "MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl("
+    )
+    pipeline_cache_get_end = pipeline_mm.index(
+        "bool MVKPipelineCache::adoptShaderLibraryMembership(",
+        pipeline_cache_get_start,
+    )
+    pipeline_cache_get_body = pipeline_mm[
+        pipeline_cache_get_start:pipeline_cache_get_end
+    ]
+    require(
+        pipeline_cache_get_body,
+        "if (cacheRepresentationChanged) { markDirty(); }",
+        PIPELINE_MM,
+    )
+    require(
+        pipeline_cache_get_body,
+        "if (wasCacheHit && pShaderFeedback)",
+        PIPELINE_MM,
+    )
 
 
 def main() -> None:
@@ -903,6 +992,7 @@ def main() -> None:
     test_one_shot_capture_model()
     test_async_task_ceiling_model()
     test_lazy_imported_library_model()
+    test_canonical_repository_config_wins_over_deferred_match()
     test_source_policy()
     print("metal4 shared shader-library repository policy: PASS")
 

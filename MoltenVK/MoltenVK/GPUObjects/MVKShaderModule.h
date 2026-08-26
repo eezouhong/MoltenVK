@@ -298,12 +298,16 @@ public:
 	 * module, if needed, and if the pipeline is not configured to fail if a pipeline compile
 	 * is required. In that case, the new shader library is not created, and nil is returned.
 	 *
-	 * If pWasAdded is not nil, this function will set it to true if a new shader library was created,
-	 * and to false if an existing shader library was found and returned.
+	 * If pCacheRepresentationChanged is not nil, this function will set it to true
+	 * when the serializable contents of this cache view changed. If pWasCacheHit is
+	 * not nil, this function will set it to true when an existing or deferred
+	 * shader library satisfied the request.
 	 */
 	MVKShaderLibrary* getShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   MVKShaderModule* shaderModule, MVKPipeline* pipeline,
-									   bool* pWasAdded, VkPipelineCreationFeedback* pShaderFeedback,
+									   bool* pCacheRepresentationChanged,
+									   bool* pWasCacheHit,
+									   VkPipelineCreationFeedback* pShaderFeedback,
 									   uint64_t startTime = 0);
 
 	/** Adds this logical view's known bytes to a pipeline-cache snapshot. */
@@ -341,7 +345,7 @@ protected:
 		VkPipelineCreationFeedback* pShaderFeedback,
 		uint64_t startTime);
 	bool takeDeferredShaderLibrary(
-		mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
 		MVKDeferredShaderLibrary* pDeferred = nullptr);
 	bool hasShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration& shaderConfig) const;
 	bool supportsDeferredShaderLibraryImport() const { return _repository != nullptr; }

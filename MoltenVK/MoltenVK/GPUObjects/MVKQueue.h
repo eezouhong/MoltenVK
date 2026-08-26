@@ -93,22 +93,6 @@ public:
 	/** Return the name of this queue. */
 	const std::string& getName() { return _name; }
 
-	/**
-	 * Returns the physical-device feature view used by queue construction.
-	 * Production continues to honor the advertised residency-set capability.
-	 * The private validation override only permits public-factory probing on
-	 * virtualized test GPUs whose family/capability advertisement is incomplete.
-	 */
-	MVKPhysicalDeviceMetalFeatures getMetalFeatures() const {
-		auto features = MVKDeviceTrackingMixin::getMetalFeatures();
-#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-		if (mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_VALIDATION", 0.0) != 0.0) {
-			features.residencySets = true;
-		}
-#endif
-		return features;
-	}
-
 #pragma mark Queue submissions
 
 	/** Submits the specified command buffers to the queue. */
@@ -395,4 +379,3 @@ protected:
 
 	MVKSmallVector<MVKImagePresentInfo, 4> _presentInfo;
 };
-

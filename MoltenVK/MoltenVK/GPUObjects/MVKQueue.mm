@@ -61,6 +61,7 @@ struct MVKMetal4CommandQueueState {
 		uint32_t inFlightCount = 0;
 		bool encoding = false;
 		bool resetPending = false;
+		bool retired = false;
 	};
 
 	struct ResidencyEntry {
@@ -81,6 +82,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<bool> probeCompleted = false;
 	atomic<bool> probeSucceeded = false;
 	atomic<bool> probeAllocatorCompleted = false;
+	atomic<bool> probeMayBeInFlight = false;
 	atomic<uint64_t> nextSequence = 1;
 	atomic<uint64_t> submittedCount = 0;
 	atomic<uint64_t> completedCount = 0;
@@ -184,7 +186,7 @@ struct MVKMetal4CommandQueueState {
 		for (size_t offset = 0; offset < allocators.size(); offset++) {
 			size_t idx = (nextAllocatorIndex + offset) % allocators.size();
 			auto& slot = allocators[idx];
-			if (slot.encoding || slot.inFlightCount != 0) { continue; }
+			if (slot.retired || slot.encoding || slot.inFlightCount != 0) { continue; }
 			if (slot.resetPending && slot.inFlightCount == 0) {
 				[slot.allocator reset];
 				slot.resetPending = false;
@@ -208,7 +210,7 @@ struct MVKMetal4CommandQueueState {
 			submittedCount.fetch_add(1, memory_order_relaxed);
 			return;
 		}
-		if (slot.inFlightCount == 0 && slot.resetPending) {
+		if (!submitted && slot.inFlightCount == 0) {
 			[slot.allocator reset];
 			slot.resetPending = false;
 		}
@@ -228,6 +230,15 @@ struct MVKMetal4CommandQueueState {
 			}
 		}
 		completedCount.fetch_add(1, memory_order_relaxed);
+	}
+
+	void retireAllocator(size_t slotIndex) {
+		lock_guard<mutex> guard(lock);
+		if (slotIndex >= allocators.size()) { return; }
+		auto& slot = allocators[slotIndex];
+		slot.retired = true;
+		slot.encoding = false;
+		slot.resetPending = false;
 	}
 
 	bool acquireResidency(const vector<id<MTLAllocation>>& allocations) {
@@ -300,6 +311,7 @@ struct MVKMetal4CommandQueueState {
 	}
 
 	void completeProbe(size_t slotIndex, NSError* error) {
+		probeMayBeInFlight.store(false, memory_order_release);
 		markProbeStatus(error, nil);
 		completeProbeAllocator(slotIndex);
 	}
@@ -755,6 +767,19 @@ public:
 	void endEncoding() {
 		endRenderEncoding();
 		endComputeEncoding();
+	}
+
+	void abandonEncoding() {
+		[_renderEncoder release];
+		_renderEncoder = nil;
+		[_computeEncoder release];
+		_computeEncoder = nil;
+		_commandBuffer = nil;
+		_boundComputePipeline = nullptr;
+		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = 0;
+		_currentRenderHeight = 0;
+		_graphicsPipelineBoundForEncoder = false;
 	}
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
@@ -1377,13 +1402,36 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 			return false;
 		}
 
+		bool commandBufferBeginAttempted = false;
+		bool commandBufferBegun = false;
+		bool commandBufferEndAttempted = false;
+		bool commandBufferEnded = false;
 		@try {
 			commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 empty submission probe", getName().c_str()];
+			commandBufferBeginAttempted = true;
 			[commandBuffer beginCommandBufferWithAllocator:allocator];
+			commandBufferBegun = true;
+			commandBufferEndAttempted = true;
 			[commandBuffer endCommandBuffer];
+			commandBufferEnded = true;
 		} @catch (NSException* exception) {
-			state->finishEncoding(slotIndex, false);
-			state->failProbeBeforeCommit(slotIndex, exception.reason);
+			NSException* failure = exception;
+			if (commandBufferBegun && !commandBufferEndAttempted) {
+				@try {
+					commandBufferEndAttempted = true;
+					[commandBuffer endCommandBuffer];
+					commandBufferEnded = true;
+				} @catch (NSException* cleanupException) {
+					failure = cleanupException;
+				}
+			}
+			if (commandBufferBeginAttempted && !commandBufferEnded) {
+				state->retireAllocator(slotIndex);
+				state->markProbeStatus(nil, failure.reason);
+			} else {
+				state->finishEncoding(slotIndex, false);
+				state->failProbeBeforeCommit(slotIndex, failure.reason);
+			}
 			[commandBuffer release];
 			[allocator release];
 			return false;
@@ -1406,6 +1454,7 @@ bool MVKQueue::startMTL4CommandSubmissionProbe() {
 
 		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
 		@try {
+			state->probeMayBeInFlight.store(true, memory_order_release);
 			[_mtl4Queue commit:commandBuffers count:1 options:options];
 		} @catch (NSException* exception) {
 			state->failProbeInFlight(exception.reason);
@@ -1531,6 +1580,11 @@ void MVKQueue::initMTL4CommandQueue() {
 			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
 							  "Metal 4 command queue validation failed for Vulkan queue %u-%u; retaining the legacy backend: %s",
 							  _queueFamily->getIndex(), _index, reason.c_str());
+			if (_metal4CommandState->probeMayBeInFlight.load(memory_order_acquire)) {
+				_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 validation commit may still be in flight; retaining its Metal 4 sidecar until feedback or queue teardown.");
+				return;
+			}
 			id<MTLResidencySet> failedResidencySet = _metal4CommandState->copyResidencySet();
 			[_mtl4Queue removeResidencySet:failedResidencySet];
 			[failedResidencySet release];
@@ -1807,12 +1861,18 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	}
 
 	bool claimedCommandBuffers = false;
+	bool commandBufferBeginAttempted = false;
+	bool commandBufferBegun = false;
+	bool encoderEndAttempted = false;
+	bool commandBufferEndAttempted = false;
 	bool commandBufferEnded = false;
 	@try {
 		commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 Vulkan transfer submission %llu",
 													 _queue->getName().c_str(),
 													 (unsigned long long)_submissionSequence];
+		commandBufferBeginAttempted = true;
 		[commandBuffer beginCommandBufferWithAllocator:allocator];
+		commandBufferBegun = true;
 		if (!encoder.beginEncoding(commandBuffer, residencySet)) {
 			@throw [NSException exceptionWithName:@"MVKMetal4EncoderCreation"
 									 reason:@"Could not create MTL4ComputeCommandEncoder"
@@ -1829,11 +1889,47 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 									 reason:@"Metal 4 command materialization failed"
 								   userInfo:nil];
 		}
+		encoderEndAttempted = true;
 		encoder.endEncoding();
+		commandBufferEndAttempted = true;
 		[commandBuffer endCommandBuffer];
 		commandBufferEnded = true;
-	} @catch (NSException*) {
+	} @catch (NSException* exception) {
+		bool closedForReplay = !commandBufferBeginAttempted;
+		NSException* cleanupException = nil;
+		if (commandBufferBegun && !encoderEndAttempted && !commandBufferEndAttempted) {
+			@try {
+				encoderEndAttempted = true;
+				encoder.endEncoding();
+				commandBufferEndAttempted = true;
+				[commandBuffer endCommandBuffer];
+				commandBufferEnded = true;
+				closedForReplay = true;
+			} @catch (NSException* caughtCleanupException) {
+				cleanupException = caughtCleanupException;
+			}
+		}
 		if (claimedCommandBuffers) { endMetal4CommandBuffers(false); }
+		if (!closedForReplay) {
+			encoder.abandonEncoding();
+			state->retireAllocator(allocatorIndex);
+			state->releaseResidency(allocations);
+			NSException* failure = cleanupException ?: exception;
+			state->recordFailure(failure.reason);
+			setConfigurationResult(VK_ERROR_DEVICE_LOST);
+			_queue->reportResult(VK_ERROR_DEVICE_LOST,
+							 MVK_CONFIG_LOG_LEVEL_ERROR,
+							 "Metal 4 command encoding could not be safely closed: %s",
+							 failure.reason.UTF8String ?: "unknown exception");
+			_queue->getDevice()->markLost(false);
+			[options release];
+			[residencySet release];
+			[commandBuffer release];
+			[allocator release];
+			*handled = true;
+			finish();
+			return VK_ERROR_DEVICE_LOST;
+		}
 		state->finishEncoding(allocatorIndex, false);
 		state->releaseResidency(allocations);
 		[options release];
@@ -1906,7 +2002,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 							  (unsigned long long)_submissionSequence);
 		}
 	} @catch (NSException* exception) {
-		if (!queueSideEffectsStarted) {
+		if (!queueSideEffectsStarted && !commitAttempted) {
 			if (claimedCommandBuffers) {
 				endMetal4CommandBuffers(false);
 				claimedCommandBuffers = false;

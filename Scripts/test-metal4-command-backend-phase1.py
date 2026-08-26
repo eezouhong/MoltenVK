@@ -95,6 +95,11 @@ def main() -> int:
         r"getMetalFeatures\(\)\.residencySets",
         "the independent Metal 4 residency set is incorrectly gated by the fork-disabled legacy residency flag",
     )
+    reject(
+        queue_h,
+        r"MVK_CONFIG_METAL4_COMMAND_VALIDATION[\s\S]*?features\.residencySets\s*=\s*true",
+        "validation mode can still revive the fork-disabled legacy residency capability",
+    )
     require(
         init_metal4,
         r"respondsToSelector:@selector\(newResidencySetWithDescriptor:error:\)",
@@ -361,15 +366,65 @@ def main() -> int:
         r"nextAllocatorIndex[\s\S]*?inFlightCount\s*!=\s*0[\s\S]*?continue",
         "allocator selection is not bounded round-robin or reuses in-flight allocator memory",
     )
+    finish_encoding = function_body(
+        queue_mm,
+        "void finishEncoding(size_t slotIndex, bool submitted)",
+        "void completeAllocator",
+    )
+    require(
+        finish_encoding,
+        r"!submitted[\s\S]*?inFlightCount\s*==\s*0[\s\S]*?\[slot\.allocator\s+reset\]",
+        "a safely ended unsubmitted command buffer does not recycle its allocator heaps",
+    )
     require(
         execute_metal4,
-        r"queueSideEffectsStarted\s*=\s*true[\s\S]*?waitForEvent:[\s\S]*?@catch[\s\S]*?if\s*\(!queueSideEffectsStarted\)",
-        "legacy replay remains possible after a Metal 4 queue wait side effect",
+        r"queueSideEffectsStarted\s*=\s*true[\s\S]*?waitForEvent:[\s\S]*?@catch[\s\S]*?if\s*\(!queueSideEffectsStarted\s*&&\s*!commitAttempted\)",
+        "legacy replay remains possible after a Metal 4 queue wait or commit attempt",
     )
     require(
         execute_metal4,
         r"commitAttempted\s*=\s*true[\s\S]*?commit:[\s\S]*?@catch[\s\S]*?if\s*\(!commitAttempted\)[\s\S]*?endMetal4CommandBuffers\(false\)",
         "pre-commit exceptions are not separated from ambiguous post-commit failures",
+    )
+    require(
+        execute_metal4,
+        r"commandBufferBeginAttempted[\s\S]*?beginCommandBufferWithAllocator:[\s\S]*?encoderEndAttempted[\s\S]*?endEncoding\(\)[\s\S]*?commandBufferEndAttempted[\s\S]*?endCommandBuffer",
+        "Metal 4 command-buffer begin/end attempts are not tracked for safe allocator reuse",
+    )
+    require(
+        queue_mm,
+        r"bool\s+retired\s*=\s*false[\s\S]*?slot\.retired[\s\S]*?continue[\s\S]*?void\s+retireAllocator",
+        "an allocator with an ambiguous command-buffer lifetime cannot be retired",
+    )
+    require(
+        execute_metal4,
+        r"abandonEncoding\(\)[\s\S]*?retireAllocator\(allocatorIndex\)[\s\S]*?VK_ERROR_DEVICE_LOST",
+        "failed command-buffer cleanup can reuse an unsafe allocator or replay the submission",
+    )
+    submission_probe = function_body(
+        queue_mm,
+        "bool MVKQueue::startMTL4CommandSubmissionProbe()",
+        "// Creates the independent Metal 4 queue",
+    )
+    require(
+        submission_probe,
+        r"commandBufferBeginAttempted[\s\S]*?beginCommandBufferWithAllocator:[\s\S]*?commandBufferEndAttempted[\s\S]*?endCommandBuffer[\s\S]*?retireAllocator",
+        "the startup probe can reuse an allocator after an ambiguous command-buffer lifetime",
+    )
+    require(
+        submission_probe,
+        r"probeMayBeInFlight\.store\(true[\s\S]*?commit:commandBuffers",
+        "the startup probe does not mark a commit attempt as potentially in flight",
+    )
+    require(
+        queue_mm,
+        r"void\s+completeProbe\([^)]*\)[\s\S]*?probeMayBeInFlight\.store\(false",
+        "Metal feedback does not definitively clear the startup probe's in-flight state",
+    )
+    require(
+        init_metal4,
+        r"startMTL4CommandSubmissionProbe\(\)[\s\S]*?probeMayBeInFlight[\s\S]*?retaining its Metal 4 sidecar[\s\S]*?_metal4CommandState\.reset\(\)",
+        "ambiguous probe failure can release the queue/state before Metal feedback",
     )
     ambiguous_start = execute_metal4.find("Metal 4 Vulkan queue commit became ambiguous")
     ambiguous_end = execute_metal4.find("[orderingEvent release]", ambiguous_start)

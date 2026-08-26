@@ -45,12 +45,16 @@ public:
 						const VkDeviceSize* pStrides);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override;
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
 	uint32_t _firstBinding;
     MVKSmallVector<MVKVertexMTLBufferBinding, N> _bindings;
+	MVKSmallVector<MVKBuffer*, N> _buffers;
 };
 
 // Concrete template class implementations.

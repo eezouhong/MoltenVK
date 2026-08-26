@@ -145,7 +145,8 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
     createInfo.size = size;
     createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device, &createInfo, nullptr, &result.buffer), "vkCreateBuffer");
 
@@ -436,6 +437,49 @@ static constexpr uint32_t kRenderSmokeVertexSpirv[] = {
     0x00000025, 0x00000023, 0x00000024, 0x00000021, 0x00000022, 0x00050041,
     0x00000026, 0x00000027, 0x00000018, 0x0000001a, 0x0003003e, 0x00000027,
     0x00000025, 0x000100fd, 0x00010038,
+};
+
+// SPIR-V for vertex_input.vert. The vertex shader consumes one vec2 from
+// location 0 so the test exercises a real Vulkan vertex-buffer binding.
+static constexpr uint32_t kVertexInputSpirv[] = {
+    0x07230203, 0x00010000, 0x000d000b, 0x0000001b, 0x00000000, 0x00020011,
+    0x00000001, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0007000f, 0x00000000,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000012, 0x00030003,
+    0x00000002, 0x000001c2, 0x000a0004, 0x475f4c47, 0x4c474f4f, 0x70635f45,
+    0x74735f70, 0x5f656c79, 0x656e696c, 0x7269645f, 0x69746365, 0x00006576,
+    0x00080004, 0x475f4c47, 0x4c474f4f, 0x6e695f45, 0x64756c63, 0x69645f65,
+    0x74636572, 0x00657669, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00060005, 0x0000000b, 0x505f6c67, 0x65567265, 0x78657472, 0x00000000,
+    0x00060006, 0x0000000b, 0x00000000, 0x505f6c67, 0x7469736f, 0x006e6f69,
+    0x00070006, 0x0000000b, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953,
+    0x00000000, 0x00070006, 0x0000000b, 0x00000002, 0x435f6c67, 0x4470696c,
+    0x61747369, 0x0065636e, 0x00070006, 0x0000000b, 0x00000003, 0x435f6c67,
+    0x446c6c75, 0x61747369, 0x0065636e, 0x00030005, 0x0000000d, 0x00000000,
+    0x00050005, 0x00000012, 0x6f506e69, 0x69746973, 0x00006e6f, 0x00030047,
+    0x0000000b, 0x00000002, 0x00050048, 0x0000000b, 0x00000000, 0x0000000b,
+    0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x0000000b, 0x00000001,
+    0x00050048, 0x0000000b, 0x00000002, 0x0000000b, 0x00000003, 0x00050048,
+    0x0000000b, 0x00000003, 0x0000000b, 0x00000004, 0x00040047, 0x00000012,
+    0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000008, 0x00000009, 0x00000001, 0x0004001c, 0x0000000a,
+    0x00000006, 0x00000009, 0x0006001e, 0x0000000b, 0x00000007, 0x00000006,
+    0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000003, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x00000003, 0x00040015, 0x0000000e,
+    0x00000020, 0x00000001, 0x0004002b, 0x0000000e, 0x0000000f, 0x00000000,
+    0x00040017, 0x00000010, 0x00000006, 0x00000002, 0x00040020, 0x00000011,
+    0x00000001, 0x00000010, 0x0004003b, 0x00000011, 0x00000012, 0x00000001,
+    0x0004002b, 0x00000006, 0x00000014, 0x00000000, 0x0004002b, 0x00000006,
+    0x00000015, 0x3f800000, 0x00040020, 0x00000019, 0x00000003, 0x00000007,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x0004003d, 0x00000010, 0x00000013, 0x00000012, 0x00050051,
+    0x00000006, 0x00000016, 0x00000013, 0x00000000, 0x00050051, 0x00000006,
+    0x00000017, 0x00000013, 0x00000001, 0x00070050, 0x00000007, 0x00000018,
+    0x00000016, 0x00000017, 0x00000014, 0x00000015, 0x00050041, 0x00000019,
+    0x0000001a, 0x0000000d, 0x0000000f, 0x0003003e, 0x0000001a, 0x00000018,
+    0x000100fd, 0x00010038,
 };
 
 static constexpr uint32_t kRenderSmokeFragmentSpirv[] = {
@@ -1122,6 +1166,93 @@ int main() {
         validateSolidColor(device, renderReadback, {26, 51, 77, 255});
         std::cout << "DESCRIPTOR_RENDER_OK" << std::endl;
 
+        // A static vertex input must bind the VkBuffer at the Metal buffer
+        // index compiled into the pipeline and snapshot that address through
+        // the same MTL4 argument table used for descriptor resources.
+        const std::array<float, 6> vertexPositions{{
+            -1.0f, -1.0f,
+             3.0f, -1.0f,
+            -1.0f,  3.0f,
+        }};
+        Buffer vertexBuffer = createBuffer(physicalDevice, device, sizeof(vertexPositions));
+        std::vector<uint8_t> vertexBytes(sizeof(vertexPositions));
+        std::memcpy(vertexBytes.data(), vertexPositions.data(), vertexBytes.size());
+        writeBytes(device, vertexBuffer, vertexBytes);
+
+        VkVertexInputBindingDescription vertexBinding{};
+        vertexBinding.binding = 0;
+        vertexBinding.stride = sizeof(float) * 2;
+        vertexBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        VkVertexInputAttributeDescription vertexAttribute{};
+        vertexAttribute.location = 0;
+        vertexAttribute.binding = 0;
+        vertexAttribute.format = VK_FORMAT_R32G32_SFLOAT;
+        vertexAttribute.offset = 0;
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &vertexBinding;
+        vertexInput.vertexAttributeDescriptionCount = 1;
+        vertexInput.pVertexAttributeDescriptions = &vertexAttribute;
+        VkShaderModule vertexInputModule = createShaderModule(
+            device, kVertexInputSpirv, sizeof(kVertexInputSpirv),
+            "vkCreateShaderModule(vertex input)");
+        renderStages[0].module = vertexInputModule;
+        renderStages[1].module = fragmentModule;
+        graphicsInfo.layout = renderLayout;
+        VkPipeline vertexInputPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &vertexInputPipeline),
+              "vkCreateGraphicsPipelines(vertex input)");
+
+        VkCommandBuffer prepareVertexRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareVertexRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareVertexRender);
+        VkCommandBuffer vertexRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(vertexRender, &renderingInfo);
+        vkCmdBindPipeline(vertexRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          vertexInputPipeline);
+        VkDeviceSize vertexOffset = 0;
+        vkCmdBindVertexBuffers(vertexRender, 0, 1, &vertexBuffer.buffer, &vertexOffset);
+        vkCmdDraw(vertexRender, 3, 1, 0, 0);
+        vkCmdEndRendering(vertexRender);
+        endCommandBuffer(vertexRender);
+        VkCommandBuffer finishVertexRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishVertexRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishVertexRender);
+        VkCommandBuffer readVertexRender = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readVertexRender, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readVertexRender);
+        std::array<VkSubmitInfo, 4> vertexSubmits{};
+        for (auto& submit : vertexSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        vertexSubmits[0].commandBufferCount = 1;
+        vertexSubmits[0].pCommandBuffers = &prepareVertexRender;
+        vertexSubmits[1].commandBufferCount = 1;
+        vertexSubmits[1].pCommandBuffers = &vertexRender;
+        vertexSubmits[2].commandBufferCount = 1;
+        vertexSubmits[2].pCommandBuffers = &finishVertexRender;
+        vertexSubmits[3].commandBufferCount = 1;
+        vertexSubmits[3].pCommandBuffers = &readVertexRender;
+        VkFence vertexFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(vertexSubmits.size()),
+                            vertexSubmits.data(), vertexFence),
+              "vkQueueSubmit(vertex render sequence)");
+        waitFence(device, vertexFence);
+        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        std::cout << "VERTEX_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1204,6 +1335,10 @@ int main() {
 
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, vertexFence, nullptr);
+        vkDestroyPipeline(device, vertexInputPipeline, nullptr);
+        vkDestroyShaderModule(device, vertexInputModule, nullptr);
+        vertexBuffer.destroy();
         vkDestroyFence(device, descriptorFence, nullptr);
         vkDestroyPipeline(device, descriptorPipeline, nullptr);
         vkDestroyShaderModule(device, descriptorFragmentModule, nullptr);

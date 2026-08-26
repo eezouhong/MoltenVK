@@ -3069,10 +3069,9 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		stageSupportsArgumentTable(kMVKShaderStageFragment) &&
 		(_stageResources[kMVKShaderStageVertex].resources.descriptorSetData.areAnyBitsSet() ||
 		 _stageResources[kMVKShaderStageFragment].resources.descriptorSetData.areAnyBitsSet());
-	bool hasNoVertexInput = pVI &&
-		pVI->vertexBindingDescriptionCount == 0 &&
-		pVI->vertexAttributeDescriptionCount == 0 &&
-		_vkVertexBuffers.areAllBitsClear() && _mtlVertexBuffers.areAllBitsClear();
+	bool hasSupportedStaticVertexInput = pVI &&
+		!_dynamicStateFlags.has(MVKRenderStateFlag::VertexStride) &&
+		_translatedVertexBindings.empty() && _zeroDivisorVertexBindings.empty();
 	bool hasStrictFixedFunction =
 		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
 		!pIA->primitiveRestartEnable &&
@@ -3093,11 +3092,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
 		hasOneDynamicColorAttachment && hasDescriptorlessShaderStages &&
-		hasNoVertexInput && hasStrictFixedFunction;
+		hasSupportedStaticVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
 		hasOneDynamicColorAttachment && hasArgumentTableShaderStages &&
-		hasNoVertexInput && hasStrictFixedFunction;
+		hasSupportedStaticVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
 		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
 		_metal4RenderExecutionUnsupportedReason = nullptr;
@@ -3105,7 +3104,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:descriptor_resources";
-	} else if (!hasNoVertexInput) {
+	} else if (!hasSupportedStaticVertexInput) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
 	} else if (!hasOneDynamicColorAttachment) {

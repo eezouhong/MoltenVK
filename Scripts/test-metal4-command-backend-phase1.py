@@ -361,9 +361,19 @@ def main() -> int:
         "graphics pipeline eligibility does not reject descriptor or implicit-buffer use",
     )
     require(
-        pipeline_h + read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm"),
-        r"_vkVertexBuffers\.areAllBitsClear\(\)[\s\S]*?_mtlVertexBuffers\.areAllBitsClear\(\)",
-        "strict render eligibility does not use the small-bitset clear predicate for vertex bindings",
+        pipeline_h + pipeline_mm,
+        r"hasSupportedStaticVertexInput[\s\S]*?VertexStride[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)",
+        "static vertex-input eligibility does not reject dynamic or translated bindings",
+    )
+    require(
+        draw_h + draw_mm,
+        r"MVKCmdBindVertexBuffers[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?useBuffer[\s\S]*?encodeMetal4[\s\S]*?bindVertexBuffers",
+        "vertex-buffer binding is not preflighted and materialized",
+    )
+    require(
+        queue_mm,
+        r"getVkVertexBuffers[\s\S]*?getMetalBufferIndexForVertexAttributeBinding[\s\S]*?setAddress:[\s\S]*?MTLRenderStageVertex",
+        "static vertex buffers are not mapped into the Metal 4 argument table",
     )
     require(
         pipeline_h + pipeline_mm,
@@ -408,6 +418,7 @@ def main() -> int:
         "setViewport",
         "setScissorRect",
         "drawPrimitives",
+        "bindVertexBuffers",
         "recordRenderSubmission",
         "recordRenderPass",
         "recordDraw",

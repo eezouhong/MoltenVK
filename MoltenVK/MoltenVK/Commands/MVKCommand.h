@@ -33,6 +33,7 @@ class MVKImageView;
 class MVKPipelineLayout;
 class MVKQueryPool;
 struct MVKPipelineBarrier;
+struct MVKVertexMTLBufferBinding;
 
 
 #pragma mark -
@@ -129,6 +130,9 @@ public:
 	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
 	virtual bool endRendering() = 0;
 	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+	virtual bool bindVertexBuffers(uint32_t firstBinding,
+							   uint32_t bindingCount,
+							   const MVKVertexMTLBufferBinding* bindings) = 0;
 	virtual bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
 								MVKPipelineLayout* layout,
 								uint32_t firstSet,

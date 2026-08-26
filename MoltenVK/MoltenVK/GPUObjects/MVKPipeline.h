@@ -413,6 +413,14 @@ public:
 			_supportsMetal4ArgumentTableRenderExecution;
 	}
 
+	/** Returns whether the strict Metal 4 slice consumes static vertex buffers. */
+	bool usesMetal4VertexInput() const { return _vkVertexBuffers.areAnyBitsSet(); }
+
+	/** Returns whether this pipeline needs the shared MTL4 argument table. */
+	bool requiresMetal4ArgumentTable() const {
+		return _supportsMetal4ArgumentTableRenderExecution || usesMetal4VertexInput();
+	}
+
 	/** Returns the first stable eligibility blocker for bounded command-backend telemetry. */
 	const char* metal4RenderExecutionUnsupportedReason() const {
 		return _metal4RenderExecutionUnsupportedReason;

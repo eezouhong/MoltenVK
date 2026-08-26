@@ -589,6 +589,11 @@ public:
 		id<MTLBuffer> buffer = nil;
 		NSUInteger offset = 0;
 	};
+	struct BoundVertexBuffer {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+		NSUInteger size = 0;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -707,7 +712,7 @@ public:
 
 	bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
 		if (!pipeline || !pipeline->supportsMetal4RenderExecution() ||
-			(pipeline->supportsMetal4ArgumentTableRenderExecution() && !ensureArgumentTable())) {
+			(pipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable())) {
 			return false;
 		}
 		if (_graphicsPipelines.count(pipeline)) { return true; }
@@ -1095,6 +1100,30 @@ public:
 		return !_renderEncoder || applyGraphicsPipeline();
 	}
 
+	bool bindVertexBuffers(uint32_t firstBinding,
+						   uint32_t bindingCount,
+						   const MVKVertexMTLBufferBinding* bindings) override {
+		if (!bindingCount || !bindings ||
+			firstBinding + bindingCount > kMVKMaxBufferCount) {
+			return false;
+		}
+		for (uint32_t bindingOffset = 0; bindingOffset < bindingCount; bindingOffset++) {
+			const MVKVertexMTLBufferBinding& binding = bindings[bindingOffset];
+			NSUInteger bufferLength = binding.mtlBuffer.length;
+			if (!binding.mtlBuffer || binding.offset > bufferLength ||
+				(binding.size && binding.size > bufferLength - binding.offset)) {
+				return false;
+			}
+			_graphicsVertexBuffers[firstBinding + bindingOffset] = BoundVertexBuffer{
+				binding.mtlBuffer,
+				static_cast<NSUInteger>(binding.offset),
+				binding.size ? binding.size : bufferLength - binding.offset,
+			};
+		}
+		_graphicsResourcesBoundForEncoder = false;
+		return true;
+	}
+
 	bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
 							MVKPipelineLayout* layout,
 							uint32_t firstSet,
@@ -1295,36 +1324,46 @@ private:
 
 	bool applyGraphicsResources() {
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
-		if (_boundGraphicsPipeline->supportsMetal4DescriptorlessRenderExecution()) {
-			_graphicsResourcesBoundForEncoder = true;
-			return true;
-		}
-		if (!_boundGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution() ||
-			!ensureArgumentTable()) {
+		if (_boundGraphicsPipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable()) {
 			return false;
 		}
 		MVKPipelineLayout* pipelineLayout = _boundGraphicsPipeline->getLayout();
 		MTLRenderStages stages = 0;
-		for (MVKShaderStage stage : {kMVKShaderStageVertex, kMVKShaderStageFragment}) {
-			const auto& resources = _boundGraphicsPipeline->getStageResources(stage);
-			for (size_t setIndex : resources.resources.descriptorSetData) {
-				if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
-				const BoundDescriptorSet& descriptorSet = _graphicsDescriptorSets[setIndex];
-				if (!descriptorSet.buffer ||
-					descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
-					return false;
-				}
-				[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
-								 atIndex:setIndex];
+		for (size_t vkBinding : _boundGraphicsPipeline->getVkVertexBuffers()) {
+			const BoundVertexBuffer& vertexBuffer = _graphicsVertexBuffers[vkBinding];
+			if (!vertexBuffer.buffer || vertexBuffer.offset > vertexBuffer.buffer.length) {
+				return false;
 			}
-			if (resources.resources.descriptorSetData.areAnyBitsSet()) {
-				stages |= stage == kMVKShaderStageVertex
-					? MTLRenderStageVertex
-					: MTLRenderStageFragment;
-			}
+			uint32_t metalBinding =
+				_boundGraphicsPipeline->getMetalBufferIndexForVertexAttributeBinding(
+					static_cast<uint32_t>(vkBinding));
+			[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
+							 atIndex:metalBinding];
+			stages |= MTLRenderStageVertex;
 		}
-		if (!stages) { return false; }
-		[_renderEncoder setArgumentTable:_argumentTable atStages:stages];
+		if (_boundGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution()) {
+			for (MVKShaderStage stage : {kMVKShaderStageVertex, kMVKShaderStageFragment}) {
+				const auto& resources = _boundGraphicsPipeline->getStageResources(stage);
+				for (size_t setIndex : resources.resources.descriptorSetData) {
+					if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
+					const BoundDescriptorSet& descriptorSet = _graphicsDescriptorSets[setIndex];
+					if (!descriptorSet.buffer ||
+						descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
+						return false;
+					}
+					[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
+								 atIndex:setIndex];
+				}
+				if (resources.resources.descriptorSetData.areAnyBitsSet()) {
+					stages |= stage == kMVKShaderStageVertex
+						? MTLRenderStageVertex
+						: MTLRenderStageFragment;
+				}
+			}
+		} else if (!_boundGraphicsPipeline->supportsMetal4DescriptorlessRenderExecution()) {
+			return false;
+		}
+		if (stages) { [_renderEncoder setArgumentTable:_argumentTable atStages:stages]; }
 		_graphicsResourcesBoundForEncoder = true;
 		return true;
 	}
@@ -1337,6 +1376,7 @@ private:
 	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
 	unordered_set<const void*> _descriptorAllocationSet;
 	vector<id<MTLAllocation>> _descriptorAllocations;

@@ -424,6 +424,13 @@ public:
 	bool usesMetal4DynamicScissor() const {
 		return _dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
 	}
+	bool usesMetal4DynamicBlendConstants() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::BlendConstants);
+	}
+	bool usesMetal4BlendConstants() const {
+		return usesMetal4DynamicBlendConstants() ||
+			_staticStateFlags.has(MVKRenderStateFlag::BlendConstants);
+	}
 
 	/** Returns whether this pipeline needs the shared MTL4 argument table. */
 	bool requiresMetal4ArgumentTable() const {

@@ -1132,6 +1132,7 @@ public:
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
@@ -1195,6 +1196,7 @@ public:
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
@@ -1210,6 +1212,7 @@ public:
 		_boundGraphicsPipeline = pipeline;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 		return !_renderEncoder || applyGraphicsPipeline();
 	}
 
@@ -1258,6 +1261,14 @@ public:
 	bool setStencilReference(VkStencilFaceFlags faceMask,
 							 uint32_t) override {
 		return isValidStencilFaceMask(faceMask);
+	}
+
+	bool setBlendConstants(const float* blendConstants) override {
+		if (!blendConstants) { return false; }
+		mvkCopy(_dynamicBlendConstants.float32, blendConstants, 4);
+		_hasDynamicBlendConstants = true;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		return true;
 	}
 
 	bool bindVertexBuffers(uint32_t firstBinding,
@@ -1326,6 +1337,10 @@ public:
 			!applyViewportScissorState()) {
 			return false;
 		}
+		if (!_graphicsBlendConstantsAppliedForEncoder &&
+			!applyBlendConstantsState()) {
+			return false;
+		}
 		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
@@ -1357,6 +1372,7 @@ public:
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 	}
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
@@ -1439,6 +1455,7 @@ private:
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 	}
 
 	static bool isValidStencilFaceMask(VkStencilFaceFlags faceMask) {
@@ -1539,6 +1556,28 @@ private:
 		return true;
 	}
 
+	bool applyBlendConstantsState() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		if (!_boundGraphicsPipeline->usesMetal4BlendConstants()) {
+			_graphicsBlendConstantsAppliedForEncoder = true;
+			return true;
+		}
+		const MVKColor32* blendConstants = nullptr;
+		if (_boundGraphicsPipeline->usesMetal4DynamicBlendConstants()) {
+			if (!_hasDynamicBlendConstants) { return false; }
+			blendConstants = &_dynamicBlendConstants;
+		} else {
+			blendConstants = &_boundGraphicsPipeline->getStaticStateData().blendConstants;
+		}
+		const float* color = blendConstants->float32;
+		[_renderEncoder setBlendColorRed:color[0]
+							 green:color[1]
+							  blue:color[2]
+							 alpha:color[3]];
+		_graphicsBlendConstantsAppliedForEncoder = true;
+		return true;
+	}
+
 	bool applyGraphicsResources() {
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		if (_boundGraphicsPipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable()) {
@@ -1626,9 +1665,12 @@ private:
 	array<VkRect2D, kMVKMaxViewportScissorCount> _dynamicScissors = {};
 	uint32_t _dynamicViewportCount = 0;
 	uint32_t _dynamicScissorCount = 0;
+	MVKColor32 _dynamicBlendConstants = {};
 	bool _graphicsPipelineBoundForEncoder = false;
 	bool _graphicsResourcesBoundForEncoder = false;
 	bool _graphicsViewportScissorAppliedForEncoder = false;
+	bool _graphicsBlendConstantsAppliedForEncoder = false;
+	bool _hasDynamicBlendConstants = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
 };

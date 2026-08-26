@@ -515,6 +515,10 @@ void MVKCmdSetBlendConstants::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::BlendConstants)._renderState.blendConstants = _value;
 }
 
+bool MVKCmdSetBlendConstants::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setBlendConstants(_value.float32);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdSetDepthTestEnable

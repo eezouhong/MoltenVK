@@ -151,6 +151,7 @@ public:
 								 uint32_t stencilWriteMask) = 0;
 	virtual bool setStencilReference(VkStencilFaceFlags faceMask,
 								 uint32_t stencilReference) = 0;
+	virtual bool setBlendConstants(const float* blendConstants) = 0;
 	virtual bool bindVertexBuffers(uint32_t firstBinding,
 							   uint32_t bindingCount,
 							   const MVKVertexMTLBufferBinding* bindings) = 0;

@@ -1422,6 +1422,7 @@ int main() {
                                              uint32_t dynamicScissorCount,
                                              bool setInactiveStencilState,
                                              bool setInactiveDepthBias,
+                                             bool setActiveBlendConstants,
                                              const char* operation) {
             VkCommandBuffer prepare = beginCommandBuffer(device, commandPool);
             imageBarrier(prepare, renderTarget.image,
@@ -1448,6 +1449,10 @@ int main() {
             }
             if (setInactiveDepthBias) {
                 vkCmdSetDepthBias(render, 7.0f, 3.0f, 5.0f);
+            }
+            if (setActiveBlendConstants) {
+                const float blendConstants[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                vkCmdSetBlendConstants(render, blendConstants);
             }
             vkCmdDraw(render, 3, 1, 0, 0);
             vkCmdEndRendering(render);
@@ -1492,12 +1497,12 @@ int main() {
         VkViewport halfViewport = viewport;
         halfViewport.width = static_cast<float>(kImageWidth / 2);
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  &halfViewport, 1, &scissor, 1, false, false,
+                                  &halfViewport, 1, &scissor, 1, false, false, false,
                                   "vkQueueSubmit(dynamic viewport)");
         VkRect2D halfScissor = scissor;
         halfScissor.extent.width = kImageWidth / 2;
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  &viewport, 1, &halfScissor, 1, false, false,
+                                  &viewport, 1, &halfScissor, 1, false, false, false,
                                   "vkQueueSubmit(dynamic scissor)");
         std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
 
@@ -1514,11 +1519,41 @@ int main() {
                                   static_cast<uint32_t>(multiViewports.size()),
                                   multiScissors.data(),
                                   static_cast<uint32_t>(multiScissors.size()),
-                                  false, false,
+                                  false, false, false,
                                   "vkQueueSubmit(multi viewport/scissor)");
         std::cout << "MULTI_VIEWPORT_SCISSOR_OK" << std::endl;
         viewportState.viewportCount = 1;
         viewportState.scissorCount = 1;
+
+        std::array<VkDynamicState, 3> activeBlendDynamicStates{{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+        }};
+        dynamicViewportScissorState.dynamicStateCount =
+            static_cast<uint32_t>(activeBlendDynamicStates.size());
+        dynamicViewportScissorState.pDynamicStates = activeBlendDynamicStates.data();
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR;
+        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        VkPipeline activeBlendConstantsPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &activeBlendConstantsPipeline),
+              "vkCreateGraphicsPipelines(active blend constants)");
+        runDynamicViewportScissor(activeBlendConstantsPipeline,
+                                  &viewport, 1, &halfScissor, 1,
+                                  false, false, true,
+                                  "vkQueueSubmit(active blend constants)");
+        std::cout << "ACTIVE_BLEND_CONSTANTS_OK" << std::endl;
+        blendAttachment = {};
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                         VK_COLOR_COMPONENT_G_BIT |
+                                         VK_COLOR_COMPONENT_B_BIT |
+                                         VK_COLOR_COMPONENT_A_BIT;
 
         std::array<VkDynamicState, 5> inactiveStencilDynamicStates{{
             VK_DYNAMIC_STATE_VIEWPORT,
@@ -1536,7 +1571,7 @@ int main() {
                                         nullptr, &inactiveStencilDynamicPipeline),
               "vkCreateGraphicsPipelines(inactive dynamic stencil)");
         runDynamicViewportScissor(inactiveStencilDynamicPipeline,
-                                  &viewport, 1, &halfScissor, 1, true, false,
+                                  &viewport, 1, &halfScissor, 1, true, false, false,
                                   "vkQueueSubmit(inactive dynamic stencil)");
         std::cout << "INACTIVE_STENCIL_DYNAMIC_OK" << std::endl;
 
@@ -1554,7 +1589,7 @@ int main() {
                                         nullptr, &inactiveDepthBiasDynamicPipeline),
               "vkCreateGraphicsPipelines(inactive dynamic depth bias)");
         runDynamicViewportScissor(inactiveDepthBiasDynamicPipeline,
-                                  &viewport, 1, &halfScissor, 1, false, true,
+                                  &viewport, 1, &halfScissor, 1, false, true, false,
                                   "vkQueueSubmit(inactive dynamic depth bias)");
         std::cout << "INACTIVE_DEPTH_BIAS_DYNAMIC_OK" << std::endl;
 
@@ -1860,6 +1895,7 @@ int main() {
         depthTarget.destroy();
         vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);
         vkDestroyPipeline(device, multiViewportScissorPipeline, nullptr);
+        vkDestroyPipeline(device, activeBlendConstantsPipeline, nullptr);
         vkDestroyPipeline(device, inactiveStencilDynamicPipeline, nullptr);
         vkDestroyPipeline(device, inactiveDepthBiasDynamicPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);

@@ -429,8 +429,13 @@ def main() -> int:
     )
     require(
         pipeline_mm,
-        r"kMetal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors",
+        r"kMetal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors[\s\S]*?BlendConstants",
         "the supported Metal 4 dynamic-state set is incomplete",
+    )
+    require(
+        rendering_h + rendering_mm + queue_mm,
+        r"MVKCmdSetBlendConstants[\s\S]*?encodeMetal4[\s\S]*?setBlendConstants[\s\S]*?setBlendColorRed:[\s\S]*?green:[\s\S]*?blue:[\s\S]*?alpha:",
+        "dynamic blend constants are not preserved through Metal 4 draw encoding",
     )
     require(
         rendering_h + queue_mm,

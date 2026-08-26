@@ -1866,6 +1866,146 @@ int main() {
         validateSolidColor(device, classicMrtReadback, {0, 0, 255, 255});
         std::cout << "CLASSIC_MRT_RENDER_OK" << std::endl;
 
+        // A classic render pass may carry a stencil attachment even when the
+        // pipeline cannot read or write stencil. Metal still requires the
+        // attachment format and texture to match the render pipeline state.
+        Image classicStencilTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight,
+            VK_FORMAT_D32_SFLOAT_S8_UINT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        std::array<VkAttachmentDescription, 2> classicStencilDescriptions{};
+        classicStencilDescriptions[0].format = renderTarget.format;
+        classicStencilDescriptions[0].samples = VK_SAMPLE_COUNT_1_BIT;
+        classicStencilDescriptions[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        classicStencilDescriptions[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        classicStencilDescriptions[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        classicStencilDescriptions[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        classicStencilDescriptions[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        classicStencilDescriptions[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        classicStencilDescriptions[1].format = classicStencilTarget.format;
+        classicStencilDescriptions[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        classicStencilDescriptions[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        classicStencilDescriptions[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        classicStencilDescriptions[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        classicStencilDescriptions[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+        classicStencilDescriptions[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        classicStencilDescriptions[1].finalLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference classicStencilColorReference{
+            0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+        VkAttachmentReference classicStencilReference{
+            1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkSubpassDescription classicStencilSubpass{};
+        classicStencilSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        classicStencilSubpass.colorAttachmentCount = 1;
+        classicStencilSubpass.pColorAttachments = &classicStencilColorReference;
+        classicStencilSubpass.pDepthStencilAttachment = &classicStencilReference;
+        VkRenderPassCreateInfo classicStencilRenderPassInfo =
+            makeVkStruct<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+        classicStencilRenderPassInfo.attachmentCount =
+            static_cast<uint32_t>(classicStencilDescriptions.size());
+        classicStencilRenderPassInfo.pAttachments = classicStencilDescriptions.data();
+        classicStencilRenderPassInfo.subpassCount = 1;
+        classicStencilRenderPassInfo.pSubpasses = &classicStencilSubpass;
+        VkRenderPass classicStencilRenderPass = VK_NULL_HANDLE;
+        check(vkCreateRenderPass(device, &classicStencilRenderPassInfo, nullptr,
+                                 &classicStencilRenderPass),
+              "vkCreateRenderPass(classic inactive stencil)");
+
+        std::array<VkImageView, 2> classicStencilViews{{
+            renderTarget.view, classicStencilTarget.view,
+        }};
+        VkFramebufferCreateInfo classicStencilFramebufferInfo =
+            makeVkStruct<VkFramebufferCreateInfo>(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+        classicStencilFramebufferInfo.renderPass = classicStencilRenderPass;
+        classicStencilFramebufferInfo.attachmentCount =
+            static_cast<uint32_t>(classicStencilViews.size());
+        classicStencilFramebufferInfo.pAttachments = classicStencilViews.data();
+        classicStencilFramebufferInfo.width = kImageWidth;
+        classicStencilFramebufferInfo.height = kImageHeight;
+        classicStencilFramebufferInfo.layers = 1;
+        VkFramebuffer classicStencilFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &classicStencilFramebufferInfo, nullptr,
+                                  &classicStencilFramebuffer),
+              "vkCreateFramebuffer(classic inactive stencil)");
+
+        VkPipelineDepthStencilStateCreateInfo classicInactiveStencilState =
+            makeVkStruct<VkPipelineDepthStencilStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+        classicInactiveStencilState.stencilTestEnable = VK_FALSE;
+        graphicsInfo.renderPass = classicStencilRenderPass;
+        graphicsInfo.pDepthStencilState = &classicInactiveStencilState;
+        blendState.attachmentCount = 1;
+        blendState.pAttachments = &blendAttachment;
+        VkPipeline classicInactiveStencilPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &classicInactiveStencilPipeline),
+              "vkCreateGraphicsPipelines(classic inactive stencil)");
+
+        VkCommandBuffer prepareClassicStencil = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareClassicStencil, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareClassicStencil);
+        std::array<VkClearValue, 2> classicStencilClears{};
+        classicStencilClears[0].color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        classicStencilClears[1].depthStencil = {1.0f, 73};
+        VkRenderPassBeginInfo classicStencilBegin =
+            makeVkStruct<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+        classicStencilBegin.renderPass = classicStencilRenderPass;
+        classicStencilBegin.framebuffer = classicStencilFramebuffer;
+        classicStencilBegin.renderArea = scissor;
+        classicStencilBegin.clearValueCount =
+            static_cast<uint32_t>(classicStencilClears.size());
+        classicStencilBegin.pClearValues = classicStencilClears.data();
+        VkCommandBuffer classicStencilRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRenderPass(classicStencilRender, &classicStencilBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(classicStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          classicInactiveStencilPipeline);
+        vkCmdDraw(classicStencilRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(classicStencilRender);
+        endCommandBuffer(classicStencilRender);
+
+        VkCommandBuffer finishClassicStencil = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishClassicStencil, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishClassicStencil);
+        VkCommandBuffer readClassicStencil = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readClassicStencil, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readClassicStencil);
+        std::array<VkSubmitInfo, 4> classicStencilSubmits{};
+        for (auto& submit : classicStencilSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        classicStencilSubmits[0].commandBufferCount = 1;
+        classicStencilSubmits[0].pCommandBuffers = &prepareClassicStencil;
+        classicStencilSubmits[1].commandBufferCount = 1;
+        classicStencilSubmits[1].pCommandBuffers = &classicStencilRender;
+        classicStencilSubmits[2].commandBufferCount = 1;
+        classicStencilSubmits[2].pCommandBuffers = &finishClassicStencil;
+        classicStencilSubmits[3].commandBufferCount = 1;
+        classicStencilSubmits[3].pCommandBuffers = &readClassicStencil;
+        VkFence classicStencilFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(classicStencilSubmits.size()),
+                            classicStencilSubmits.data(), classicStencilFence),
+              "vkQueueSubmit(classic inactive stencil sequence)");
+        waitFence(device, classicStencilFence);
+        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        std::cout << "CLASSIC_INACTIVE_STENCIL_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1949,6 +2089,11 @@ int main() {
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
         vkDestroyFence(device, classicFence, nullptr);
+        vkDestroyFence(device, classicStencilFence, nullptr);
+        vkDestroyPipeline(device, classicInactiveStencilPipeline, nullptr);
+        vkDestroyFramebuffer(device, classicStencilFramebuffer, nullptr);
+        vkDestroyRenderPass(device, classicStencilRenderPass, nullptr);
+        classicStencilTarget.destroy();
         vkDestroyPipeline(device, classicPipeline, nullptr);
         vkDestroyFramebuffer(device, classicFramebuffer, nullptr);
         vkDestroyRenderPass(device, classicRenderPass, nullptr);

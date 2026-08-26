@@ -73,8 +73,7 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 		!subpass->isMultiview() &&
 		subpass->getSampleCount() == VK_SAMPLE_COUNT_1_BIT &&
 		subpass->getColorAttachmentCount() > 0 &&
-		subpass->getColorAttachmentCount() <= kMVKMaxColorAttachmentCount &&
-		!subpass->isStencilAttachmentUsed();
+		subpass->getColorAttachmentCount() <= kMVKMaxColorAttachmentCount;
 	if (_supportsMetal4Encoding) {
 		bool hasUsedColorAttachment = false;
 		for (uint32_t colorIndex = 0;

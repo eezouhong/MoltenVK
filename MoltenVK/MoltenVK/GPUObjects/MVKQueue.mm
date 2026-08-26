@@ -731,10 +731,14 @@ public:
 		const auto& stateData = pipeline->getStaticStateData();
 		MTLDepthStencilDescriptor* depthStencilDescriptor =
 			[MTLDepthStencilDescriptor new];
+		bool depthTestEnabled =
+			stateData.enable.has(MVKRenderStateEnableFlag::DepthTest);
 		depthStencilDescriptor.depthCompareFunction =
-			(MTLCompareFunction)stateData.depthStencil.depthCompareFunction;
+			depthTestEnabled
+				? (MTLCompareFunction)stateData.depthStencil.depthCompareFunction
+				: MTLCompareFunctionAlways;
 		depthStencilDescriptor.depthWriteEnabled =
-			stateData.depthStencil.depthWriteEnabled;
+			depthTestEnabled && stateData.depthStencil.depthWriteEnabled;
 		id<MTLDepthStencilState> depthStencilState =
 			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
 		[depthStencilDescriptor release];
@@ -1158,6 +1162,7 @@ public:
 		_currentDepthFormat = renderingInfo.pDepthAttachment
 			? depthIt->second.format
 			: VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = firstColorBinding->width;
 		_currentRenderHeight = firstColorBinding->height;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1181,8 +1186,7 @@ public:
 		}
 		MVKRenderSubpass* subpass = renderPass->getSubpass(0);
 		if (!subpass || subpass->getColorAttachmentCount() == 0 ||
-			subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount ||
-			subpass->isStencilAttachmentUsed()) {
+			subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
 			return false;
 		}
 		bool hasUsedColorAttachment = false;
@@ -1216,6 +1220,9 @@ public:
 		if (subpass->isDepthAttachmentUsed()) {
 			descriptor.depthAttachment = legacyDescriptor.depthAttachment;
 		}
+		if (subpass->isStencilAttachmentUsed()) {
+			descriptor.stencilAttachment = legacyDescriptor.stencilAttachment;
+		}
 		descriptor.renderTargetWidth = renderArea.extent.width;
 		descriptor.renderTargetHeight = renderArea.extent.height;
 		descriptor.renderTargetArrayLength = 1;
@@ -1240,6 +1247,9 @@ public:
 		}
 		_currentDepthFormat = subpass->isDepthAttachmentUsed()
 			? subpass->getDepthFormat()
+			: VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = subpass->isStencilAttachmentUsed()
+			? subpass->getStencilFormat()
 			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = extent.width;
 		_currentRenderHeight = extent.height;
@@ -1417,6 +1427,7 @@ public:
 		_boundComputePipeline = nullptr;
 		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1500,6 +1511,7 @@ private:
 		_renderEncoder = nil;
 		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1544,7 +1556,8 @@ private:
 		if (it == _graphicsPipelines.end() ||
 			_boundGraphicsPipeline->getMetal4ColorAttachmentCount() !=
 				_currentColorAttachmentCount ||
-			_boundGraphicsPipeline->getMetal4DepthAttachmentFormat() != _currentDepthFormat) {
+			_boundGraphicsPipeline->getMetal4DepthAttachmentFormat() != _currentDepthFormat ||
+			_boundGraphicsPipeline->getMetal4StencilAttachmentFormat() != _currentStencilFormat) {
 			return false;
 		}
 		for (uint32_t colorIndex = 0;
@@ -1719,6 +1732,7 @@ private:
 	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
 	uint32_t _currentColorAttachmentCount = 0;
 	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _currentStencilFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
 	array<VkViewport, kMVKMaxViewportScissorCount> _dynamicViewports = {};

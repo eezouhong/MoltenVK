@@ -455,6 +455,9 @@ public:
 	/** Returns the optional depth format accepted by the strict Metal 4 render slice. */
 	VkFormat getMetal4DepthAttachmentFormat() const { return _metal4DepthAttachmentFormat; }
 
+	/** Returns the optional stencil format accepted by the strict Metal 4 render slice. */
+	VkFormat getMetal4StencilAttachmentFormat() const { return _metal4StencilAttachmentFormat; }
+
 	/** Returns the Metal vertex buffer index to use for the specified vertex attribute binding number.  */
 	uint32_t getMetalBufferIndexForVertexAttributeBinding(uint32_t binding) { return _device->getMetalBufferIndexForVertexAttributeBinding(binding); }
 
@@ -599,6 +602,7 @@ protected:
 	VkFormat _metal4ColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
 	uint32_t _metal4ColorAttachmentCount = 0;
 	VkFormat _metal4DepthAttachmentFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _metal4StencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 
 

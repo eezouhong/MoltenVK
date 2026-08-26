@@ -3188,12 +3188,22 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	const auto* pRS = pCreateInfo->pRasterizationState;
 	const auto* pMS = pCreateInfo->pMultisampleState;
 	const auto* pVP = pCreateInfo->pViewportState;
+	bool hasActiveStencilState =
+		_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) ||
+		_staticStateData.depthStencil.stencilTestEnabled;
+	bool hasSupportedClassicStencilAttachment =
+		pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
+		pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+		!hasActiveStencilState &&
+		getPixelFormats()->isStencilFormat(
+			getPixelFormats()->getMTLPixelFormat(pRendInfo->stencilAttachmentFormat));
 	bool hasSupportedColorsWithOptionalDepth =
 		pRendInfo && pRendInfo->viewMask == 0 &&
 		pRendInfo->colorAttachmentCount > 0 &&
 		pRendInfo->colorAttachmentCount <= kMVKMaxColorAttachmentCount &&
 		pRendInfo->pColorAttachmentFormats &&
-		pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED;
+		(pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED ||
+		 hasSupportedClassicStencilAttachment);
 	bool hasAnyColorAttachment = false;
 	if (hasSupportedColorsWithOptionalDepth) {
 		for (uint32_t colorIndex = 0;
@@ -3219,7 +3229,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		_translatedVertexBindings.empty() && _zeroDivisorVertexBindings.empty();
 	bool hasSupportedDepthFormat = pRendInfo &&
 		(pRendInfo->depthAttachmentFormat == VK_FORMAT_UNDEFINED ||
-		 !getPixelFormats()->isStencilFormat(
+		 getPixelFormats()->isDepthFormat(
 			 getPixelFormats()->getMTLPixelFormat(pRendInfo->depthAttachmentFormat)));
 	bool needsDepthAttachment =
 		_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthTest) ||
@@ -3227,9 +3237,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasSupportedDepthState = hasSupportedDepthFormat &&
 		(!needsDepthAttachment ||
 		 pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED);
-	bool hasActiveStencilState =
-		_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) ||
-		_staticStateData.depthStencil.stencilTestEnabled;
 	bool hasUnsupportedDynamicState =
 		!_dynamicStateFlags.removingAll(kMetal4SupportedDynamicState).empty();
 	bool hasDynamicViewport =
@@ -3277,6 +3284,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 				pRendInfo->pColorAttachmentFormats[colorIndex];
 		}
 		_metal4DepthAttachmentFormat = pRendInfo->depthAttachmentFormat;
+		_metal4StencilAttachmentFormat = pRendInfo->stencilAttachmentFormat;
 		_metal4RenderExecutionUnsupportedReason = nullptr;
 	} else if (hasVertexFragmentStages &&
 			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
@@ -3291,7 +3299,8 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
-			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
+			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+			   (hasActiveStencilState || !hasSupportedClassicStencilAttachment)) {
 		_metal4RenderExecutionUnsupportedReason =
 			hasActiveStencilState
 				? "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_active"

@@ -757,6 +757,21 @@ def main() -> int:
             "classic render-pass stencil telemetry does not distinguish active stencil testing from an inert attachment",
         ),
         (
+            pipeline_h + pipeline_mm,
+            r"getMetal4StencilAttachmentFormat[\s\S]*?_metal4StencilAttachmentFormat[\s\S]*?hasSupportedClassicStencilAttachment",
+            "graphics pipelines do not retain a fail-closed classic inactive-stencil format contract",
+        ),
+        (
+            queue_mm,
+            r"descriptor\.stencilAttachment\s*=\s*legacyDescriptor\.stencilAttachment[\s\S]*?_currentStencilFormat[\s\S]*?getMetal4StencilAttachmentFormat",
+            "classic inactive-stencil render passes are not bound and format-validated on the Metal 4 encoder",
+        ),
+        (
+            queue_mm,
+            r"depthTestEnabled[\s\S]*?MVKRenderStateEnableFlag::DepthTest[\s\S]*?MTLCompareFunctionAlways[\s\S]*?depthWriteEnabled\s*=\s*depthTestEnabled",
+            "Metal 4 does not neutralize depth compare and writes when Vulkan depth testing is disabled",
+        ),
+        (
             pipeline_mm,
             r"dynamic_viewport_scissor[\s\S]*?dynamic_depth_stencil[\s\S]*?dynamic_rasterization[\s\S]*?dynamic_topology[\s\S]*?dynamic_color_blend[\s\S]*?dynamic_sampling[\s\S]*?dynamic_tessellation[\s\S]*?dynamic_other",
             "dynamic-state blockers are not split into actionable capability groups",
@@ -767,6 +782,11 @@ def main() -> int:
         pipeline_mm,
         r"attachment_render_pass_simple",
         "supported single-color classic render passes are still mislabeled as attachment blockers",
+    )
+    reject(
+        rendering_mm,
+        r"_supportsMetal4Encoding\s*=\s*subpass[\s\S]*?!subpass->isStencilAttachmentUsed\(\)",
+        "classic render commands still reject an inert stencil attachment before pipeline eligibility can fail closed",
     )
     reject(
         pipeline_mm,

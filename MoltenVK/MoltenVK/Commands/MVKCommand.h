@@ -110,10 +110,17 @@ public:
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return nullptr; }
 
-	MVKCommandTypePool(bool isPooling = true) : MVKObjectPool<T>(isPooling) {}
+	MVKCommandTypePool(bool isPooling = true, const char* typeName = "MVKCommand") :
+		MVKObjectPool<T>(isPooling), _typeName(typeName) {}
 
 protected:
-	T* newObject() override { return new T(); }
+	T* newObject() override {
+		T* command = new T();
+		command->setMetal4CommandTypeName(_typeName);
+		return command;
+	}
+
+	const char* _typeName;
 
 };
 
@@ -139,6 +146,14 @@ public:
 	/** Encodes this command on the specified command encoder. */
 	virtual void encode(MVKCommandEncoder* cmdEncoder) = 0;
 
+	/** Returns the stable pooled command type used by bounded Metal 4 diagnostics. */
+	const char* getMetal4CommandTypeName() const { return _metal4CommandTypeName; }
+
+	/** Assigns the macro-generated pooled command type once at object construction. */
+	void setMetal4CommandTypeName(const char* typeName) {
+		_metal4CommandTypeName = typeName ? typeName : "MVKCommand";
+	}
+
 	/**
 	 * Returns whether this command can be materialized by the current Metal 4
 	 * backend. Commands are unsupported unless they explicitly opt in.
@@ -160,6 +175,7 @@ public:
 
 protected:
 	friend MVKCommandBuffer;
+	const char* _metal4CommandTypeName = "MVKCommand";
 
 	// Returns the command type pool used by this command, from the command pool.
 	// This function is overridden in each concrete subclass declaration, but the implementation of
@@ -184,4 +200,3 @@ public:
 protected:
 	Tv _value;
 };
-

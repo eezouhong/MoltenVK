@@ -301,7 +301,8 @@ void MVKCommandBuffer::addCommand(MVKCommand* command) {
     if ( !_head ) { _head = command; }
 }
 
-bool MVKCommandBuffer::supportsMetal4Encoding() const {
+bool MVKCommandBuffer::supportsMetal4Encoding(const char** firstUnsupportedCommand) const {
+	if (firstUnsupportedCommand) { *firstUnsupportedCommand = nullptr; }
 	// Secondary command inheritance, prefilling, and simultaneous-use require
 	// additional materialization ownership that is outside the first usable
 	// transfer slice. A command count without a retained list means immediate or
@@ -310,11 +311,22 @@ bool MVKCommandBuffer::supportsMetal4Encoding() const {
 		_supportsConcurrentExecution ||
 		_prefilledMTLCmdBuffer ||
 		(_commandCount > 0 && !_head)) {
+		if (firstUnsupportedCommand) {
+			*firstUnsupportedCommand = _isSecondary ? "secondary_command_buffer" :
+				_supportsConcurrentExecution ? "simultaneous_use_command_buffer" :
+				_prefilledMTLCmdBuffer ? "prefilled_command_buffer" :
+				"unretained_command_stream";
+		}
 		return false;
 	}
 
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->supportsMetal4Encoding()) { return false; }
+		if (!command->supportsMetal4Encoding()) {
+			if (firstUnsupportedCommand) {
+				*firstUnsupportedCommand = command->getMetal4CommandTypeName();
+			}
+			return false;
+		}
 	}
 	return true;
 }

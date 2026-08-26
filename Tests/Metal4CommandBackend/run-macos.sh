@@ -13,7 +13,7 @@ print_diagnostics() {
   local status=$?
   if [[ ${status} -ne 0 ]]; then
     echo "Metal 4 Phase 1C E2E failed with status ${status}" >&2
-    for log in "${BUILD_DIR}/compile.log" "${BUILD_DIR}/legacy.log" "${BUILD_DIR}/metal4.log"; do
+    for log in "${BUILD_DIR}/compile.log" "${BUILD_DIR}/legacy.log" "${BUILD_DIR}/metal4.log" "${BUILD_DIR}/metal4-single-queue.log"; do
       if [[ -f "${log}" ]]; then
         echo "===== ${log} =====" >&2
         cat "${log}" >&2
@@ -61,9 +61,9 @@ xcrun --sdk macosx clang++ \
   >"${BUILD_DIR}/compile.log" 2>&1
 
 export MVK_CONFIG_LOG_LEVEL=3
-export MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=2
 export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=0
 
+MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=2 \
 MVK_CONFIG_METAL4_COMMAND_BACKEND=0 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
   >"${BUILD_DIR}/legacy.log" 2>&1
@@ -78,6 +78,7 @@ if grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "$
   exit 1
 fi
 
+MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=2 \
 MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
 MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
@@ -97,5 +98,20 @@ grep -Eq 'render_passes=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'draws=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'barriers=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 
+MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0 \
+MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
+MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
+  "${BUILD_DIR}/metal4-transfer-e2e" \
+  >"${BUILD_DIR}/metal4-single-queue.log" 2>&1
+
+grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4-single-queue.log"
+if grep -q 'unsupported_semaphore' "${BUILD_DIR}/metal4-single-queue.log"; then
+  echo "Single-queue semaphore unexpectedly forced Metal 4 fallback" >&2
+  exit 1
+fi
+
 cat "${BUILD_DIR}/legacy.log"
 cat "${BUILD_DIR}/metal4.log"
+cat "${BUILD_DIR}/metal4-single-queue.log"

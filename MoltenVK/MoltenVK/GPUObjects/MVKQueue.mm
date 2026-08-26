@@ -28,6 +28,7 @@
 #include "MVKImage.h"
 #include "MVKPipeline.h"
 #include "mvk_datatypes.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -38,6 +39,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 
 using namespace std;
 
@@ -49,6 +51,7 @@ static constexpr NSUInteger kMetal4CommandResidencyInitialCapacity = 256;
 static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
 static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
 static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
+static constexpr size_t kMetal4UnsupportedCommandCapacity = 64;
 
 enum class MVKMetal4FallbackReason : uint8_t {
 	UnsupportedSemaphore = 0,
@@ -82,6 +85,8 @@ static const char* mvkMetal4FallbackReasonName(MVKMetal4FallbackReason reason) {
 struct MVKMetal4FallbackTelemetry {
 	uint64_t totalCount = 0;
 	uint64_t reasonCount = 0;
+	const char* unsupportedCommand = "none";
+	uint64_t unsupportedCommandCount = 0;
 };
 
 /**
@@ -91,6 +96,11 @@ struct MVKMetal4FallbackTelemetry {
  * callback.
  */
 struct MVKMetal4CommandQueueState {
+	struct UnsupportedCommandEntry {
+		const char* name = nullptr;
+		uint64_t count = 0;
+	};
+
 	struct AllocatorSlot {
 		id<MTL4CommandAllocator> allocator = nil;
 		uint32_t inFlightCount = 0;
@@ -105,6 +115,7 @@ struct MVKMetal4CommandQueueState {
 	};
 
 	mutex lock;
+	mutex unsupportedCommandLock;
 	condition_variable probeReady;
 	vector<AllocatorSlot> allocators;
 	size_t nextAllocatorIndex = 0;
@@ -125,6 +136,9 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> realSubmissionCount = 0;
 	atomic<uint64_t> fallbackCount = 0;
 	array<atomic<uint64_t>, static_cast<size_t>(MVKMetal4FallbackReason::Count)> fallbackReasonCounts;
+	array<UnsupportedCommandEntry, kMetal4UnsupportedCommandCapacity> unsupportedCommands;
+	size_t unsupportedCommandTypeCount = 0;
+	uint64_t unsupportedCommandOverflowCount = 0;
 	atomic<uint64_t> failureCount = 0;
 	atomic<uint64_t> bufferCopyCount = 0;
 	atomic<uint64_t> bufferFillCount = 0;
@@ -386,12 +400,60 @@ struct MVKMetal4CommandQueueState {
 		return attemptedSubmissionCount.fetch_add(1, memory_order_relaxed) + 1;
 	}
 	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
-	MVKMetal4FallbackTelemetry recordFallback(MVKMetal4FallbackReason reason) {
+	MVKMetal4FallbackTelemetry recordUnsupportedCommand(const char* commandName) {
+		const char* stableName = commandName && commandName[0] ? commandName : "unknown_command";
+		lock_guard<mutex> guard(unsupportedCommandLock);
+		for (size_t idx = 0; idx < unsupportedCommandTypeCount; idx++) {
+			auto& entry = unsupportedCommands[idx];
+			if (entry.name == stableName || (entry.name && !strcmp(entry.name, stableName))) {
+				entry.count++;
+				return { 0, 0, entry.name, entry.count };
+			}
+		}
+		if (unsupportedCommandTypeCount < unsupportedCommands.size()) {
+			auto& entry = unsupportedCommands[unsupportedCommandTypeCount++];
+			entry.name = stableName;
+			entry.count = 1;
+			return { 0, 0, entry.name, entry.count };
+		}
+		unsupportedCommandOverflowCount++;
+		return { 0, 0, "other_unsupported_command", unsupportedCommandOverflowCount };
+	}
+
+	string unsupportedCommandSummary() {
+		lock_guard<mutex> guard(unsupportedCommandLock);
+		vector<UnsupportedCommandEntry> entries(
+			unsupportedCommands.begin(),
+			unsupportedCommands.begin() + unsupportedCommandTypeCount);
+		sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+			return left.count > right.count;
+		});
+		string summary;
+		size_t emitted = 0;
+		for (const auto& entry : entries) {
+			if (!entry.name || emitted == 8) { break; }
+			if (!summary.empty()) { summary += ","; }
+			summary += entry.name;
+			summary += ":";
+			summary += to_string(entry.count);
+			emitted++;
+		}
+		if (unsupportedCommandOverflowCount) {
+			if (!summary.empty()) { summary += ","; }
+			summary += "other:" + to_string(unsupportedCommandOverflowCount);
+		}
+		return summary.empty() ? "none" : summary;
+	}
+
+	MVKMetal4FallbackTelemetry recordFallback(MVKMetal4FallbackReason reason,
+											 const char* unsupportedCommand = nullptr) {
 		auto index = static_cast<size_t>(reason);
-		return {
-			fallbackCount.fetch_add(1, memory_order_relaxed) + 1,
-			fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1,
-		};
+		MVKMetal4FallbackTelemetry telemetry = unsupportedCommand
+			? recordUnsupportedCommand(unsupportedCommand)
+			: MVKMetal4FallbackTelemetry{};
+		telemetry.totalCount = fallbackCount.fetch_add(1, memory_order_relaxed) + 1;
+		telemetry.reasonCount = fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1;
+		return telemetry;
 	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
@@ -1663,9 +1725,10 @@ MVKQueue::~MVKQueue() {
 	_device->removeResidencySet(_mtlQueue);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (_metal4CommandState) {
+		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, unsupported_commands=%s.",
 			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
@@ -1677,7 +1740,8 @@ MVKQueue::~MVKQueue() {
 			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
-			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed));
+			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed),
+			unsupportedCommandSummary.c_str());
 		_metal4CommandState->shutdown();
 		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
 		if (_mtl4Queue && residencySet) { [_mtl4Queue removeResidencySet:residencySet]; }
@@ -1877,21 +1941,25 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	}
 
 	state->recordSubmissionAttempt();
-	auto recordFallback = [&](MVKMetal4FallbackReason reason) {
-		MVKMetal4FallbackTelemetry fallback = state->recordFallback(reason);
+	auto recordFallback = [&](MVKMetal4FallbackReason reason,
+								 const char* unsupportedCommand = nullptr) {
+		MVKMetal4FallbackTelemetry fallback = state->recordFallback(reason, unsupportedCommand);
 		bool isPowerOfTwo =
 			fallback.totalCount != 0 &&
 			(fallback.totalCount & (fallback.totalCount - 1)) == 0;
-		if (fallback.reasonCount == 1 || isPowerOfTwo) {
+		bool isFirstUnsupportedCommand = fallback.unsupportedCommandCount == 1;
+		if (fallback.reasonCount == 1 || isPowerOfTwo || isFirstUnsupportedCommand) {
 			_queue->reportMessage(
 				MVK_CONFIG_LOG_LEVEL_INFO,
-				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu.",
+				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu, latest_unsupported_command=%s, latest_unsupported_command_count=%llu.",
 				(unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)state->realSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)fallback.totalCount,
 				(unsigned long long)state->failureCount.load(memory_order_relaxed),
 				mvkMetal4FallbackReasonName(reason),
-				(unsigned long long)fallback.reasonCount);
+				(unsigned long long)fallback.reasonCount,
+				fallback.unsupportedCommand,
+				(unsigned long long)fallback.unsupportedCommandCount);
 		}
 	};
 
@@ -1899,8 +1967,10 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		recordFallback(MVKMetal4FallbackReason::UnsupportedSemaphore);
 		return VK_SUCCESS;
 	}
-	if (!supportsMetal4CommandBuffers()) {
-		recordFallback(MVKMetal4FallbackReason::UnsupportedCommandBuffer);
+	const char* firstUnsupportedCommand = nullptr;
+	if (!supportsMetal4CommandBuffers(&firstUnsupportedCommand)) {
+		recordFallback(MVKMetal4FallbackReason::UnsupportedCommandBuffer,
+					   firstUnsupportedCommand);
 		return VK_SUCCESS;
 	}
 
@@ -2382,9 +2452,15 @@ void MVKQueueFullCommandBufferSubmission<N>::submitCommandBuffers() {
 
 
 template <size_t N>
-bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers() const {
+bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers(
+	const char** firstUnsupportedCommand) const {
+	if (firstUnsupportedCommand) { *firstUnsupportedCommand = nullptr; }
 	for (const auto& cbInfo : _cmdBuffers) {
-		if (!cbInfo.commandBuffer || !cbInfo.commandBuffer->supportsMetal4Encoding()) { return false; }
+		if (!cbInfo.commandBuffer) {
+			if (firstUnsupportedCommand) { *firstUnsupportedCommand = "null_command_buffer"; }
+			return false;
+		}
+		if (!cbInfo.commandBuffer->supportsMetal4Encoding(firstUnsupportedCommand)) { return false; }
 	}
 	return true;
 }

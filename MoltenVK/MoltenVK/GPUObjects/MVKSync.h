@@ -230,6 +230,9 @@ public:
 	uint64_t deferSignal() override;
 	void encodeDeferredSignal(id<MTLCommandBuffer> mtlCmdBuff, uint64_t) override;
 	bool isUsingCommandEncoding() override { return false; }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	bool supportsMetal4QueueEncoding() override { return true; }
+#endif
 
 	MVKSemaphoreSingleQueue(MVKDevice* device,
 	                        const VkSemaphoreCreateInfo* pCreateInfo,

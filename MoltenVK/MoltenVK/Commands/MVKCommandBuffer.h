@@ -123,7 +123,7 @@ public:
 	 * Returns whether the complete retained command stream can be materialized
 	 * by the current Metal 4 backend without producing partial Vulkan effects.
 	 */
-	bool supportsMetal4Encoding() const;
+	bool supportsMetal4Encoding(const char** firstUnsupportedCommand = nullptr) const;
 
 	/** Resolves every Metal resource used by the retained command stream. */
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder);

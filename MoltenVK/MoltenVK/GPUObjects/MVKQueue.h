@@ -315,7 +315,7 @@ protected:
 	bool supportsMetal4Semaphores() const;
 	void finish() override;
 	virtual void submitCommandBuffers() {}
-	virtual bool supportsMetal4CommandBuffers() const { return true; }
+	virtual bool supportsMetal4CommandBuffers(const char**) const { return true; }
 	virtual bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
 	virtual bool beginMetal4CommandBuffers() { return true; }
 	virtual void endMetal4CommandBuffers(bool) {}
@@ -351,7 +351,7 @@ public:
 
 protected:
 	void submitCommandBuffers() override;
-	bool supportsMetal4CommandBuffers() const override;
+	bool supportsMetal4CommandBuffers(const char** firstUnsupportedCommand) const override;
 	bool prepareMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
 	bool beginMetal4CommandBuffers() override;
 	void endMetal4CommandBuffers(bool committed) override;

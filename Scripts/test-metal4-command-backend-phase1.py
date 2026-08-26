@@ -39,6 +39,8 @@ def function_body(source: str, start: str, end: str) -> str:
 
 def main() -> int:
     command_h = read("MoltenVK/MoltenVK/Commands/MVKCommand.h")
+    command_pool_h = read("MoltenVK/MoltenVK/Commands/MVKCommandPool.h")
+    command_pool_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandPool.mm")
     command_buffer_h = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h")
     command_buffer_mm = read("MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm")
     transfer_h = read("MoltenVK/MoltenVK/Commands/MVKCmdTransfer.h")
@@ -147,7 +149,7 @@ def main() -> int:
     )
     require(
         execute_metal4,
-        r"supportsMetal4Semaphores\(\)[\s\S]*?supportsMetal4CommandBuffers\(\)[\s\S]*?prepareMetal4CommandBuffers",
+        r"supportsMetal4Semaphores\(\)[\s\S]*?supportsMetal4CommandBuffers\([^)]*\)[\s\S]*?prepareMetal4CommandBuffers",
         "submission support is not classified before Metal 4 encoding",
     )
     require(
@@ -478,6 +480,39 @@ def main() -> int:
         r"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu",
         "final command-backend summary does not include total attempts",
     )
+    for source, pattern, message in (
+        (
+            command_h,
+            r"getMetal4CommandTypeName\(\)\s+const",
+            "commands do not expose stable Metal 4 telemetry identity",
+        ),
+        (
+            command_pool_h + command_pool_mm,
+            r"#cmdType",
+            "macro-generated command pools do not assign stable command type names",
+        ),
+        (
+            command_buffer_h + command_buffer_mm,
+            r"supportsMetal4Encoding\([^)]*firstUnsupportedCommand",
+            "command-buffer preflight does not report the first unsupported command",
+        ),
+        (
+            queue_mm,
+            r"kMetal4UnsupportedCommandCapacity",
+            "unsupported-command telemetry is not explicitly bounded",
+        ),
+        (
+            queue_mm,
+            r"recordUnsupportedCommand",
+            "unsupported-command telemetry is not aggregated",
+        ),
+        (
+            execute_metal4,
+            r"latest_unsupported_command=%s",
+            "live fallback telemetry does not identify the command blocking Metal 4",
+        ),
+    ):
+        require(source, pattern, message)
     reject(
         execute_metal4,
         r"\[options release\];\s*\[options release\];",
@@ -501,17 +536,19 @@ def main() -> int:
         "prefilled legacy command buffers can run before the hybrid ordering wait",
     )
 
-    # Native binary/timeline events and emulated waits are mapped; implicit single-queue semaphores fail closed.
+    # Native binary/timeline events, emulated waits, and the one-Vulkan-queue style
+    # are mapped. The latter relies on the hybrid ordering event that bridges the
+    # independent legacy and Metal 4 queues.
     require(sync_h, r"supportsMetal4QueueEncoding\(\)\s*\{\s*return\s+false", "base semaphore support does not fail closed")
     require(sync_mm, r"MVKSemaphoreMTLEvent::encodeMetal4Wait[\s\S]*?waitForEvent", "binary Metal-event wait is missing")
     require(sync_mm, r"MVKSemaphoreMTLEvent::encodeMetal4Signal[\s\S]*?signalEvent", "binary Metal-event signal is missing")
     require(sync_mm, r"MVKTimelineSemaphoreMTLEvent::encodeMetal4Wait[\s\S]*?waitForEvent", "timeline wait is missing")
     require(sync_mm, r"MVKTimelineSemaphoreMTLEvent::encodeMetal4Signal[\s\S]*?signalEvent", "timeline signal is missing")
     require(sync_mm, r"MVKSemaphoreEmulated::encodeMetal4Wait[\s\S]*?encodeWait\(nil", "emulated semaphore wait is missing")
-    reject(
+    require(
         function_body(sync_h, "class MVKSemaphoreSingleQueue", "#pragma mark -\n#pragma mark MVKSemaphoreMTLEvent"),
         r"supportsMetal4QueueEncoding\(\)\s*override\s*\{\s*return\s+true",
-        "implicit single-queue semaphore was incorrectly accepted across two Metal queues",
+        "single-queue semaphores still reject the hybrid-ordered Metal 4 path",
     )
 
     # Independent Vulkan e2e validates hybrid order, binary/timeline semaphores,
@@ -541,6 +578,11 @@ def main() -> int:
         require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=0", "legacy control run is missing")
     require(runner, r"MVK_CONFIG_METAL4_COMMAND_BACKEND=1", "Metal 4 run is missing")
+    require(
+        runner,
+        r"MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0[\s\S]*?MVK_CONFIG_METAL4_COMMAND_BACKEND=1",
+        "Metal 4 E2E does not exercise MeloNX's single-queue semaphore style",
+    )
     require(runner, r"Executed first Vulkan submission on the Metal 4 transfer backend", "runtime path proof is missing")
     for counter in (
         "image_copies",

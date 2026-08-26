@@ -647,7 +647,7 @@ def main() -> int:
         ),
         (
             pipeline_h + pipeline_cmd_mm + pipeline_mm,
-            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?depth_stencil_or_mrt[\s\S]*?dynamic_state",
+            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state[\s\S]*?dynamic_state",
             "graphics-pipeline blockers are not classified before expanding the render backend",
         ),
     ):

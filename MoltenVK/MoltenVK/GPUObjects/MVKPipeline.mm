@@ -3120,9 +3120,31 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (!hasSupportedVertexInput) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
-	} else if (!hasOneDynamicColorWithOptionalDepth) {
+	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE) {
 		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:depth_stencil_or_mrt";
+			"MVKCmdBindGraphicsPipeline:attachment_render_pass";
+	} else if (!pRendInfo) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_rendering_info";
+	} else if (pRendInfo->viewMask != 0) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_multiview";
+	} else if (pRendInfo->colorAttachmentCount != 1) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_color_count";
+	} else if (!pRendInfo->pColorAttachmentFormats ||
+			   pRendInfo->pColorAttachmentFormats[0] == VK_FORMAT_UNDEFINED) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_color_format";
+	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_stencil";
+	} else if (!hasSupportedDepthFormat) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_depth_format";
+	} else if (!hasSupportedDepthState) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_depth_state";
 	} else if (hasUnsupportedDynamicState) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:dynamic_state";

@@ -1413,6 +1413,7 @@ int main() {
                                              const VkViewport& dynamicViewport,
                                              const VkRect2D& dynamicScissor,
                                              bool setInactiveStencilState,
+                                             bool setInactiveDepthBias,
                                              const char* operation) {
             VkCommandBuffer prepare = beginCommandBuffer(device, commandPool);
             imageBarrier(prepare, renderTarget.image,
@@ -1436,6 +1437,9 @@ int main() {
                 vkCmdSetStencilCompareMask(render, VK_STENCIL_FACE_BACK_BIT, 0x78);
                 vkCmdSetStencilWriteMask(render, VK_STENCIL_FACE_BACK_BIT, 0x9a);
                 vkCmdSetStencilReference(render, VK_STENCIL_FACE_BACK_BIT, 0xbc);
+            }
+            if (setInactiveDepthBias) {
+                vkCmdSetDepthBias(render, 7.0f, 3.0f, 5.0f);
             }
             vkCmdDraw(render, 3, 1, 0, 0);
             vkCmdEndRendering(render);
@@ -1480,12 +1484,12 @@ int main() {
         VkViewport halfViewport = viewport;
         halfViewport.width = static_cast<float>(kImageWidth / 2);
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  halfViewport, scissor, false,
+                                  halfViewport, scissor, false, false,
                                   "vkQueueSubmit(dynamic viewport)");
         VkRect2D halfScissor = scissor;
         halfScissor.extent.width = kImageWidth / 2;
         runDynamicViewportScissor(dynamicViewportScissorPipeline,
-                                  viewport, halfScissor, false,
+                                  viewport, halfScissor, false, false,
                                   "vkQueueSubmit(dynamic scissor)");
         std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
 
@@ -1505,9 +1509,27 @@ int main() {
                                         nullptr, &inactiveStencilDynamicPipeline),
               "vkCreateGraphicsPipelines(inactive dynamic stencil)");
         runDynamicViewportScissor(inactiveStencilDynamicPipeline,
-                                  viewport, halfScissor, true,
+                                  viewport, halfScissor, true, false,
                                   "vkQueueSubmit(inactive dynamic stencil)");
         std::cout << "INACTIVE_STENCIL_DYNAMIC_OK" << std::endl;
+
+        std::array<VkDynamicState, 3> inactiveDepthBiasDynamicStates{{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_DEPTH_BIAS,
+        }};
+        dynamicViewportScissorState.dynamicStateCount =
+            static_cast<uint32_t>(inactiveDepthBiasDynamicStates.size());
+        dynamicViewportScissorState.pDynamicStates =
+            inactiveDepthBiasDynamicStates.data();
+        VkPipeline inactiveDepthBiasDynamicPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &inactiveDepthBiasDynamicPipeline),
+              "vkCreateGraphicsPipelines(inactive dynamic depth bias)");
+        runDynamicViewportScissor(inactiveDepthBiasDynamicPipeline,
+                                  viewport, halfScissor, false, true,
+                                  "vkQueueSubmit(inactive dynamic depth bias)");
+        std::cout << "INACTIVE_DEPTH_BIAS_DYNAMIC_OK" << std::endl;
 
         viewportState.pViewports = &viewport;
         viewportState.pScissors = &scissor;
@@ -1811,6 +1833,7 @@ int main() {
         depthTarget.destroy();
         vkDestroyPipeline(device, dynamicViewportScissorPipeline, nullptr);
         vkDestroyPipeline(device, inactiveStencilDynamicPipeline, nullptr);
+        vkDestroyPipeline(device, inactiveDepthBiasDynamicPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);
         vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);

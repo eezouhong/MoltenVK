@@ -403,6 +403,16 @@ def main() -> int:
         "disabled stencil pipelines retain semantically inert dynamic stencil masks",
     )
     require(
+        pipeline_mm,
+        r"DepthBiasEnable[\s\S]*?MVKRenderStateEnableFlag::DepthBias[\s\S]*?needed\.remove\(MVKRenderStateFlag::DepthBias\)",
+        "disabled depth-bias pipelines retain a semantically inert dynamic depth-bias value",
+    )
+    require(
+        rendering_h + rendering_mm,
+        r"MVKCmdSetDepthBias[\s\S]*?supportsMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?return cmdEncoder",
+        "the inert dynamic depth-bias command is not accepted by Metal 4 preflight",
+    )
+    require(
         pipeline_cmd_h + pipeline_cmd_mm,
         r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4RenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
         "eligible graphics-pipeline binding is not materialized",

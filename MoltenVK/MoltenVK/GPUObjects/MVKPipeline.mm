@@ -3080,6 +3080,13 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			MVKRenderStateFlag::StencilReference,
 		});
 	}
+	// A dynamic depth-bias value cannot affect rasterization while depth bias is
+	// statically disabled. Keep the value command out of pipeline eligibility,
+	// but retain DepthBias when its enable state can change dynamically.
+	if (!_dynamicStateFlags.has(MVKRenderStateFlag::DepthBiasEnable) &&
+		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias)) {
+		needed.remove(MVKRenderStateFlag::DepthBias);
+	}
 	if (!_isRasterizingColor || !usesConstantColor(_dynamicStateFlags, pCreateInfo->pColorBlendState))
 		needed.remove(MVKRenderStateFlag::BlendConstants);
 	if (_primitiveTopologyClass == MTLPrimitiveTopologyClassPoint || _primitiveTopologyClass == MTLPrimitiveTopologyClassLine)

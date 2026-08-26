@@ -121,6 +121,30 @@ class OneShotCapture:
             self.token = 0
 
 
+class LazyImportedCacheView:
+    def __init__(self, entries: list[str], repository: set[str] | None = None) -> None:
+        self.deferred = list(entries)
+        self.materialized: set[str] = set()
+        self.repository = repository if repository is not None else set()
+        self.compile_count = 0
+
+    def request(self, key: str, allow_compile: bool = True) -> bool:
+        if key in self.materialized:
+            return True
+        if key in self.repository:
+            self.deferred = [entry for entry in self.deferred if entry != key]
+            self.materialized.add(key)
+            return True
+        if key not in self.deferred or not allow_compile:
+            return False
+
+        self.deferred.remove(key)
+        self.compile_count += 1
+        self.repository.add(key)
+        self.materialized.add(key)
+        return True
+
+
 def effective_async_task_max(
     configured: int,
     device_max: int,
@@ -211,6 +235,32 @@ def test_async_task_ceiling_model() -> None:
     assert effective_async_task_max(3, 4, enabled=False) == 1
 
 
+def test_lazy_imported_library_model() -> None:
+    repository = {"fragment-shared"}
+    view = LazyImportedCacheView(
+        ["vertex-current", "fragment-shared", "vertex-future"],
+        repository,
+    )
+
+    # Importing a Program records its internal libraries without compiling any.
+    assert view.compile_count == 0
+    assert len(view.deferred) == 3
+
+    # A repository hit binds the exact membership without compiling it again.
+    assert view.request("fragment-shared")
+    assert view.compile_count == 0
+
+    # Only the exact library requested by the current Pipeline is materialized.
+    assert view.request("vertex-current")
+    assert view.compile_count == 1
+    assert "vertex-future" in view.deferred
+
+    # FAIL_ON_PIPELINE_COMPILE_REQUIRED must leave future work deferred.
+    assert not view.request("vertex-future", allow_compile=False)
+    assert view.compile_count == 1
+    assert "vertex-future" in view.deferred
+
+
 def test_source_policy() -> None:
     device_h = DEVICE_H.read_text()
     device_mm = DEVICE_MM.read_text()
@@ -290,6 +340,72 @@ def test_source_policy() -> None:
         SHADER_MM,
     )
     assert "getenv(" not in shader_mm[: shader_mm.index("#if MVK_XCODE_26")]
+
+    # Persisted Program blobs remain logical cache views, but their internal
+    # shader-library entries must stay compressed until an exact Pipeline
+    # request needs the matching shader-module/config key.
+    require(shader_h, "struct MVKDeferredShaderLibrary", SHADER_H)
+    require(shader_h, "_deferredShaderLibraries", SHADER_H)
+    require(shader_h, "addDeferredShaderLibrary(", SHADER_H)
+    require(shader_h, "materializeDeferredShaderLibrary(", SHADER_H)
+    require(shader_h, "hasShaderLibrary(", SHADER_H)
+    require(
+        pipeline_mm,
+        "slCache->addDeferredShaderLibrary(",
+        PIPELINE_MM,
+    )
+    require(
+        pipeline_mm,
+        "slCache->supportsDeferredShaderLibraryImport()",
+        PIPELINE_MM,
+    )
+
+    read_start = pipeline_mm.index("void MVKPipelineCache::readData(")
+    read_end = pipeline_mm.index("// Mark the cache as dirty", read_start)
+    read_body = pipeline_mm[read_start:read_end]
+    assert read_body.index("slCache->addDeferredShaderLibrary(") < read_body.index(
+        "slCache->addShaderLibrary("
+    )
+    assert "new MVKShaderLibrary" not in read_body
+
+    get_library_start = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary("
+    )
+    get_library_end = shader_mm.index(
+        "// Finds and returns a shader library", get_library_start
+    )
+    get_library_body = shader_mm[get_library_start:get_library_end]
+    repository_lookup = get_library_body.index(
+        "_repository->acquire(_shaderModuleKey, pShaderConfig)"
+    )
+    deferred_materialization = get_library_body.index(
+        "materializeDeferredShaderLibrary("
+    )
+    source_conversion = get_library_body.index("shaderModule->convert(")
+    assert repository_lookup < deferred_materialization < source_conversion
+
+    materialize_start = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary("
+    )
+    materialize_end = shader_mm.index(
+        "// Adds and returns a new shader library configured from the specified conversion configuration.",
+        materialize_start,
+    )
+    materialize_body = shader_mm[materialize_start:materialize_end]
+    assert "pipeline->shouldFailOnPipelineCompileRequired()" in materialize_body
+    assert materialize_body.index("shouldFailOnPipelineCompileRequired") < materialize_body.index(
+        "new MVKShaderLibrary("
+    )
+    assert "_repository->acquire(_shaderModuleKey, &alignedConfig, candidate)" in materialize_body
+    assert "VkResult priorConfigurationResult = _owner->getConfigurationResult();" in materialize_body
+    assert "if (!candidateResident && priorConfigurationResult == VK_SUCCESS)" in materialize_body
+    assert "_owner->clearConfigurationResult();" in materialize_body
+
+    # Serialization and merge must retain deferred logical membership without
+    # forcing MTLLibrary creation merely to export or combine cache views.
+    require(pipeline_mm, "getDeferredShaderConversionConfig()", PIPELINE_MM)
+    require(pipeline_mm, "getDeferredCompressedMSL()", PIPELINE_MM)
+    require(shader_mm, "other->_deferredShaderLibraries", SHADER_MM)
     require(shader_h, "static MVKShaderLibraryRepository* create(MVKDevice* device);", SHADER_H)
     require(shader_mm, "getSharedShaderLibraryTrimHighWater", SHADER_MM)
     require(shader_h, "size_t _residentTrimHighWater = 0;", SHADER_H)
@@ -579,7 +695,7 @@ def test_source_policy() -> None:
     # retained cold metadata even when the physical MTLLibrary is not resident.
     require(
         pipeline_mm,
-        "getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }",
+        "? getDeferredCompressedMSL()",
         PIPELINE_MM,
     )
 
@@ -777,6 +893,8 @@ def test_source_policy() -> None:
     ]
     assert "if (!_repository) { return false; }" in shader_cache_adoption_body
     assert "new MVKShaderLibrary(*shaderLibrary)" not in shader_cache_adoption_body
+    assert "bool wasDeferred = takeDeferredShaderLibrary(&alignedConfig);" in shader_cache_adoption_body
+    assert "return !wasDeferred;" in shader_cache_adoption_body
 
 
 def main() -> None:
@@ -784,6 +902,7 @@ def main() -> None:
     test_exact_pipeline_contribution_adoption_model()
     test_one_shot_capture_model()
     test_async_task_ceiling_model()
+    test_lazy_imported_library_model()
     test_source_policy()
     print("metal4 shared shader-library repository policy: PASS")
 

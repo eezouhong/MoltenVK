@@ -278,6 +278,12 @@ protected:
 #pragma mark -
 #pragma mark MVKShaderLibraryCache
 
+struct MVKDeferredShaderLibrary {
+	mvk::SPIRVToMSLConversionConfiguration shaderConfig;
+	mvk::SPIRVToMSLConversionResultInfo resultInfo;
+	MVKCompressor<std::string> compressedMSL;
+};
+
 /** Represents a cache of shader libraries for one shader module. */
 class MVKShaderLibraryCache : public MVKBaseDeviceObject {
 
@@ -326,12 +332,26 @@ protected:
 	MVKShaderLibrary* addShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
 									   const MVKCompressor<std::string> compressedMSL);
+	void addDeferredShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+									  const mvk::SPIRVToMSLConversionResultInfo& resultInfo,
+									  const MVKCompressor<std::string> compressedMSL);
+	MVKShaderLibrary* materializeDeferredShaderLibrary(
+		mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+		MVKPipeline* pipeline,
+		VkPipelineCreationFeedback* pShaderFeedback,
+		uint64_t startTime);
+	bool takeDeferredShaderLibrary(
+		mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+		MVKDeferredShaderLibrary* pDeferred = nullptr);
+	bool hasShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration& shaderConfig) const;
+	bool supportsDeferredShaderLibraryImport() const { return _repository != nullptr; }
 	void merge(MVKShaderLibraryCache* other);
 
 	MVKVulkanAPIDeviceObject* _owner;
 	MVKShaderModuleKey _shaderModuleKey;
 	MVKShaderLibraryRepository* _repository;
 	MVKSmallVector<std::pair<mvk::SPIRVToMSLConversionConfiguration, MVKShaderLibrary*>> _shaderLibraries;
+	MVKSmallVector<MVKDeferredShaderLibrary> _deferredShaderLibraries;
 };
 
 

@@ -1230,7 +1230,8 @@ void MVKShaderLibraryCache::accumulateMemoryStatistics(
 
     pStats->estimatedViewHostBytes +=
         sizeof(*this) +
-        (_shaderLibraries.capacity() * sizeof(decltype(_shaderLibraries)::value_type));
+        (_shaderLibraries.capacity() * sizeof(decltype(_shaderLibraries)::value_type)) +
+        (_deferredShaderLibraries.capacity() * sizeof(MVKDeferredShaderLibrary));
     for (const auto& libraryEntry : _shaderLibraries) {
         pStats->logicalShaderLibraryCount++;
         MVKShaderLibraryMemorySnapshot snapshot;
@@ -1243,6 +1244,12 @@ void MVKShaderLibraryCache::accumulateMemoryStatistics(
         pStats->compressedMSLBytes += snapshot.compressedMSLBytes;
         pStats->uncompressedMSLBytes += snapshot.uncompressedMSLBytes;
     }
+	for (const auto& deferred : _deferredShaderLibraries) {
+		pStats->logicalShaderLibraryCount++;
+		pStats->compressedMSLBytes += deferred.compressedMSL._compressed.size();
+		pStats->uncompressedMSLBytes += deferred.compressedMSL._uncompressedSize;
+		pStats->estimatedViewHostBytes += deferred.compressedMSL._compressed.capacity();
+	}
 }
 
 MVKShaderLibraryCache::MVKShaderLibraryCache(
@@ -1264,13 +1271,21 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	if (!shLib && _repository) {
 		shLib = _repository->acquire(_shaderModuleKey, pShaderConfig);
 		if (shLib) {
+			bool wasDeferred = takeDeferredShaderLibrary(pShaderConfig);
 			_shaderLibraries.emplace_back(*pShaderConfig, shLib);
-			wasAdded = true;
+			wasAdded = !wasDeferred;
 			addPerformanceInterval(getPerformanceStats().shaderCompilation.shaderLibraryFromCache, startTime);
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
 		}
+	}
+	if (!shLib && !pipeline->shouldFailOnPipelineCompileRequired()) {
+		shLib = materializeDeferredShaderLibrary(
+			pShaderConfig,
+			pipeline,
+			pShaderFeedback,
+			startTime);
 	}
 	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
@@ -1304,6 +1319,83 @@ MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionC
 		}
 	}
 	return nullptr;
+}
+
+void MVKShaderLibraryCache::addDeferredShaderLibrary(
+	const SPIRVToMSLConversionConfiguration* pShaderConfig,
+	const SPIRVToMSLConversionResultInfo& resultInfo,
+	const MVKCompressor<std::string> compressedMSL) {
+
+	if (!pShaderConfig || hasShaderLibrary(*pShaderConfig)) { return; }
+	_deferredShaderLibraries.push_back({ *pShaderConfig, resultInfo, compressedMSL });
+}
+
+bool MVKShaderLibraryCache::takeDeferredShaderLibrary(
+	SPIRVToMSLConversionConfiguration* pShaderConfig,
+	MVKDeferredShaderLibrary* pDeferred) {
+
+	if (!pShaderConfig) { return false; }
+	for (size_t index = 0; index < _deferredShaderLibraries.size(); index++) {
+		if (!_deferredShaderLibraries[index].shaderConfig.matches(*pShaderConfig)) { continue; }
+
+		MVKDeferredShaderLibrary deferred = std::move(_deferredShaderLibraries[index]);
+		_deferredShaderLibraries.erase(_deferredShaderLibraries.begin() + index);
+		pShaderConfig->alignWith(deferred.shaderConfig);
+		if (pDeferred) { *pDeferred = std::move(deferred); }
+		return true;
+	}
+	return false;
+}
+
+MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(
+	SPIRVToMSLConversionConfiguration* pShaderConfig,
+	MVKPipeline* pipeline,
+	VkPipelineCreationFeedback* pShaderFeedback,
+	uint64_t startTime) {
+
+	if (!pShaderConfig || !pipeline || pipeline->shouldFailOnPipelineCompileRequired()) {
+		return nullptr;
+	}
+
+	MVKDeferredShaderLibrary deferred;
+	if (!takeDeferredShaderLibrary(pShaderConfig, &deferred)) { return nullptr; }
+
+	SPIRVToMSLConversionConfiguration alignedConfig = deferred.shaderConfig;
+	VkResult priorConfigurationResult = _owner->getConfigurationResult();
+	MVKShaderLibrary* candidate = new MVKShaderLibrary(
+		_owner,
+		deferred.resultInfo,
+		deferred.compressedMSL);
+	bool candidateResident = candidate->isResident();
+	MVKShaderLibrary* shLib = _repository
+		? _repository->acquire(_shaderModuleKey, &alignedConfig, candidate)
+		: candidate;
+	if (!candidateResident && priorConfigurationResult == VK_SUCCESS) {
+		_owner->clearConfigurationResult();
+	}
+	if (!shLib) { return nullptr; }
+
+	pShaderConfig->alignWith(alignedConfig);
+	_shaderLibraries.emplace_back(alignedConfig, shLib);
+	addPerformanceInterval(
+		getPerformanceStats().shaderCompilation.shaderLibraryFromCache,
+		startTime);
+	if (pShaderFeedback) {
+		pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
+	}
+	return shLib;
+}
+
+bool MVKShaderLibraryCache::hasShaderLibrary(
+	const SPIRVToMSLConversionConfiguration& shaderConfig) const {
+
+	for (const auto& libraryEntry : _shaderLibraries) {
+		if (libraryEntry.first.matches(shaderConfig)) { return true; }
+	}
+	for (const auto& deferred : _deferredShaderLibraries) {
+		if (deferred.shaderConfig.matches(shaderConfig)) { return true; }
+	}
+	return false;
 }
 
 // Adds and returns a new shader library configured from the specified conversion configuration.
@@ -1371,36 +1463,38 @@ bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
 	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
 	MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
 	if (!shared) { return false; }
+	bool wasDeferred = takeDeferredShaderLibrary(&alignedConfig);
 	_shaderLibraries.emplace_back(alignedConfig, shared);
-	return true;
+	return !wasDeferred;
 }
 
 // Merge another shader library cache with this one. Handle null input.
 void MVKShaderLibraryCache::merge(MVKShaderLibraryCache* other) {
 	if ( !other ) { return; }
 	for (auto& otherPair : other->_shaderLibraries) {
-		if ( !findShaderLibrary(&otherPair.first) ) {
+		if ( !hasShaderLibrary(otherPair.first) ) {
 			if (_repository) {
 				SPIRVToMSLConversionConfiguration alignedConfig = otherPair.first;
 				MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
 				if (!shared) {
-					VkResult priorConfigurationResult = _owner->getConfigurationResult();
-					MVKShaderLibrary* candidate = new MVKShaderLibrary(
-						_owner,
+					addDeferredShaderLibrary(
+						&otherPair.first,
 						otherPair.second->_shaderConversionResultInfo,
 						otherPair.second->_compressedMSL);
-					bool candidateResident = candidate->isResident();
-					shared = _repository->acquire(_shaderModuleKey, &alignedConfig, candidate);
-					if (!candidateResident && shared &&
-						priorConfigurationResult == VK_SUCCESS) {
-						_owner->clearConfigurationResult();
-					}
 				}
 				if (shared) { _shaderLibraries.emplace_back(alignedConfig, shared); }
 			} else {
 				_shaderLibraries.emplace_back(otherPair.first, new MVKShaderLibrary(*otherPair.second));
 				_shaderLibraries.back().second->_owner = _owner;
 			}
+		}
+	}
+	for (const auto& deferred : other->_deferredShaderLibraries) {
+		if (!hasShaderLibrary(deferred.shaderConfig)) {
+			addDeferredShaderLibrary(
+				&deferred.shaderConfig,
+				deferred.resultInfo,
+				deferred.compressedMSL);
 		}
 	}
 }

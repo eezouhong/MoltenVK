@@ -4835,11 +4835,40 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
-	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
-	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
-	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
+	bool next() { return (++_index < getEntryCount()); }
+	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() {
+		return isDeferred()
+			? getDeferredShaderConversionConfig()
+			: _pSLCache->_shaderLibraries[_index].first;
+	}
+	MVKCompressor<std::string>& getCompressedMSL() {
+		return isDeferred()
+			? getDeferredCompressedMSL()
+			: _pSLCache->_shaderLibraries[_index].second->getCompressedMSL();
+	}
+	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() {
+		return isDeferred()
+			? getDeferredShaderConversionResultInfo()
+			: _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo;
+	}
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
+
+	size_t getEntryCount() const {
+		return _pSLCache
+			? _pSLCache->_shaderLibraries.size() + _pSLCache->_deferredShaderLibraries.size()
+			: 0;
+	}
+	bool isDeferred() const { return _index >= _pSLCache->_shaderLibraries.size(); }
+	size_t getDeferredIndex() const { return _index - _pSLCache->_shaderLibraries.size(); }
+	SPIRVToMSLConversionConfiguration& getDeferredShaderConversionConfig() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].shaderConfig;
+	}
+	SPIRVToMSLConversionResultInfo& getDeferredShaderConversionResultInfo() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].resultInfo;
+	}
+	MVKCompressor<std::string>& getDeferredCompressedMSL() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].compressedMSL;
+	}
 
 	MVKShaderLibraryCache* _pSLCache;
 	size_t _count = 0;
@@ -4995,10 +5024,22 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					MVKCompressor<std::string> compressedMSL;
 					reader(compressedMSL);
 
-					// Add the shader library to the staging cache.
+					// Keep imported entries compressed until an exact Pipeline request
+					// needs the matching shader-module/config key. Generic MoltenVK use
+					// without the shared repository retains the legacy eager path.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
+					if (slCache->supportsDeferredShaderLibraryImport()) {
+						slCache->addDeferredShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					} else {
+						slCache->addShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					}
 
 					break;
 				}

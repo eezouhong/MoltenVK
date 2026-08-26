@@ -2808,6 +2808,21 @@ static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dy
 	return "MVKCmdBindGraphicsPipeline:dynamic_other";
 }
 
+static bool isMetal4SupportedStaticPrimitiveTopology(
+	const VkPipelineInputAssemblyStateCreateInfo* pIA) {
+	if (!pIA) { return false; }
+	switch (pIA->topology) {
+		case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+			return true;
+		default:
+			return false;
+	}
+}
+
 static const char* getMetal4UnsupportedFixedFunctionReason(
 	const VkPipelineInputAssemblyStateCreateInfo* pIA,
 	const VkPipelineRasterizationStateCreateInfo* pRS,
@@ -2822,8 +2837,7 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 	bool hasDepthBias,
 	bool hasDepthBoundsTest,
 	bool hasDepthClamp) {
-	if (!pIA || pIA->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
-		pIA->primitiveRestartEnable) {
+	if (!isMetal4SupportedStaticPrimitiveTopology(pIA)) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_topology";
 	}
 	if (!pRS || (isRasterizing &&
@@ -3257,8 +3271,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasDynamicScissor =
 		_dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
 	bool hasStrictFixedFunction =
-		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
-		!pIA->primitiveRestartEnable &&
+		isMetal4SupportedStaticPrimitiveTopology(pIA) &&
 		pRS && (!_isRasterizing ||
 			(!pRS->rasterizerDiscardEnable &&
 			 pRS->polygonMode == VK_POLYGON_MODE_FILL &&

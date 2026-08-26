@@ -501,6 +501,11 @@ def main() -> int:
         "vertex-only statically disabled rasterization is not executed and read back through Metal 4",
     )
     require(
+        pipeline_mm + queue_mm + e2e,
+        r"isMetal4SupportedStaticPrimitiveTopology[\s\S]*?VK_PRIMITIVE_TOPOLOGY_LINE_LIST[\s\S]*?stateData\.primitiveType[\s\S]*?RASTERIZER_DISCARD_OK",
+        "static non-triangle primitive topology is not mapped into Metal 4 draws",
+    )
+    require(
         pipeline_mm,
         r"getMetal4UnsupportedDynamicStateReason[\s\S]*?removingAll\(kMetal4SupportedDynamicState\)",
         "dynamic-state telemetry still reports an already-supported Metal 4 state",

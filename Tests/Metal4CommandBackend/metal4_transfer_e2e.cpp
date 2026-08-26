@@ -1322,6 +1322,7 @@ int main() {
         graphicsInfo.pRasterizationState = &discardRasterization;
         graphicsInfo.stageCount = 1;
         graphicsInfo.pStages = &renderStages[0];
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
         VkPipeline rasterizerDiscardPipeline = VK_NULL_HANDLE;
         check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
                                         nullptr, &rasterizerDiscardPipeline),
@@ -1329,6 +1330,7 @@ int main() {
         graphicsInfo.pRasterizationState = &rasterization;
         graphicsInfo.stageCount = static_cast<uint32_t>(renderStages.size());
         graphicsInfo.pStages = renderStages.data();
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
         VkCommandBuffer prepareDiscard = beginCommandBuffer(device, commandPool);
         imageBarrier(prepareDiscard, renderTarget.image,

@@ -24,6 +24,7 @@
 class MVKBuffer;
 class MVKCommandBuffer;
 class MVKCommandEncoder;
+class MVKCommandEncodingPool;
 class MVKCommandPool;
 class MVKComputePipeline;
 struct MVKDescriptorSet;
@@ -36,6 +37,24 @@ class MVKQueryPool;
 class MVKRenderPass;
 struct MVKPipelineBarrier;
 struct MVKVertexMTLBufferBinding;
+
+static constexpr uint32_t kMVKMetal4MaxColorAttachmentCount = 8;
+
+struct MVKMetal4ClearAttachmentsInfo {
+	const void* commandKey = nullptr;
+	MVKCommandEncodingPool* encodingPool = nullptr;
+	VkFormat colorAttachmentFormats[kMVKMetal4MaxColorAttachmentCount] = {};
+	VkClearColorValue colorValues[kMVKMetal4MaxColorAttachmentCount] = {};
+	bool clearColors[kMVKMetal4MaxColorAttachmentCount] = {};
+	uint32_t colorAttachmentCount = 0;
+	VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+	VkFormat stencilFormat = VK_FORMAT_UNDEFINED;
+	VkClearDepthStencilValue depthStencilValue = {};
+	bool clearDepth = false;
+	bool clearStencil = false;
+	const VkClearRect* rects = nullptr;
+	size_t rectCount = 0;
+};
 
 
 #pragma mark -
@@ -184,6 +203,8 @@ public:
 						 int32_t vertexOffset,
 						 uint32_t firstInstance,
 						 uint32_t instanceCount) = 0;
+	virtual bool useClearAttachments(const MVKMetal4ClearAttachmentsInfo& info) = 0;
+	virtual bool clearAttachments(const void* commandKey) = 0;
 };
 
 

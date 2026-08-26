@@ -476,6 +476,11 @@ def main() -> int:
         "classic Metal 4 MRT does not preserve pipeline and render-pass attachment arrays",
     )
     require(
+        transfer_h + transfer_mm + command_h + queue_mm + e2e + runner,
+        r"MVKCmdClearAttachments[\s\S]*?supportsMetal4Encoding[\s\S]*?useClearAttachments[\s\S]*?getCmdClearMTLRenderPipelineState[\s\S]*?clearAttachments[\s\S]*?drawPrimitives:[\s\S]*?CLASSIC_CLEAR_ATTACHMENTS_OK",
+        "classic vkCmdClearAttachments is not preflighted, materialized, and read back on Metal 4",
+    )
+    require(
         rendering_h + queue_mm,
         r"MVKCmdSetViewport[\s\S]*?kMVKMaxViewportScissorCount[\s\S]*?setViewports:[\s\S]*?count:viewportCount[\s\S]*?setScissorRects:[\s\S]*?count:scissorCount",
         "Metal 4 dynamic viewport/scissor arrays are not preserved through draw encoding",

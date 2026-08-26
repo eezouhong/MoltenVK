@@ -2097,6 +2097,16 @@ int main() {
         vkCmdBindPipeline(classicRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           classicPipeline);
         vkCmdDraw(classicRender, 3, 1, 0, 0);
+        VkClearAttachment explicitClassicClear{};
+        explicitClassicClear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        explicitClassicClear.colorAttachment = 0;
+        explicitClassicClear.clearValue.color = {{0.0f, 1.0f, 0.0f, 1.0f}};
+        VkClearRect explicitClassicClearRect{};
+        explicitClassicClearRect.rect = scissor;
+        explicitClassicClearRect.baseArrayLayer = 0;
+        explicitClassicClearRect.layerCount = 1;
+        vkCmdClearAttachments(classicRender, 1, &explicitClassicClear, 1,
+                              &explicitClassicClearRect);
         vkCmdEndRenderPass(classicRender);
         endCommandBuffer(classicRender);
 
@@ -2139,9 +2149,10 @@ int main() {
                             classicSubmits.data(), classicFence),
               "vkQueueSubmit(classic render sequence)");
         waitFence(device, classicFence);
-        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        validateSolidColor(device, renderReadback, {0, 255, 0, 255});
         validateSolidColor(device, classicMrtReadback, {0, 0, 255, 255});
         std::cout << "CLASSIC_MRT_RENDER_OK" << std::endl;
+        std::cout << "CLASSIC_CLEAR_ATTACHMENTS_OK" << std::endl;
 
         // A classic render pass may carry a stencil attachment even when the
         // pipeline cannot read or write stencil. Metal still requires the
@@ -2283,9 +2294,10 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "CLASSIC_INACTIVE_STENCIL_RENDER_OK" << std::endl;
 
-        // Static stencil execution must preserve all three Vulkan semantics:
-        // an ALWAYS/REPLACE pass writes the reference, EQUAL accepts that
-        // value, and the same comparison rejects a different reference.
+        // Static stencil execution and explicit stencil clearing must preserve
+        // all three Vulkan semantics: an ALWAYS/REPLACE pass writes 41, an
+        // explicit attachment clear replaces it with 42, EQUAL accepts 42, and
+        // the same comparison rejects the old value 41.
         VkPipelineDepthStencilStateCreateInfo activeStencilWriteState =
             makeVkStruct<VkPipelineDepthStencilStateCreateInfo>(
                 VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
@@ -2296,7 +2308,7 @@ int main() {
         activeStencilWriteState.front.compareOp = VK_COMPARE_OP_ALWAYS;
         activeStencilWriteState.front.compareMask = 0xff;
         activeStencilWriteState.front.writeMask = 0xff;
-        activeStencilWriteState.front.reference = 42;
+        activeStencilWriteState.front.reference = 41;
         activeStencilWriteState.back = activeStencilWriteState.front;
         graphicsInfo.pDepthStencilState = &activeStencilWriteState;
         VkPipeline activeStencilWritePipeline = VK_NULL_HANDLE;
@@ -2390,6 +2402,11 @@ int main() {
         vkCmdBindPipeline(activeStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           activeStencilWritePipeline);
         vkCmdDraw(activeStencilRender, 3, 1, 0, 0);
+        VkClearAttachment explicitStencilClear{};
+        explicitStencilClear.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+        explicitStencilClear.clearValue.depthStencil = {1.0f, 42};
+        vkCmdClearAttachments(activeStencilRender, 1, &explicitStencilClear, 1,
+                              &explicitClassicClearRect);
         vkCmdEndRenderPass(activeStencilRender);
         VkRenderPassBeginInfo activeStencilMatchBegin = classicStencilBegin;
         activeStencilMatchBegin.renderPass = activeStencilLoadRenderPass;
@@ -2450,6 +2467,7 @@ int main() {
         validateSolidColor(device, activeStencilMatchReadback, {64, 128, 191, 255});
         validateSolidColor(device, activeStencilMismatchReadback, {255, 0, 0, 255});
         std::cout << "CLASSIC_STATIC_STENCIL_RENDER_OK" << std::endl;
+        std::cout << "CLASSIC_CLEAR_STENCIL_OK" << std::endl;
 
         // The same static stencil state must work through vkCmdBeginRendering.
         // Reuse the value 42 written above and prove both matching and rejecting

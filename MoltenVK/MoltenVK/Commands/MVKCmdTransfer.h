@@ -281,6 +281,9 @@ public:
 						MVKCommandUse cmdUse = kMVKCommandUseClearAttachments);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
     uint32_t getVertexCount(MVKCommandEncoder* cmdEncoder);
@@ -297,6 +300,8 @@ protected:
 	VkClearDepthStencilValue _clearDepthStencilValue;
 	MVKCommandUse _commandUse;
 	bool _shouldClearAtt[kMVKClearAttachmentCount];
+	MVKMetal4ClearAttachmentsInfo _metal4Info = {};
+	bool _supportsMetal4Encoding = false;
 };
 
 

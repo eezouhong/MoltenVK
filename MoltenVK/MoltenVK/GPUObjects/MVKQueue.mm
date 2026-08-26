@@ -31,6 +31,7 @@
 #include "MVKQueryPool.h"
 #include "MVKFramebuffer.h"
 #include "MVKRenderPass.h"
+#include "MVKCommandEncodingPool.h"
 #include "mvk_datatypes.hpp"
 #include <algorithm>
 #include <array>
@@ -57,6 +58,8 @@ static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
 static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
 static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
 static constexpr size_t kMetal4UnsupportedCommandCapacity = 64;
+static_assert(kMVKMetal4MaxColorAttachmentCount == kMVKMaxColorAttachmentCount,
+			  "Metal 4 clear attachment transport must match MoltenVK render limits");
 
 enum class MVKMetal4FallbackReason : uint8_t {
 	UnsupportedSemaphore = 0,
@@ -538,8 +541,11 @@ class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
 
 public:
 	MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state,
-								 id<MTLDevice> mtlDevice) :
-		_state(std::move(state)), _mtlDevice(mtlDevice) {}
+								 MVKDevice* device,
+								 id<MTLDevice> mtlDevice,
+								 MVKPixelFormats* pixelFormats) :
+		_state(std::move(state)), _device(device), _pixelFormats(pixelFormats),
+		_mtlDevice(mtlDevice) {}
 
 	struct BufferBinding {
 		id<MTLBuffer> buffer = nil;
@@ -612,6 +618,16 @@ public:
 		id<MTLRenderPipelineState> pipelineState = nil;
 		vector<DepthStencilStateBinding> depthStencilStates;
 	};
+	struct ClearAttachmentsBinding {
+		MVKRPSKeyClearAtt pipelineKey = {};
+		id<MTLRenderPipelineState> pipelineState = nil;
+		id<MTLDepthStencilState> depthStencilState = nil;
+		id<MTLBuffer> clearColors = nil;
+		id<MTLBuffer> vertices = nil;
+		vector<VkClearRect> rects;
+		NSUInteger vertexCount = 0;
+		uint32_t stencilReference = 0;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -628,6 +644,12 @@ public:
 			for (auto& depthStencil : item.second.depthStencilStates) {
 				[depthStencil.state release];
 			}
+		}
+		for (auto& item : _clearAttachments) {
+			[item.second.pipelineState release];
+			[item.second.depthStencilState release];
+			[item.second.clearColors release];
+			[item.second.vertices release];
 		}
 		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
 		[_argumentTable release];
@@ -1638,6 +1660,156 @@ public:
 		return true;
 	}
 
+	bool useClearAttachments(const MVKMetal4ClearAttachmentsInfo& info) override {
+		if (!_device || !_mtlDevice || !info.commandKey || !info.encodingPool ||
+			!info.rects || !info.rectCount ||
+			info.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
+			info.rectCount > NSUIntegerMax / (6 * sizeof(simd::float4)) ||
+			!ensureArgumentTable()) {
+			return false;
+		}
+		if (_clearAttachments.count(info.commandKey)) { return true; }
+
+		ClearAttachmentsBinding binding;
+		binding.rects.assign(info.rects, info.rects + info.rectCount);
+		binding.vertexCount = info.rectCount * 6;
+		binding.stencilReference = info.depthStencilValue.stencil;
+		binding.pipelineKey.mtlSampleCount = 1;
+		simd::float4 clearColors[kMVKClearAttachmentCount] = {};
+		MVKPixelFormats* pixelFormats = _pixelFormats;
+		if (!pixelFormats) { return false; }
+		for (uint32_t colorIndex = 0;
+			 colorIndex < info.colorAttachmentCount;
+			 colorIndex++) {
+			VkFormat format = info.colorAttachmentFormats[colorIndex];
+			binding.pipelineKey.attachmentMTLPixelFormats[colorIndex] =
+				pixelFormats->getMTLPixelFormat(format);
+			if (info.clearColors[colorIndex]) {
+				binding.pipelineKey.enableAttachment(colorIndex);
+				MTLClearColor color =
+					pixelFormats->getMTLClearColor(info.colorValues[colorIndex], format);
+				clearColors[colorIndex] = {
+					(float)color.red, (float)color.green,
+					(float)color.blue, (float)color.alpha,
+				};
+			}
+		}
+		binding.pipelineKey.attachmentMTLPixelFormats[kMVKClearAttachmentDepthIndex] =
+			pixelFormats->getMTLPixelFormat(info.depthFormat);
+		binding.pipelineKey.attachmentMTLPixelFormats[kMVKClearAttachmentStencilIndex] =
+			pixelFormats->getMTLPixelFormat(info.stencilFormat);
+		if (info.clearDepth) {
+			binding.pipelineKey.enableAttachment(kMVKClearAttachmentDepthIndex);
+			float depth = info.depthStencilValue.depth;
+			clearColors[kMVKClearAttachmentDepthIndex] = { depth, depth, depth, depth };
+		}
+		if (info.clearStencil) {
+			binding.pipelineKey.enableAttachment(kMVKClearAttachmentStencilIndex);
+		}
+
+		if (binding.pipelineKey.isAnyAttachmentEnabled()) {
+			id<MTLRenderPipelineState> pipelineState =
+				info.encodingPool->getCmdClearMTLRenderPipelineState(binding.pipelineKey);
+			id<MTLDepthStencilState> depthStencilState =
+				info.encodingPool->getMTLDepthStencilState(info.clearDepth, info.clearStencil);
+			if (!pipelineState || !depthStencilState) { return false; }
+			binding.pipelineState = [pipelineState retain];
+			binding.depthStencilState = [depthStencilState retain];
+			binding.clearColors = [_mtlDevice newBufferWithBytes:clearColors
+													  length:sizeof(clearColors)
+													 options:MTLResourceStorageModeShared |
+															 MTLResourceCPUCacheModeWriteCombined];
+			binding.vertices = [_mtlDevice newBufferWithLength:
+				binding.vertexCount * sizeof(simd::float4)
+												 options:MTLResourceStorageModeShared |
+															 MTLResourceCPUCacheModeWriteCombined];
+			if (!binding.clearColors || !binding.vertices) {
+				[binding.pipelineState release];
+				[binding.depthStencilState release];
+				[binding.clearColors release];
+				[binding.vertices release];
+				return false;
+			}
+			_allocations.push_back((id<MTLAllocation>)binding.pipelineState);
+			_allocations.push_back((id<MTLAllocation>)binding.clearColors);
+			_allocations.push_back((id<MTLAllocation>)binding.vertices);
+		}
+		_clearAttachments.emplace(info.commandKey, std::move(binding));
+		return true;
+	}
+
+	bool clearAttachments(const void* commandKey) override {
+		auto item = _clearAttachments.find(commandKey);
+		if (!_renderEncoder || item == _clearAttachments.end() || _activeQueryPool) {
+			return false;
+		}
+		ClearAttachmentsBinding& binding = item->second;
+		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
+		if (!binding.pipelineState || !binding.depthStencilState ||
+			!binding.clearColors || !binding.vertices ||
+			!_currentRenderWidth || !_currentRenderHeight) {
+			return false;
+		}
+
+		auto* vertices = static_cast<simd::float4*>(binding.vertices.contents);
+		NSUInteger vertexIndex = 0;
+		for (const VkClearRect& clearRect : binding.rects) {
+			uint64_t right = uint64_t(clearRect.rect.offset.x) + clearRect.rect.extent.width;
+			uint64_t bottom = uint64_t(clearRect.rect.offset.y) + clearRect.rect.extent.height;
+			if (clearRect.rect.offset.x < 0 || clearRect.rect.offset.y < 0 ||
+				clearRect.baseArrayLayer != 0 || clearRect.layerCount != 1 ||
+				right > _currentRenderWidth || bottom > _currentRenderHeight) {
+				return false;
+			}
+			float leftPos = (float)clearRect.rect.offset.x / _currentRenderWidth;
+			float rightPos = (float)right / _currentRenderWidth;
+			float bottomPos = (float)clearRect.rect.offset.y / _currentRenderHeight;
+			float topPos = (float)bottom / _currentRenderHeight;
+			leftPos = leftPos * 2.0f - 1.0f;
+			rightPos = rightPos * 2.0f - 1.0f;
+			bottomPos = bottomPos * 2.0f - 1.0f;
+			topPos = topPos * 2.0f - 1.0f;
+			vertices[vertexIndex++] = { leftPos, topPos, 0.0f, 0.0f };
+			vertices[vertexIndex++] = { leftPos, bottomPos, 0.0f, 0.0f };
+			vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, 0.0f };
+			vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, 0.0f };
+			vertices[vertexIndex++] = { rightPos, topPos, 0.0f, 0.0f };
+			vertices[vertexIndex++] = { leftPos, topPos, 0.0f, 0.0f };
+		}
+
+		[_renderEncoder setRenderPipelineState:binding.pipelineState];
+		[_renderEncoder setDepthStencilState:binding.depthStencilState];
+		[_renderEncoder setCullMode:MTLCullModeNone];
+		[_renderEncoder setFrontFacingWinding:MTLWindingCounterClockwise];
+		[_renderEncoder setTriangleFillMode:MTLTriangleFillModeFill];
+		[_renderEncoder setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
+		[_renderEncoder setStencilReferenceValue:binding.stencilReference];
+		MTLViewport viewport = {
+			0.0, 0.0, (double)_currentRenderWidth, (double)_currentRenderHeight, 0.0, 1.0,
+		};
+		MTLScissorRect scissor = { 0, 0, _currentRenderWidth, _currentRenderHeight };
+		[_renderEncoder setViewport:viewport];
+		[_renderEncoder setScissorRect:scissor];
+		[_argumentTable setAddress:binding.clearColors.gpuAddress atIndex:0];
+		uint32_t vertexBufferIndex =
+			_device->getMetalBufferIndexForVertexAttributeBinding(kMVKVertexContentBufferIndex);
+		[_argumentTable setAddress:binding.vertices.gpuAddress
+				 attributeStride:sizeof(simd::float4)
+						 atIndex:vertexBufferIndex];
+		[_renderEncoder setArgumentTable:_argumentTable
+						 atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+		[_renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+					 vertexStart:0
+					 vertexCount:binding.vertexCount];
+		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		_counters.draws++;
+		_renderWork = true;
+		return true;
+	}
+
 	void endEncoding() {
 		endRenderEncoding();
 		endComputeEncoding();
@@ -2059,6 +2231,7 @@ private:
 	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
+	unordered_map<const void*, ClearAttachmentsBinding> _clearAttachments;
 	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
 	BoundIndexBuffer _boundIndexBuffer = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _computeDescriptorSets = {};
@@ -2074,6 +2247,8 @@ private:
 	vector<PendingQueryReset> _pendingQueryResets;
 	vector<MVKMetal4CompletedQuery> _completedQueries;
 	vector<id<MTLAllocation>> _allocations;
+	MVKDevice* _device = nullptr;
+	MVKPixelFormats* _pixelFormats = nullptr;
 	id<MTLDevice> _mtlDevice = nil;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
@@ -3094,7 +3269,8 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		return VK_SUCCESS;
 	}
 
-	MVKMetal4TransferCommandEncoder encoder(state, getMTLDevice());
+	MVKMetal4TransferCommandEncoder encoder(
+		state, getDevice(), getMTLDevice(), getPixelFormats());
 	if (!prepareMetal4CommandBuffers(&encoder)) {
 		recordFallback(MVKMetal4FallbackReason::PrepareFailed);
 		return VK_SUCCESS;

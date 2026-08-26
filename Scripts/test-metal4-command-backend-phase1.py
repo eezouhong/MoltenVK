@@ -443,6 +443,11 @@ def main() -> int:
         "dynamic-state telemetry still reports an already-supported Metal 4 state",
     )
     require(
+        pipeline_mm,
+        r"getMetal4UnsupportedFixedFunctionReason[\s\S]*?fixed_function_topology[\s\S]*?fixed_function_rasterization[\s\S]*?fixed_function_multisample[\s\S]*?fixed_function_viewport[\s\S]*?fixed_function_depth_stencil",
+        "fixed-function telemetry is not split into actionable eligibility groups",
+    )
+    require(
         draw_h + draw_mm,
         r"MVKCmdBindVertexBuffers[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?useBuffer[\s\S]*?encodeMetal4[\s\S]*?bindVertexBuffers",
         "vertex-buffer binding is not preflighted and materialized",

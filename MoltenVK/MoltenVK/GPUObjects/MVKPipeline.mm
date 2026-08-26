@@ -2801,6 +2801,45 @@ static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dy
 	return "MVKCmdBindGraphicsPipeline:dynamic_other";
 }
 
+static const char* getMetal4UnsupportedFixedFunctionReason(
+	const VkPipelineInputAssemblyStateCreateInfo* pIA,
+	const VkPipelineRasterizationStateCreateInfo* pRS,
+	const VkPipelineMultisampleStateCreateInfo* pMS,
+	const VkPipelineViewportStateCreateInfo* pVP,
+	bool hasDynamicViewport,
+	bool hasDynamicScissor,
+	uint8_t numStaticViewports,
+	uint8_t numStaticScissors,
+	bool hasCullBothFaces,
+	bool hasDepthBias,
+	bool hasDepthBoundsTest,
+	bool hasDepthClamp,
+	bool hasStencilTest) {
+	if (!pIA || pIA->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+		pIA->primitiveRestartEnable) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_topology";
+	}
+	if (!pRS || pRS->rasterizerDiscardEnable ||
+		pRS->polygonMode != VK_POLYGON_MODE_FILL ||
+		pRS->cullMode == VK_CULL_MODE_FRONT_AND_BACK || hasCullBothFaces) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_rasterization";
+	}
+	if (!pMS || pMS->rasterizationSamples != VK_SAMPLE_COUNT_1_BIT ||
+		pMS->sampleShadingEnable || pMS->alphaToCoverageEnable ||
+		pMS->alphaToOneEnable) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_multisample";
+	}
+	if (!pVP || pVP->viewportCount != 1 || pVP->scissorCount != 1 ||
+		(!hasDynamicViewport && (!pVP->pViewports || numStaticViewports != 1)) ||
+		(!hasDynamicScissor && (!pVP->pScissors || numStaticScissors != 1))) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
+	}
+	if (hasDepthBias || hasDepthBoundsTest || hasDepthClamp || hasStencilTest) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_depth_stencil";
+	}
+	return "MVKCmdBindGraphicsPipeline:fixed_function_unknown";
+}
+
 static void loadStencil(MVKMTLStencilDescriptorData& mtl, const VkStencilOpState& vk) {
 	mtl.readMask = vk.compareMask;
 	mtl.writeMask = vk.writeMask;
@@ -3265,7 +3304,14 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			"MVKCmdBindGraphicsPipeline:shader_stage_shape";
 	} else {
 		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:fixed_function";
+			getMetal4UnsupportedFixedFunctionReason(
+				pIA, pRS, pMS, pVP, hasDynamicViewport, hasDynamicScissor,
+				_staticStateData.numViewports, _staticStateData.numScissors,
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces),
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias),
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest),
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp),
+				_staticStateData.depthStencil.stencilTestEnabled);
 	}
 }
 

@@ -879,8 +879,13 @@ def main() -> int:
         ),
         (
             transfer_h + transfer_mm,
-            r"MVKCmdBufferImageCopy[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?buffer_image_layout[\s\S]*?buffer_image_multisample[\s\S]*?buffer_image_multiplane[\s\S]*?buffer_image_texture_type[\s\S]*?buffer_image_compressed[\s\S]*?buffer_image_depth_stencil[\s\S]*?buffer_image_swizzle[\s\S]*?buffer_image_texel_size[\s\S]*?buffer_image_aspect[\s\S]*?buffer_image_layer_count[\s\S]*?buffer_image_offset[\s\S]*?buffer_image_extent[\s\S]*?buffer_image_row_length[\s\S]*?buffer_image_height[\s\S]*?buffer_image_bounds",
+            r"MVKCmdBufferImageCopy[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?buffer_image_layout[\s\S]*?buffer_image_multisample[\s\S]*?buffer_image_multiplane[\s\S]*?buffer_image_texture_type[\s\S]*?buffer_image_compressed[\s\S]*?buffer_image_swizzle[\s\S]*?buffer_image_texel_size[\s\S]*?buffer_image_aspect[\s\S]*?buffer_image_base_layer[\s\S]*?buffer_image_layer_count[\s\S]*?buffer_image_offset[\s\S]*?buffer_image_extent[\s\S]*?buffer_image_row_length[\s\S]*?buffer_image_height[\s\S]*?buffer_image_bounds",
             "buffer-image fallback telemetry does not identify the actual unsupported shape",
+        ),
+        (
+            transfer_mm + queue_mm + e2e,
+            r"VK_REMAINING_ARRAY_LAYERS[\s\S]*?MTLTextureType3D[\s\S]*?copyBufferImage[\s\S]*?bytesPerImage[\s\S]*?MTLBlitOptionDepthFromDepthStencil[\s\S]*?MTLBlitOptionStencilFromDepthStencil[\s\S]*?options:[\s\S]*?BUFFER_IMAGE_LAYERED_OK[\s\S]*?BUFFER_IMAGE_3D_OK[\s\S]*?BUFFER_IMAGE_DEPTH_STENCIL_OK",
+            "layered, 3D, and depth/stencil buffer-image copies are not materialized and read back through Metal 4",
         ),
         (
             queries_h + queries_mm + queue_mm + query_pool_h + e2e,

@@ -998,47 +998,105 @@ public:
 		id<MTLBuffer> mtlBuffer = bufferIt->second.buffer;
 		id<MTLTexture> mtlTexture = imageIt->second.textures[plane];
 		MTLPixelFormat pixelFormat = image->getMTLPixelFormat(plane);
+		MVKPixelFormats* pixelFormats = image->getPixelFormats();
 		uint32_t bufferWidth = region.bufferRowLength ?
 			region.bufferRowLength : region.imageExtent.width;
-		NSUInteger bytesPerRow = image->getPixelFormats()->getBytesPerRow(pixelFormat, bufferWidth);
-		NSUInteger activeRowBytes = image->getPixelFormats()->getBytesPerRow(
+		uint32_t bufferHeight = region.bufferImageHeight ?
+			region.bufferImageHeight : region.imageExtent.height;
+		NSUInteger bytesPerRow = pixelFormats->getBytesPerRow(pixelFormat, bufferWidth);
+		NSUInteger activeRowBytes = pixelFormats->getBytesPerRow(
 			pixelFormat, region.imageExtent.width);
+		NSUInteger bytesPerImage =
+			pixelFormats->getBytesPerLayer(pixelFormat, bytesPerRow, bufferHeight);
+		MTLBlitOption options = MTLBlitOptionNone;
+		if (pixelFormats->isDepthFormat(pixelFormat) &&
+			pixelFormats->isStencilFormat(pixelFormat)) {
+			bool copyDepth = mvkAreAllFlagsEnabled(
+				region.imageSubresource.aspectMask, VK_IMAGE_ASPECT_DEPTH_BIT);
+			if (copyDepth) {
+				if (pixelFormats->getBytesPerTexel(pixelFormat) != 4) {
+					NSUInteger rowReduction = bufferWidth;
+					NSUInteger activeReduction = region.imageExtent.width;
+					NSUInteger imageReduction =
+						static_cast<NSUInteger>(bufferWidth) * bufferHeight;
+					if (bytesPerRow < rowReduction ||
+						activeRowBytes < activeReduction ||
+						bytesPerImage < imageReduction) {
+						return false;
+					}
+					bytesPerRow -= rowReduction;
+					activeRowBytes -= activeReduction;
+					bytesPerImage -= imageReduction;
+				}
+				options = MTLBlitOptionDepthFromDepthStencil;
+			} else {
+				bytesPerRow = bufferWidth;
+				activeRowBytes = region.imageExtent.width;
+				bytesPerImage =
+					static_cast<NSUInteger>(bufferWidth) * bufferHeight;
+				options = MTLBlitOptionStencilFromDepthStencil;
+			}
+		}
 		NSUInteger bufferOffset = bufferIt->second.offset + (NSUInteger)region.bufferOffset;
 		NSUInteger rowCount = region.imageExtent.height;
 		NSUInteger maxValue = std::numeric_limits<NSUInteger>::max();
+		bool is3D = image->getMTLTextureType() == MTLTextureType3D;
+		uint32_t layerCount =
+			region.imageSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
+				? image->getLayerCount() - region.imageSubresource.baseArrayLayer
+				: region.imageSubresource.layerCount;
+		NSUInteger imageCount = is3D ? region.imageExtent.depth : layerCount;
 		if (!bytesPerRow || !activeRowBytes || bufferOffset > mtlBuffer.length ||
-			(rowCount > 1 && bytesPerRow > (maxValue - bufferOffset) / (rowCount - 1))) {
+			!bytesPerImage || !imageCount ||
+			(imageCount > 1 && bytesPerImage >
+				(maxValue - bufferOffset) / (imageCount - 1))) {
 			return false;
 		}
-		NSUInteger lastRowOffset = bufferOffset + bytesPerRow * (rowCount - 1);
-		if (activeRowBytes > mtlBuffer.length - lastRowOffset) { return false; }
+		NSUInteger lastImageOffset = bufferOffset + bytesPerImage * (imageCount - 1);
+		if (rowCount > 1 && bytesPerRow >
+			(maxValue - lastImageOffset) / (rowCount - 1)) {
+			return false;
+		}
+		NSUInteger lastRowOffset = lastImageOffset + bytesPerRow * (rowCount - 1);
+		if (lastRowOffset > mtlBuffer.length ||
+			activeRowBytes > mtlBuffer.length - lastRowOffset) {
+			return false;
+		}
 
 		MTLOrigin textureOrigin = mvkMTLOriginFromVkOffset3D(region.imageOffset);
 		MTLSize textureSize = mvkMTLSizeFromVkExtent3D(region.imageExtent);
-		NSUInteger slice = region.imageSubresource.baseArrayLayer;
 		NSUInteger level = region.imageSubresource.mipLevel;
-		if (toImage) {
-			[_computeEncoder copyFromBuffer:mtlBuffer
-							 sourceOffset:bufferOffset
-						sourceBytesPerRow:bytesPerRow
-					  sourceBytesPerImage:0
-							  sourceSize:textureSize
-							   toTexture:mtlTexture
-						 destinationSlice:slice
-						 destinationLevel:level
-						destinationOrigin:textureOrigin];
-		} else {
-			[_computeEncoder copyFromTexture:mtlTexture
-							  sourceSlice:slice
-							  sourceLevel:level
-							 sourceOrigin:textureOrigin
-							   sourceSize:textureSize
-								 toBuffer:mtlBuffer
-						 destinationOffset:bufferOffset
-					destinationBytesPerRow:bytesPerRow
-				  destinationBytesPerImage:0];
+		if (!is3D) { textureSize.depth = 1; }
+		NSUInteger iterationCount = is3D ? 1 : layerCount;
+		for (NSUInteger iteration = 0; iteration < iterationCount; iteration++) {
+			NSUInteger copyBufferOffset = bufferOffset + bytesPerImage * iteration;
+			NSUInteger slice = region.imageSubresource.baseArrayLayer + iteration;
+			NSUInteger metalBytesPerImage = is3D ? bytesPerImage : 0;
+			if (toImage) {
+				[_computeEncoder copyFromBuffer:mtlBuffer
+								 sourceOffset:copyBufferOffset
+							sourceBytesPerRow:bytesPerRow
+						  sourceBytesPerImage:metalBytesPerImage
+								  sourceSize:textureSize
+								   toTexture:mtlTexture
+							 destinationSlice:slice
+							 destinationLevel:level
+							destinationOrigin:textureOrigin
+								 options:options];
+			} else {
+				[_computeEncoder copyFromTexture:mtlTexture
+								  sourceSlice:slice
+								  sourceLevel:level
+								 sourceOrigin:textureOrigin
+								   sourceSize:textureSize
+									 toBuffer:mtlBuffer
+							 destinationOffset:copyBufferOffset
+						destinationBytesPerRow:bytesPerRow
+					  destinationBytesPerImage:metalBytesPerImage
+									 options:options];
+			}
+			_counters.imageCopies++;
 		}
-		_counters.imageCopies++;
 		return true;
 	}
 

@@ -1186,34 +1186,50 @@ static const char* getMetal4BufferImageCopyUnsupportedReason(
 		return "buffer_image_multisample";
 	}
 	if (image->getPlaneCount() != 1) { return "buffer_image_multiplane"; }
-	if (image->getMTLTextureType() != MTLTextureType2D &&
-		image->getMTLTextureType() != MTLTextureType2DArray) {
+	MTLTextureType textureType = image->getMTLTextureType();
+	bool is3D = textureType == MTLTextureType3D;
+	if (textureType != MTLTextureType1D &&
+		textureType != MTLTextureType1DArray &&
+		textureType != MTLTextureType2D &&
+		textureType != MTLTextureType2DArray && !is3D &&
+		textureType != MTLTextureTypeCube &&
+		textureType != MTLTextureTypeCubeArray) {
 		return "buffer_image_texture_type";
 	}
 	if (image->getIsCompressed()) { return "buffer_image_compressed"; }
-	if (image->getIsDepthStencil()) { return "buffer_image_depth_stencil"; }
 	if (image->needsSwizzle()) { return "buffer_image_swizzle"; }
 	if (!image->hasExpectedTexelSize()) { return "buffer_image_texel_size"; }
 
 	for (const auto& region : regions) {
-		if (region.imageSubresource.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT) {
+		VkImageAspectFlags aspect = region.imageSubresource.aspectMask;
+		bool validAspect = image->getIsDepthStencil()
+			? aspect == VK_IMAGE_ASPECT_DEPTH_BIT ||
+				aspect == VK_IMAGE_ASPECT_STENCIL_BIT
+			: aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+		if (!validAspect) {
 			return "buffer_image_aspect";
 		}
-		if (region.imageSubresource.layerCount != 1) {
+		if (region.imageSubresource.baseArrayLayer >= image->getLayerCount()) {
+			return "buffer_image_base_layer";
+		}
+		uint32_t layerCount =
+			region.imageSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
+				? image->getLayerCount() - region.imageSubresource.baseArrayLayer
+				: region.imageSubresource.layerCount;
+		if (!layerCount || (is3D && layerCount != 1) ||
+			layerCount > image->getLayerCount() -
+				region.imageSubresource.baseArrayLayer) {
 			return "buffer_image_layer_count";
 		}
 		if (region.imageSubresource.mipLevel >= image->getMipLevelCount()) {
 			return "buffer_image_mip_level";
 		}
-		if (region.imageSubresource.baseArrayLayer >= image->getLayerCount()) {
-			return "buffer_image_base_layer";
-		}
 		if (region.imageOffset.x < 0 || region.imageOffset.y < 0 ||
-			region.imageOffset.z != 0) {
+			region.imageOffset.z < 0 || (!is3D && region.imageOffset.z != 0)) {
 			return "buffer_image_offset";
 		}
 		if (!region.imageExtent.width || !region.imageExtent.height ||
-			region.imageExtent.depth != 1) {
+			!region.imageExtent.depth || (!is3D && region.imageExtent.depth != 1)) {
 			return "buffer_image_extent";
 		}
 		if (region.bufferRowLength &&
@@ -1226,7 +1242,8 @@ static const char* getMetal4BufferImageCopyUnsupportedReason(
 		}
 		VkExtent3D mipExtent = image->getExtent3D(0, region.imageSubresource.mipLevel);
 		if ((uint64_t)region.imageOffset.x + region.imageExtent.width > mipExtent.width ||
-			(uint64_t)region.imageOffset.y + region.imageExtent.height > mipExtent.height) {
+			(uint64_t)region.imageOffset.y + region.imageExtent.height > mipExtent.height ||
+			(uint64_t)region.imageOffset.z + region.imageExtent.depth > mipExtent.depth) {
 			return "buffer_image_bounds";
 		}
 	}

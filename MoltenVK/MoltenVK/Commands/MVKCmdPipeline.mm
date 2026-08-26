@@ -99,9 +99,18 @@ static const char* getMetal4PipelineBarrierUnsupportedReason(
 				(barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
 				 barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
 				 barrier.newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-			bool depthLayout = barrier.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
-				(barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
-				 barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+			constexpr VkImageAspectFlags depthStencilAspects =
+				VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+			bool depthStencilAspect = barrier.aspectMask != 0 &&
+				(barrier.aspectMask & ~depthStencilAspects) == 0;
+			bool depthStencilLayout = depthStencilAspect &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+				 (barrier.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
+				  barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ||
+				 (barrier.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT &&
+				  barrier.newLayout == VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL));
 			constexpr VkImageAspectFlags generalAspects =
 				VK_IMAGE_ASPECT_COLOR_BIT |
 				VK_IMAGE_ASPECT_DEPTH_BIT |
@@ -115,7 +124,7 @@ static const char* getMetal4PipelineBarrierUnsupportedReason(
 			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
 				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
 				: barrier.layerCount;
-			if (!colorLayout && !depthLayout && !generalLayout) {
+			if (!colorLayout && !depthStencilLayout && !generalLayout) {
 				return getMetal4ImageLayoutUnsupportedReason(barrier.newLayout);
 			}
 			if (!barrier.mvkImage ||

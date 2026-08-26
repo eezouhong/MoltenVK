@@ -184,7 +184,9 @@ Image createImage(VkPhysicalDevice physicalDevice,
                                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                   VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
                   uint32_t arrayLayers = 1,
-                  VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D) {
+                  VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D,
+                  uint32_t depth = 1,
+                  VkImageType imageType = VK_IMAGE_TYPE_2D) {
     Image result;
     result.device = device;
     result.format = format;
@@ -192,9 +194,9 @@ Image createImage(VkPhysicalDevice physicalDevice,
     result.height = height;
 
     VkImageCreateInfo createInfo = makeVkStruct<VkImageCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
-    createInfo.imageType = VK_IMAGE_TYPE_2D;
+    createInfo.imageType = imageType;
     createInfo.format = result.format;
-    createInfo.extent = {width, height, 1};
+    createInfo.extent = {width, height, depth};
     createInfo.mipLevels = 1;
     createInfo.arrayLayers = arrayLayers;
     createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -1198,6 +1200,163 @@ int main() {
         waitFence(device, generalImageFence);
         validateBytes(device, imageReadback, imagePattern);
         std::cout << "GENERAL_LAYOUT_IMAGE_OK" << std::endl;
+
+        // Ryujinx batches array layers into one buffer-image region.
+        Image layeredBufferImage = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT, 2, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+        Buffer layeredUpload = createBuffer(physicalDevice, device, kImageBytes * 2);
+        Buffer layeredReadback = createBuffer(physicalDevice, device, kImageBytes * 2);
+        std::vector<uint8_t> layeredPattern(static_cast<size_t>(kImageBytes * 2));
+        for (size_t index = 0; index < layeredPattern.size(); ++index) {
+            layeredPattern[index] = static_cast<uint8_t>((index * 19u + 7u) & 0xffu);
+        }
+        writeBytes(device, layeredUpload, layeredPattern);
+        VkBufferImageCopy layeredRegion = imageRegion;
+        layeredRegion.imageSubresource.layerCount = 2;
+        VkCommandBuffer layeredBufferCopy = beginCommandBuffer(device, commandPool);
+        imageBarrier(layeredBufferCopy, layeredBufferImage.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT, 2);
+        vkCmdCopyBufferToImage(layeredBufferCopy, layeredUpload.buffer,
+                               layeredBufferImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &layeredRegion);
+        imageBarrier(layeredBufferCopy, layeredBufferImage.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT, 2);
+        vkCmdCopyImageToBuffer(layeredBufferCopy, layeredBufferImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               layeredReadback.buffer, 1, &layeredRegion);
+        endCommandBuffer(layeredBufferCopy);
+        VkSubmitInfo layeredBufferSubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        layeredBufferSubmit.commandBufferCount = 1;
+        layeredBufferSubmit.pCommandBuffers = &layeredBufferCopy;
+        VkFence layeredBufferFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &layeredBufferSubmit, layeredBufferFence),
+              "vkQueueSubmit(layered buffer image)");
+        waitFence(device, layeredBufferFence);
+        validateBytes(device, layeredReadback, layeredPattern);
+        std::cout << "BUFFER_IMAGE_LAYERED_OK" << std::endl;
+
+        constexpr uint32_t kVolumeWidth = 4;
+        constexpr uint32_t kVolumeHeight = 4;
+        constexpr uint32_t kVolumeDepth = 2;
+        constexpr VkDeviceSize kVolumeBytes =
+            kVolumeWidth * kVolumeHeight * kVolumeDepth * 4;
+        Image volumeImage = createImage(
+            physicalDevice, device, kVolumeWidth, kVolumeHeight,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_VIEW_TYPE_3D,
+            kVolumeDepth, VK_IMAGE_TYPE_3D);
+        Buffer volumeUpload = createBuffer(physicalDevice, device, kVolumeBytes);
+        Buffer volumeReadback = createBuffer(physicalDevice, device, kVolumeBytes);
+        std::vector<uint8_t> volumePattern(static_cast<size_t>(kVolumeBytes));
+        for (size_t index = 0; index < volumePattern.size(); ++index) {
+            volumePattern[index] = static_cast<uint8_t>((index * 13u + 29u) & 0xffu);
+        }
+        writeBytes(device, volumeUpload, volumePattern);
+        VkBufferImageCopy volumeRegion{};
+        volumeRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        volumeRegion.imageSubresource.layerCount = 1;
+        volumeRegion.imageExtent = {kVolumeWidth, kVolumeHeight, kVolumeDepth};
+        VkCommandBuffer volumeCopy = beginCommandBuffer(device, commandPool);
+        imageBarrier(volumeCopy, volumeImage.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyBufferToImage(volumeCopy, volumeUpload.buffer, volumeImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &volumeRegion);
+        imageBarrier(volumeCopy, volumeImage.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyImageToBuffer(volumeCopy, volumeImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               volumeReadback.buffer, 1, &volumeRegion);
+        endCommandBuffer(volumeCopy);
+        VkSubmitInfo volumeSubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        volumeSubmit.commandBufferCount = 1;
+        volumeSubmit.pCommandBuffers = &volumeCopy;
+        VkFence volumeFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &volumeSubmit, volumeFence),
+              "vkQueueSubmit(3D buffer image)");
+        waitFence(device, volumeFence);
+        validateBytes(device, volumeReadback, volumePattern);
+        std::cout << "BUFFER_IMAGE_3D_OK" << std::endl;
+
+        Image depthStencilCopyImage = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight,
+            VK_FORMAT_D32_SFLOAT_S8_UINT,
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        Buffer depthUpload = createBuffer(physicalDevice, device, kImageBytes);
+        Buffer depthReadback = createBuffer(physicalDevice, device, kImageBytes);
+        Buffer stencilUpload = createBuffer(
+            physicalDevice, device, kImageWidth * kImageHeight);
+        Buffer stencilReadback = createBuffer(
+            physicalDevice, device, kImageWidth * kImageHeight);
+        std::vector<uint8_t> depthPattern(static_cast<size_t>(kImageBytes));
+        for (size_t offset = 0; offset < depthPattern.size(); offset += sizeof(float)) {
+            float depthValue = 0.25f + static_cast<float>(offset / sizeof(float)) / 512.0f;
+            std::memcpy(depthPattern.data() + offset, &depthValue, sizeof(depthValue));
+        }
+        std::vector<uint8_t> stencilPattern(kImageWidth * kImageHeight);
+        for (size_t index = 0; index < stencilPattern.size(); ++index) {
+            stencilPattern[index] = static_cast<uint8_t>(index ^ 0x5a);
+        }
+        writeBytes(device, depthUpload, depthPattern);
+        writeBytes(device, stencilUpload, stencilPattern);
+        VkBufferImageCopy depthRegion = imageRegion;
+        depthRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        VkBufferImageCopy stencilRegion = imageRegion;
+        stencilRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+        VkCommandBuffer depthStencilCopy = beginCommandBuffer(device, commandPool);
+        imageBarrier(depthStencilCopy, depthStencilCopyImage.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        vkCmdCopyBufferToImage(depthStencilCopy, depthUpload.buffer,
+                               depthStencilCopyImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &depthRegion);
+        vkCmdCopyBufferToImage(depthStencilCopy, stencilUpload.buffer,
+                               depthStencilCopyImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &stencilRegion);
+        imageBarrier(depthStencilCopy, depthStencilCopyImage.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        vkCmdCopyImageToBuffer(depthStencilCopy, depthStencilCopyImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               depthReadback.buffer, 1, &depthRegion);
+        vkCmdCopyImageToBuffer(depthStencilCopy, depthStencilCopyImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               stencilReadback.buffer, 1, &stencilRegion);
+        endCommandBuffer(depthStencilCopy);
+        VkSubmitInfo depthStencilSubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        depthStencilSubmit.commandBufferCount = 1;
+        depthStencilSubmit.pCommandBuffers = &depthStencilCopy;
+        VkFence depthStencilFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &depthStencilSubmit, depthStencilFence),
+              "vkQueueSubmit(depth stencil buffer image)");
+        waitFence(device, depthStencilFence);
+        validateBytes(device, depthReadback, depthPattern);
+        validateBytes(device, stencilReadback, stencilPattern);
+        std::cout << "BUFFER_IMAGE_DEPTH_STENCIL_OK" << std::endl;
 
         // A real descriptorless graphics pipeline, dynamic-rendering pass, and
         // non-indexed draw must execute through MTL4. A following legacy image
@@ -3383,6 +3542,20 @@ int main() {
         dstImage.destroy();
         imageUpload.destroy();
         imageReadback.destroy();
+        vkDestroyFence(device, layeredBufferFence, nullptr);
+        layeredBufferImage.destroy();
+        layeredUpload.destroy();
+        layeredReadback.destroy();
+        vkDestroyFence(device, volumeFence, nullptr);
+        volumeImage.destroy();
+        volumeUpload.destroy();
+        volumeReadback.destroy();
+        vkDestroyFence(device, depthStencilFence, nullptr);
+        depthStencilCopyImage.destroy();
+        depthUpload.destroy();
+        depthReadback.destroy();
+        stencilUpload.destroy();
+        stencilReadback.destroy();
         vkDestroyFence(device, descriptorComputeFence, nullptr);
         vkDestroyPipeline(device, descriptorComputePipeline, nullptr);
         vkDestroyShaderModule(device, descriptorComputeModule, nullptr);

@@ -149,6 +149,20 @@ If an unsupported command exists in a Vulkan submission, the entire submission
 is selected for legacy before encoding begins. Command-level switching inside a
 submission is not permitted in Phase 1.
 
+### Runtime proof and fallback diagnostics
+
+The backend reports a live snapshot on the first occurrence of each fallback
+reason and whenever the total fallback count reaches a power of two. Each
+snapshot includes attempted submissions, real Metal 4 submissions, fallbacks,
+failures, the latest fallback reason, and that reason's count. This keeps game
+logs bounded while still proving whether a session reached real Metal 4 command
+execution even when the process cannot run normal queue teardown.
+
+Fallback reasons distinguish unsupported semaphores or command buffers from
+resource preparation, residency, allocator, command-object, and replayable
+pre-commit failures. The first successful Vulkan submission retains its
+dedicated marker, and the teardown summary includes total attempts.
+
 ## Application boundary
 
 No Ryujinx Vulkan command-recording changes are required for Phase 1. Application

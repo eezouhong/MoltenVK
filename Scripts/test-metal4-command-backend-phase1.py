@@ -446,6 +446,43 @@ def main() -> int:
         r"commit:[\s\S]*?publishCommittedCounters",
         "command telemetry is published before a successful Metal 4 commit",
     )
+    for token in (
+        "MVKMetal4FallbackReason",
+        "unsupported_semaphore",
+        "unsupported_command_buffer",
+        "prepare_failed",
+        "residency_acquire_failed",
+        "allocator_unavailable",
+        "command_object_unavailable",
+        "encoding_replayable_exception",
+        "command_buffer_not_ended",
+        "precommit_replayable_exception",
+        "attemptedSubmissionCount",
+        "recordSubmissionAttempt",
+        "fallbackReasonCounts",
+        "Metal 4 command backend live",
+    ):
+        require(queue_mm, re.escape(token), f"live command-backend telemetry is missing: {token}")
+    require(
+        execute_metal4,
+        r"recordSubmissionAttempt\(\)[\s\S]*?recordFallback\([^)]*MVKMetal4FallbackReason",
+        "Metal 4 attempts and classified fallbacks are not recorded at runtime",
+    )
+    require(
+        execute_metal4,
+        r"totalCount\s*&\s*\(fallback\.totalCount\s*-\s*1\)",
+        "fallback snapshots are not rate-limited to power-of-two totals",
+    )
+    require(
+        queue_mm,
+        r"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu",
+        "final command-backend summary does not include total attempts",
+    )
+    reject(
+        execute_metal4,
+        r"\[options release\];\s*\[options release\];",
+        "a Metal 4 exception path releases commit options twice",
+    )
 
     # Hybrid backends are totally ordered, including fallback, present, and wait-idle.
     for token in (

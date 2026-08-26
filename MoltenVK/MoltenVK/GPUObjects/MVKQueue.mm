@@ -28,6 +28,7 @@
 #include "MVKImage.h"
 #include "MVKPipeline.h"
 #include "mvk_datatypes.hpp"
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <string>
@@ -48,6 +49,40 @@ static constexpr NSUInteger kMetal4CommandResidencyInitialCapacity = 256;
 static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
 static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
 static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
+
+enum class MVKMetal4FallbackReason : uint8_t {
+	UnsupportedSemaphore = 0,
+	UnsupportedCommandBuffer,
+	PrepareFailed,
+	ResidencyAcquireFailed,
+	AllocatorUnavailable,
+	CommandObjectUnavailable,
+	EncodingReplayableException,
+	CommandBufferNotEnded,
+	PrecommitReplayableException,
+	Count,
+};
+
+static const char* mvkMetal4FallbackReasonName(MVKMetal4FallbackReason reason) {
+	switch (reason) {
+		case MVKMetal4FallbackReason::UnsupportedSemaphore: return "unsupported_semaphore";
+		case MVKMetal4FallbackReason::UnsupportedCommandBuffer: return "unsupported_command_buffer";
+		case MVKMetal4FallbackReason::PrepareFailed: return "prepare_failed";
+		case MVKMetal4FallbackReason::ResidencyAcquireFailed: return "residency_acquire_failed";
+		case MVKMetal4FallbackReason::AllocatorUnavailable: return "allocator_unavailable";
+		case MVKMetal4FallbackReason::CommandObjectUnavailable: return "command_object_unavailable";
+		case MVKMetal4FallbackReason::EncodingReplayableException: return "encoding_replayable_exception";
+		case MVKMetal4FallbackReason::CommandBufferNotEnded: return "command_buffer_not_ended";
+		case MVKMetal4FallbackReason::PrecommitReplayableException: return "precommit_replayable_exception";
+		case MVKMetal4FallbackReason::Count: break;
+	}
+	return "unknown";
+}
+
+struct MVKMetal4FallbackTelemetry {
+	uint64_t totalCount = 0;
+	uint64_t reasonCount = 0;
+};
 
 /**
  * Queue-independent ownership shared by MTL4 feedback and event callbacks.
@@ -86,8 +121,10 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> nextSequence = 1;
 	atomic<uint64_t> submittedCount = 0;
 	atomic<uint64_t> completedCount = 0;
+	atomic<uint64_t> attemptedSubmissionCount = 0;
 	atomic<uint64_t> realSubmissionCount = 0;
 	atomic<uint64_t> fallbackCount = 0;
+	array<atomic<uint64_t>, static_cast<size_t>(MVKMetal4FallbackReason::Count)> fallbackReasonCounts;
 	atomic<uint64_t> failureCount = 0;
 	atomic<uint64_t> bufferCopyCount = 0;
 	atomic<uint64_t> bufferFillCount = 0;
@@ -98,6 +135,10 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> drawCount = 0;
 	atomic<uint64_t> barrierCount = 0;
 	string lastError;
+
+	MVKMetal4CommandQueueState() {
+		for (auto& counter : fallbackReasonCounts) { counter.store(0, memory_order_relaxed); }
+	}
 
 	~MVKMetal4CommandQueueState() {
 		for (auto& item : residentAllocations) { [item.second.allocation release]; }
@@ -341,8 +382,17 @@ struct MVKMetal4CommandQueueState {
 		return probeSucceeded.load(memory_order_acquire);
 	}
 
+	uint64_t recordSubmissionAttempt() {
+		return attemptedSubmissionCount.fetch_add(1, memory_order_relaxed) + 1;
+	}
 	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
-	void recordFallback() { fallbackCount.fetch_add(1, memory_order_relaxed); }
+	MVKMetal4FallbackTelemetry recordFallback(MVKMetal4FallbackReason reason) {
+		auto index = static_cast<size_t>(reason);
+		return {
+			fallbackCount.fetch_add(1, memory_order_relaxed) + 1,
+			fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1,
+		};
+	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
 	void recordImageCopy(uint64_t count = 1) { imageCopyCount.fetch_add(count, memory_order_relaxed); }
@@ -1615,7 +1665,8 @@ MVKQueue::~MVKQueue() {
 	if (_metal4CommandState) {
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
+			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->fallbackCount.load(memory_order_relaxed),
@@ -1819,22 +1870,49 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 
 	auto state = _queue->_metal4CommandState;
 	id<MTL4CommandQueue> commandQueue = _queue->_mtl4Queue;
-	if (!state || !commandQueue ||
-		!supportsMetal4Semaphores() ||
-		!supportsMetal4CommandBuffers()) {
-		if (state) { state->recordFallback(); }
+	if (!state || !commandQueue) {
+		_queue->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command backend became unavailable after initialization; retaining the legacy backend.");
+		return VK_SUCCESS;
+	}
+
+	state->recordSubmissionAttempt();
+	auto recordFallback = [&](MVKMetal4FallbackReason reason) {
+		MVKMetal4FallbackTelemetry fallback = state->recordFallback(reason);
+		bool isPowerOfTwo =
+			fallback.totalCount != 0 &&
+			(fallback.totalCount & (fallback.totalCount - 1)) == 0;
+		if (fallback.reasonCount == 1 || isPowerOfTwo) {
+			_queue->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu.",
+				(unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed),
+				(unsigned long long)state->realSubmissionCount.load(memory_order_relaxed),
+				(unsigned long long)fallback.totalCount,
+				(unsigned long long)state->failureCount.load(memory_order_relaxed),
+				mvkMetal4FallbackReasonName(reason),
+				(unsigned long long)fallback.reasonCount);
+		}
+	};
+
+	if (!supportsMetal4Semaphores()) {
+		recordFallback(MVKMetal4FallbackReason::UnsupportedSemaphore);
+		return VK_SUCCESS;
+	}
+	if (!supportsMetal4CommandBuffers()) {
+		recordFallback(MVKMetal4FallbackReason::UnsupportedCommandBuffer);
 		return VK_SUCCESS;
 	}
 
 	MVKMetal4TransferCommandEncoder encoder(state);
 	if (!prepareMetal4CommandBuffers(&encoder)) {
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::PrepareFailed);
 		return VK_SUCCESS;
 	}
 
 	const auto& allocations = encoder.getAllocations();
 	if (!state->acquireResidency(allocations)) {
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::ResidencyAcquireFailed);
 		return VK_SUCCESS;
 	}
 
@@ -1842,7 +1920,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	id<MTL4CommandAllocator> allocator = nil;
 	if (!state->acquireAllocator(&allocatorIndex, &allocator)) {
 		state->releaseResidency(allocations);
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::AllocatorUnavailable);
 		return VK_SUCCESS;
 	}
 
@@ -1856,7 +1934,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[residencySet release];
 		[commandBuffer release];
 		[allocator release];
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::CommandObjectUnavailable);
 		return VK_SUCCESS;
 	}
 
@@ -1936,7 +2014,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[residencySet release];
 		[commandBuffer release];
 		[allocator release];
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::EncodingReplayableException);
 		return VK_SUCCESS;
 	}
 
@@ -1948,7 +2026,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[residencySet release];
 		[commandBuffer release];
 		[allocator release];
-		state->recordFallback();
+		recordFallback(MVKMetal4FallbackReason::CommandBufferNotEnded);
 		return VK_SUCCESS;
 	}
 
@@ -1997,9 +2075,10 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 
 		if (state->realSubmissionCount.load(memory_order_relaxed) == 1) {
 			_queue->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-							  "Executed first Vulkan submission on the Metal 4 transfer backend (queue %u-%u, sequence %llu).",
+							  "Executed first Vulkan submission on the Metal 4 transfer backend (queue %u-%u, sequence %llu, attempts=%llu).",
 							  _queue->_queueFamily->getIndex(), _queue->_index,
-							  (unsigned long long)_submissionSequence);
+							  (unsigned long long)_submissionSequence,
+							  (unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed));
 		}
 	} @catch (NSException* exception) {
 		if (!queueSideEffectsStarted && !commitAttempted) {
@@ -2013,7 +2092,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 				state->finishEncoding(allocatorIndex, false);
 			}
 			state->releaseResidency(allocations);
-			state->recordFallback();
+			recordFallback(MVKMetal4FallbackReason::PrecommitReplayableException);
 			[orderingEvent release];
 			[options release];
 			[residencySet release];

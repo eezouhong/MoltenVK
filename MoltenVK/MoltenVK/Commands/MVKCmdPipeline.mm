@@ -338,6 +338,12 @@ bool MVKCmdBindGraphicsPipeline::supportsMetal4Encoding() const {
 	return pipeline && pipeline->supportsMetal4DescriptorlessRenderExecution();
 }
 
+const char* MVKCmdBindGraphicsPipeline::getMetal4UnsupportedReason() const {
+	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
+	return pipeline ? pipeline->metal4RenderExecutionUnsupportedReason()
+					: "MVKCmdBindGraphicsPipeline:null_pipeline";
+}
+
 bool MVKCmdBindGraphicsPipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
 	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useGraphicsPipeline(pipeline);

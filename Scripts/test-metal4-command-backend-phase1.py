@@ -56,6 +56,7 @@ def main() -> int:
     queries_h = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.h")
     queries_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.mm")
     pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
+    pipeline_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm")
     query_pool_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.h")
     query_pool_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.mm")
     queue_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.h")
@@ -68,7 +69,7 @@ def main() -> int:
     implementation = "\n".join(
         (command_h, command_buffer_h, command_buffer_mm, transfer_h, transfer_mm,
          dispatch_h, dispatch_mm, draw_h, draw_mm, rendering_h, rendering_mm,
-         pipeline_cmd_h, pipeline_cmd_mm, queries_h, queries_mm, pipeline_h,
+         pipeline_cmd_h, pipeline_cmd_mm, queries_h, queries_mm, pipeline_h, pipeline_mm,
          query_pool_h, query_pool_mm, queue_h, queue_mm, sync_h, sync_mm)
     )
 
@@ -573,6 +574,16 @@ def main() -> int:
             execute_metal4,
             r"latest_unsupported_command=%s",
             "live fallback telemetry does not identify the command blocking Metal 4",
+        ),
+        (
+            command_h + command_buffer_mm,
+            r"getMetal4UnsupportedReason",
+            "unsupported commands cannot refine the bounded blocker reason",
+        ),
+        (
+            pipeline_h + pipeline_cmd_mm + pipeline_mm,
+            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?depth_stencil_or_mrt[\s\S]*?dynamic_state",
+            "graphics-pipeline blockers are not classified before expanding the render backend",
         ),
     ):
         require(source, pattern, message)

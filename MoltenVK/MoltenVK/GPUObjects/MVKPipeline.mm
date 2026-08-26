@@ -3035,9 +3035,10 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		pRendInfo->pColorAttachmentFormats[0] != VK_FORMAT_UNDEFINED &&
 		pRendInfo->depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
 		pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED;
-	bool hasStrictShaderStages =
+	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
-		!pTessCtlSS && !pTessEvalSS &&
+		!pTessCtlSS && !pTessEvalSS;
+	bool hasStrictShaderStages = hasVertexFragmentStages &&
 		stageIsDescriptorless(kMVKShaderStageVertex) &&
 		stageIsDescriptorless(kMVKShaderStageFragment);
 	bool hasNoVertexInput = pVI &&
@@ -3067,6 +3068,34 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		hasNoVertexInput && hasStrictFixedFunction;
 	if (_supportsMetal4DescriptorlessRenderExecution) {
 		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
+		_metal4RenderExecutionUnsupportedReason = nullptr;
+	} else if (hasVertexFragmentStages && !hasStrictShaderStages) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:descriptor_resources";
+	} else if (!hasNoVertexInput) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:vertex_input";
+	} else if (!hasOneDynamicColorAttachment) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:depth_stencil_or_mrt";
+	} else if (!_dynamicStateFlags.empty()) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:dynamic_state";
+	} else if (!_mtlPipelineState) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:missing_pipeline_state";
+	} else if (!_isRasterizing) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:rasterization_disabled";
+	} else if (_isTessellationPipeline) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:tessellation";
+	} else if (!hasVertexFragmentStages) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:shader_stage_shape";
+	} else {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:fixed_function";
 	}
 }
 

@@ -194,6 +194,15 @@ public:
 	virtual bool supportsMetal4Encoding() const { return false; }
 
 	/**
+	 * Returns a stable, bounded diagnostic reason when Metal 4 encoding is not
+	 * supported. Subclasses may refine the pooled command type without allocating
+	 * or logging per command.
+	 */
+	virtual const char* getMetal4UnsupportedReason() const {
+		return getMetal4CommandTypeName();
+	}
+
+	/**
 	 * Resolves and registers all Metal resources this command will touch. This is
 	 * called before any Vulkan command-buffer execution is claimed, so failure can
 	 * still select the legacy backend for the complete submission.

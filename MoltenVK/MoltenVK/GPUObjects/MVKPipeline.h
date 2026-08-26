@@ -402,6 +402,11 @@ public:
 	/** Returns whether the strict descriptorless Metal 4 render slice can execute this pipeline. */
 	bool supportsMetal4DescriptorlessRenderExecution() const { return _supportsMetal4DescriptorlessRenderExecution; }
 
+	/** Returns the first stable eligibility blocker for bounded command-backend telemetry. */
+	const char* metal4RenderExecutionUnsupportedReason() const {
+		return _metal4RenderExecutionUnsupportedReason;
+	}
+
 	/** Returns the one color format accepted by the strict Metal 4 render slice. */
 	VkFormat getMetal4ColorAttachmentFormat() const { return _metal4ColorAttachmentFormat; }
 
@@ -544,6 +549,7 @@ protected:
 	bool _inputAttachmentIsDSAttachment = false;
 	bool _hasRemappedAttachmentLocations = false;
 	bool _supportsMetal4DescriptorlessRenderExecution = false;
+	const char* _metal4RenderExecutionUnsupportedReason = "MVKCmdBindGraphicsPipeline:unclassified";
 	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 

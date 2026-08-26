@@ -323,7 +323,7 @@ bool MVKCommandBuffer::supportsMetal4Encoding(const char** firstUnsupportedComma
 	for (MVKCommand* command = _head; command; command = command->_next) {
 		if (!command->supportsMetal4Encoding()) {
 			if (firstUnsupportedCommand) {
-				*firstUnsupportedCommand = command->getMetal4CommandTypeName();
+				*firstUnsupportedCommand = command->getMetal4UnsupportedReason();
 			}
 			return false;
 		}

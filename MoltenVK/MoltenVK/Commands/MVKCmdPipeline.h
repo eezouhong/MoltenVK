@@ -130,6 +130,7 @@ public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
 	bool supportsMetal4Encoding() const override;
+	const char* getMetal4UnsupportedReason() const override;
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 

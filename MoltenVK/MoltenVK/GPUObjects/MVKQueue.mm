@@ -166,6 +166,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> queryCopyCount = 0;
 	atomic<uint64_t> visibilityQueryCount = 0;
 	string lastError;
+	string lastReplayableException;
 
 	MVKMetal4CommandQueueState() {
 		for (auto& counter : fallbackReasonCounts) { counter.store(0, memory_order_relaxed); }
@@ -471,6 +472,21 @@ struct MVKMetal4CommandQueueState {
 		telemetry.totalCount = fallbackCount.fetch_add(1, memory_order_relaxed) + 1;
 		telemetry.reasonCount = fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1;
 		return telemetry;
+	}
+
+	bool recordReplayableException(const char* phase,
+								 NSException* exception,
+								 string* summary) {
+		string exceptionName = exception.name.UTF8String ?: "unknown";
+		string exceptionReason = exception.reason.UTF8String ?: "unknown";
+		string nextSummary = "phase=" + string(phase ?: "unknown") +
+			", name=" + exceptionName +
+			", reason=" + exceptionReason;
+		lock_guard<mutex> guard(lock);
+		bool changed = nextSummary != lastReplayableException;
+		lastReplayableException = nextSummary;
+		if (summary) { *summary = nextSummary; }
+		return changed;
 	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
@@ -3538,31 +3554,38 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	bool encoderEndAttempted = false;
 	bool commandBufferEndAttempted = false;
 	bool commandBufferEnded = false;
+	const char* encodingPhase = "label_command_buffer";
 	@try {
 		commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 Vulkan transfer submission %llu",
-													 _queue->getName().c_str(),
-													 (unsigned long long)_submissionSequence];
+												 _queue->getName().c_str(),
+												 (unsigned long long)_submissionSequence];
+		encodingPhase = "begin_command_buffer";
 		commandBufferBeginAttempted = true;
 		[commandBuffer beginCommandBufferWithAllocator:allocator];
 		commandBufferBegun = true;
+		encodingPhase = "begin_encoder";
 		if (!encoder.beginEncoding(commandBuffer, residencySet)) {
 			@throw [NSException exceptionWithName:@"MVKMetal4EncoderCreation"
 									 reason:@"Could not create MTL4ComputeCommandEncoder"
 								   userInfo:nil];
 		}
+		encodingPhase = "claim_vulkan_command_buffers";
 		if (!beginMetal4CommandBuffers()) {
 			@throw [NSException exceptionWithName:@"MVKMetal4CommandClaim"
 									 reason:@"Could not claim every Vulkan command buffer"
 								   userInfo:nil];
 		}
 		claimedCommandBuffers = true;
+		encodingPhase = "encode_vulkan_commands";
 		if (!encodeMetal4CommandBuffers(&encoder)) {
 			@throw [NSException exceptionWithName:@"MVKMetal4CommandEncoding"
 									 reason:@"Metal 4 command materialization failed"
 								   userInfo:nil];
 		}
+		encodingPhase = "end_encoder";
 		encoderEndAttempted = true;
 		encoder.endEncoding();
+		encodingPhase = "end_command_buffer";
 		commandBufferEndAttempted = true;
 		[commandBuffer endCommandBuffer];
 		commandBufferEnded = true;
@@ -3608,6 +3631,13 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[residencySet release];
 		[commandBuffer release];
 		[allocator release];
+		string exceptionSummary;
+		if (state->recordReplayableException(encodingPhase, exception, &exceptionSummary)) {
+			_queue->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 replayable encoding exception: %s.",
+				exceptionSummary.c_str());
+		}
 		recordFallback(MVKMetal4FallbackReason::EncodingReplayableException);
 		return VK_SUCCESS;
 	}

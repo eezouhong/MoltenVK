@@ -61,6 +61,20 @@ void MVKCmdBeginQuery::encode(MVKCommandEncoder* cmdEncoder) {
     _queryPool->beginQuery(query, _flags, cmdEncoder);
 }
 
+bool MVKCmdBeginQuery::supportsMetal4Encoding() const {
+	return _queryPool && _queryPool->supportsMetal4VisibilityQueries();
+}
+
+bool MVKCmdBeginQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->useVisibilityQueryPool(_queryPool);
+}
+
+bool MVKCmdBeginQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->beginVisibilityQuery(_queryPool, _query, _flags);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdEndQuery
@@ -70,6 +84,21 @@ void MVKCmdEndQuery::encode(MVKCommandEncoder* cmdEncoder) {
     if (cmdEncoder->getMultiviewPassIndex() > 0)
         query += cmdEncoder->getSubpass()->getViewCountUpToMetalPass(cmdEncoder->getMultiviewPassIndex() - 1);
     _queryPool->endQuery(query, cmdEncoder);
+}
+
+bool MVKCmdEndQuery::supportsMetal4Encoding() const {
+	return _queryPool && _queryPool->supportsMetal4VisibilityQueries() &&
+		_queryPool->canEndMetal4Query();
+}
+
+bool MVKCmdEndQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->useVisibilityQueryPool(_queryPool);
+}
+
+bool MVKCmdEndQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->endVisibilityQuery(_queryPool, _query);
 }
 
 

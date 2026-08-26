@@ -199,6 +199,22 @@ def main() -> int:
     )
     for token in ("MVKCmdResetQueryPool::prepareMetal4Encoding", "MVKCmdResetQueryPool::encodeMetal4"):
         require(queries_mm, re.escape(token), f"query-pool reset is missing: {token}")
+    for command in ("MVKCmdBeginQuery", "MVKCmdEndQuery"):
+        require(queries_h, rf"{command}[\s\S]*?supportsMetal4Encoding", f"{command} is not opted in")
+        require(queries_h + queries_mm, rf"{command}[\s\S]*?prepareMetal4Encoding", f"{command} does not resolve query storage")
+        require(queries_h + queries_mm, rf"{command}[\s\S]*?encodeMetal4", f"{command} does not materialize")
+    require(
+        command_h + queue_mm,
+        r"useVisibilityQueryPool[\s\S]*?beginVisibilityQuery[\s\S]*?endVisibilityQuery",
+        "visibility-query command surface is missing",
+    )
+    for token in ("visibilityResultBuffer", "MTLVisibilityResultTypeAccumulate", "setVisibilityResultMode"):
+        require(queue_mm, re.escape(token), f"MTL4 render visibility support is missing: {token}")
+    require(
+        queue_mm + query_pool_h + query_pool_mm,
+        r"completedQueries[\s\S]*?applyMetal4End[\s\S]*?finishMetal4Query",
+        "query availability is not split between commit and GPU completion",
+    )
     require(
         command_h + queue_mm,
         r"useQueryPool[\s\S]*?resetQueryPool[\s\S]*?pendingQueryResets[\s\S]*?publishCommittedState",
@@ -605,6 +621,8 @@ def main() -> int:
         "vkCmdFillBuffer",
         "vkCmdUpdateBuffer",
         "vkCmdResetQueryPool",
+        "vkCmdBeginQuery",
+        "vkCmdEndQuery",
         "vkCmdPipelineBarrier",
         "vkCmdCopyBuffer",
         "vkCmdCopyImage",
@@ -623,6 +641,7 @@ def main() -> int:
         "IMAGE_DATA_OK",
         "RENDER_OK",
         "QUERY_RESET_OK",
+        "QUERY_OCCLUSION_OK",
         "UPDATE_BUFFER_OK",
         "METAL4_PHASE1C_E2E_PASS",
     ):

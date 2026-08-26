@@ -993,6 +993,32 @@ int main() {
         }
         std::cout << "QUERY_RESET_OK" << std::endl;
 
+        VkCommandBuffer queryCommand = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(queryCommand, &renderingInfo);
+        vkCmdBindPipeline(queryCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBeginQuery(queryCommand, queryPool, 1, 0);
+        vkCmdDraw(queryCommand, 3, 1, 0, 0);
+        vkCmdEndQuery(queryCommand, queryPool, 1);
+        vkCmdEndRendering(queryCommand);
+        endCommandBuffer(queryCommand);
+        VkSubmitInfo querySubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        querySubmit.commandBufferCount = 1;
+        querySubmit.pCommandBuffers = &queryCommand;
+        VkFence queryFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &querySubmit, queryFence),
+              "vkQueueSubmit(occlusion query)");
+        waitFence(device, queryFence);
+        std::array<uint64_t, 2> occlusionResult{{0, 0}};
+        check(vkGetQueryPoolResults(
+                  device, queryPool, 1, 1, sizeof(occlusionResult), occlusionResult.data(),
+                  sizeof(occlusionResult), VK_QUERY_RESULT_64_BIT |
+                      VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+              "vkGetQueryPoolResults(occlusion)");
+        if (occlusionResult[0] == 0 || occlusionResult[1] != 1) {
+            fail("Occlusion query result or availability was not published");
+        }
+        std::cout << "QUERY_OCCLUSION_OK" << std::endl;
+
         // vkCmdUpdateBuffer owns its source bytes in the recorded command. The
         // MTL4 preflight must create resident staging storage before commit.
         Buffer updated = createBuffer(physicalDevice, device, 256);
@@ -1019,6 +1045,7 @@ int main() {
 
         vkDestroyFence(device, updateFence, nullptr);
         updated.destroy();
+        vkDestroyFence(device, queryFence, nullptr);
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         vkDestroyFence(device, renderFence, nullptr);

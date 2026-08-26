@@ -849,6 +849,11 @@ def main() -> int:
             r"dynamic_viewport_scissor[\s\S]*?dynamic_depth_stencil[\s\S]*?dynamic_rasterization[\s\S]*?dynamic_topology[\s\S]*?dynamic_color_blend[\s\S]*?dynamic_sampling[\s\S]*?dynamic_tessellation[\s\S]*?dynamic_other",
             "dynamic-state blockers are not split into actionable capability groups",
         ),
+        (
+            rendering_h + rendering_mm,
+            r"MVKCmdBeginRenderPass[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?classic_render_pass_missing[\s\S]*?classic_render_pass_subpass_count[\s\S]*?classic_render_pass_secondary_contents[\s\S]*?classic_render_pass_missing_framebuffer[\s\S]*?classic_render_pass_layered[\s\S]*?classic_render_pass_partial_area[\s\S]*?classic_render_pass_multiview[\s\S]*?classic_render_pass_multisample[\s\S]*?classic_render_pass_no_color[\s\S]*?classic_render_pass_color_count[\s\S]*?classic_render_pass_unused_color[\s\S]*?classic_render_pass_attachment_missing[\s\S]*?classic_render_pass_attachment_plane_count[\s\S]*?classic_render_pass_attachment_multisample[\s\S]*?classic_render_pass_attachment_texture_type[\s\S]*?classic_render_pass_attachment_swizzle[\s\S]*?classic_render_pass_attachment_extent",
+            "classic render-pass fallback telemetry does not identify the actual unsupported condition",
+        ),
     ):
         require(source, pattern, message)
     reject(

@@ -58,46 +58,93 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 	_clearValues.assign(pRenderPassBegin->pClearValues,
 						pRenderPassBegin->pClearValues + pRenderPassBegin->clearValueCount);
 
-	MVKRenderSubpass* subpass = _renderPass && _renderPass->getSubpassCount() == 1
-		? _renderPass->getSubpass(0)
-		: nullptr;
+	_supportsMetal4Encoding = false;
+	_metal4UnsupportedReason = nullptr;
+	if (!_renderPass) {
+		_metal4UnsupportedReason = "classic_render_pass_missing";
+		return VK_SUCCESS;
+	}
+	if (_renderPass->getSubpassCount() != 1) {
+		_metal4UnsupportedReason = "classic_render_pass_subpass_count";
+		return VK_SUCCESS;
+	}
+	if (_contents != VK_SUBPASS_CONTENTS_INLINE) {
+		_metal4UnsupportedReason = "classic_render_pass_secondary_contents";
+		return VK_SUCCESS;
+	}
+	if (!_framebuffer) {
+		_metal4UnsupportedReason = "classic_render_pass_missing_framebuffer";
+		return VK_SUCCESS;
+	}
+
+	MVKRenderSubpass* subpass = _renderPass->getSubpass(0);
 	VkExtent2D framebufferExtent = _framebuffer
 		? _framebuffer->getExtent2D()
 		: VkExtent2D{};
-	_supportsMetal4Encoding = subpass &&
-		_contents == VK_SUBPASS_CONTENTS_INLINE &&
-		_framebuffer->getLayerCount() == 1 &&
-		_renderArea.offset.x == 0 && _renderArea.offset.y == 0 &&
-		_renderArea.extent.width == framebufferExtent.width &&
-		_renderArea.extent.height == framebufferExtent.height &&
-		!subpass->isMultiview() &&
-		subpass->getSampleCount() == VK_SAMPLE_COUNT_1_BIT &&
-		subpass->getColorAttachmentCount() > 0 &&
-		subpass->getColorAttachmentCount() <= kMVKMaxColorAttachmentCount;
-	if (_supportsMetal4Encoding) {
-		bool hasUsedColorAttachment = false;
-		for (uint32_t colorIndex = 0;
-			 colorIndex < subpass->getColorAttachmentCount();
-			 colorIndex++) {
-			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
-		}
-		_supportsMetal4Encoding = hasUsedColorAttachment;
+	if (_framebuffer->getLayerCount() != 1) {
+		_metal4UnsupportedReason = "classic_render_pass_layered";
+		return VK_SUCCESS;
 	}
-	if (_supportsMetal4Encoding) {
-		for (MVKImageView* attachment : _attachments) {
-			id<MTLTexture> texture = attachment ? attachment->getMTLTexture() : nil;
-			if (!attachment || !texture ||
-				attachment->getPlaneCount() != 1 ||
-				attachment->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
-				attachment->getMTLTextureType() != MTLTextureType2D ||
-				attachment->getPackedSwizzle() != 0 ||
-				texture.width != framebufferExtent.width ||
-				texture.height != framebufferExtent.height) {
-				_supportsMetal4Encoding = false;
-				break;
-			}
+	if (_renderArea.offset.x != 0 || _renderArea.offset.y != 0 ||
+		_renderArea.extent.width != framebufferExtent.width ||
+		_renderArea.extent.height != framebufferExtent.height) {
+		_metal4UnsupportedReason = "classic_render_pass_partial_area";
+		return VK_SUCCESS;
+	}
+	if (subpass->isMultiview()) {
+		_metal4UnsupportedReason = "classic_render_pass_multiview";
+		return VK_SUCCESS;
+	}
+	if (subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		_metal4UnsupportedReason = "classic_render_pass_multisample";
+		return VK_SUCCESS;
+	}
+	uint32_t colorAttachmentCount = subpass->getColorAttachmentCount();
+	if (colorAttachmentCount == 0) {
+		_metal4UnsupportedReason = "classic_render_pass_no_color";
+		return VK_SUCCESS;
+	}
+	if (colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+		_metal4UnsupportedReason = "classic_render_pass_color_count";
+		return VK_SUCCESS;
+	}
+	bool hasUsedColorAttachment = false;
+	for (uint32_t colorIndex = 0; colorIndex < colorAttachmentCount; colorIndex++) {
+		hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
+	}
+	if (!hasUsedColorAttachment) {
+		_metal4UnsupportedReason = "classic_render_pass_unused_color";
+		return VK_SUCCESS;
+	}
+	for (MVKImageView* attachment : _attachments) {
+		id<MTLTexture> texture = attachment ? attachment->getMTLTexture() : nil;
+		if (!attachment || !texture) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_missing";
+			return VK_SUCCESS;
+		}
+		if (attachment->getPlaneCount() != 1) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_plane_count";
+			return VK_SUCCESS;
+		}
+		if (attachment->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_multisample";
+			return VK_SUCCESS;
+		}
+		if (attachment->getMTLTextureType() != MTLTextureType2D) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_texture_type";
+			return VK_SUCCESS;
+		}
+		if (attachment->getPackedSwizzle() != 0) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_swizzle";
+			return VK_SUCCESS;
+		}
+		if (texture.width != framebufferExtent.width ||
+			texture.height != framebufferExtent.height) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_extent";
+			return VK_SUCCESS;
 		}
 	}
+	_supportsMetal4Encoding = true;
 
 	return VK_SUCCESS;
 }

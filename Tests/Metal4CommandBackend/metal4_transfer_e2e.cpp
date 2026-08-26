@@ -693,6 +693,12 @@ int main() {
             enabledInstanceExtensions.push_back(kPortabilityEnumeration);
             instanceFlags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
         }
+        if (!hasExtension(instanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME) ||
+            !hasExtension(instanceExtensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+            fail("Headless surface extensions are unavailable");
+        }
+        enabledInstanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        enabledInstanceExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
 
         VkApplicationInfo applicationInfo = makeVkStruct<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
         applicationInfo.pApplicationName = "MoltenVK Metal 4 Phase 1C e2e";
@@ -707,6 +713,14 @@ int main() {
 
         VkInstance instance = VK_NULL_HANDLE;
         check(vkCreateInstance(&instanceCreateInfo, nullptr, &instance), "vkCreateInstance");
+
+        VkHeadlessSurfaceCreateInfoEXT headlessSurfaceInfo =
+            makeVkStruct<VkHeadlessSurfaceCreateInfoEXT>(
+                VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT);
+        VkSurfaceKHR headlessSurface = VK_NULL_HANDLE;
+        check(vkCreateHeadlessSurfaceEXT(instance, &headlessSurfaceInfo, nullptr,
+                                         &headlessSurface),
+              "vkCreateHeadlessSurfaceEXT");
 
         uint32_t physicalDeviceCount = 0;
         check(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr),
@@ -726,7 +740,12 @@ int main() {
         for (uint32_t index = 0; index < queueFamilyCount; ++index) {
             const VkQueueFlags required =
                 VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_COMPUTE_BIT;
-            if ((queueFamilies[index].queueFlags & required) == required) {
+            VkBool32 supportsPresentation = VK_FALSE;
+            check(vkGetPhysicalDeviceSurfaceSupportKHR(
+                      physicalDevice, index, headlessSurface, &supportsPresentation),
+                  "vkGetPhysicalDeviceSurfaceSupportKHR");
+            if ((queueFamilies[index].queueFlags & required) == required &&
+                supportsPresentation) {
                 queueFamilyIndex = index;
                 break;
             }
@@ -755,6 +774,10 @@ int main() {
             fail("Extended dynamic state is unavailable");
         }
         enabledDeviceExtensions.push_back(kExtendedDynamicState);
+        if (!hasExtension(deviceExtensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+            fail("Swapchain extension is unavailable");
+        }
+        enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queueCreateInfo = makeVkStruct<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
@@ -807,6 +830,104 @@ int main() {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         check(vkCreateCommandPool(device, &poolCreateInfo, nullptr, &commandPool),
               "vkCreateCommandPool");
+
+        VkSurfaceCapabilitiesKHR surfaceCapabilities{};
+        check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+                  physicalDevice, headlessSurface, &surfaceCapabilities),
+              "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        uint32_t surfaceFormatCount = 0;
+        check(vkGetPhysicalDeviceSurfaceFormatsKHR(
+                  physicalDevice, headlessSurface, &surfaceFormatCount, nullptr),
+              "vkGetPhysicalDeviceSurfaceFormatsKHR(count)");
+        if (!surfaceFormatCount) { fail("Headless surface has no formats"); }
+        std::vector<VkSurfaceFormatKHR> surfaceFormats(surfaceFormatCount);
+        check(vkGetPhysicalDeviceSurfaceFormatsKHR(
+                  physicalDevice, headlessSurface, &surfaceFormatCount,
+                  surfaceFormats.data()),
+              "vkGetPhysicalDeviceSurfaceFormatsKHR(list)");
+        VkSurfaceFormatKHR surfaceFormat = surfaceFormats.front();
+        VkExtent2D surfaceExtent{32, 32};
+        if (surfaceCapabilities.currentExtent.width != UINT32_MAX) {
+            surfaceExtent = surfaceCapabilities.currentExtent;
+        }
+        uint32_t swapchainImageCount = std::max(2u, surfaceCapabilities.minImageCount);
+        if (surfaceCapabilities.maxImageCount) {
+            swapchainImageCount = std::min(
+                swapchainImageCount, surfaceCapabilities.maxImageCount);
+        }
+        VkCompositeAlphaFlagBitsKHR compositeAlpha =
+            VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        if ((surfaceCapabilities.supportedCompositeAlpha & compositeAlpha) == 0) {
+            compositeAlpha = static_cast<VkCompositeAlphaFlagBitsKHR>(
+                surfaceCapabilities.supportedCompositeAlpha &
+                (~surfaceCapabilities.supportedCompositeAlpha + 1));
+        }
+        VkSwapchainCreateInfoKHR swapchainInfo =
+            makeVkStruct<VkSwapchainCreateInfoKHR>(
+                VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+        swapchainInfo.surface = headlessSurface;
+        swapchainInfo.minImageCount = swapchainImageCount;
+        swapchainInfo.imageFormat = surfaceFormat.format;
+        swapchainInfo.imageColorSpace = surfaceFormat.colorSpace;
+        swapchainInfo.imageExtent = surfaceExtent;
+        swapchainInfo.imageArrayLayers = 1;
+        swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        swapchainInfo.preTransform = surfaceCapabilities.currentTransform;
+        swapchainInfo.compositeAlpha = compositeAlpha;
+        swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        swapchainInfo.clipped = VK_TRUE;
+        VkSwapchainKHR headlessSwapchain = VK_NULL_HANDLE;
+        check(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr,
+                                   &headlessSwapchain),
+              "vkCreateSwapchainKHR(headless)");
+
+        uint32_t headlessImageIndex = 0;
+        VkFence acquireFence = createFence(device);
+        check(vkAcquireNextImageKHR(device, headlessSwapchain, UINT64_MAX,
+                                    VK_NULL_HANDLE, acquireFence,
+                                    &headlessImageIndex),
+              "vkAcquireNextImageKHR(headless)");
+        waitFence(device, acquireFence);
+        uint32_t headlessImageCount = 0;
+        check(vkGetSwapchainImagesKHR(device, headlessSwapchain,
+                                      &headlessImageCount, nullptr),
+              "vkGetSwapchainImagesKHR(count)");
+        std::vector<VkImage> headlessImages(headlessImageCount);
+        check(vkGetSwapchainImagesKHR(device, headlessSwapchain,
+                                      &headlessImageCount,
+                                      headlessImages.data()),
+              "vkGetSwapchainImagesKHR(list)");
+        if (headlessImageIndex >= headlessImages.size()) {
+            fail("Acquired headless image index is out of range");
+        }
+        VkCommandBuffer presentTransition =
+            beginCommandBuffer(device, commandPool);
+        imageBarrier(presentTransition, headlessImages[headlessImageIndex],
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                     0, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        endCommandBuffer(presentTransition);
+        VkSubmitInfo presentTransitionSubmit =
+            makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        presentTransitionSubmit.commandBufferCount = 1;
+        presentTransitionSubmit.pCommandBuffers = &presentTransition;
+        VkFence presentTransitionFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &presentTransitionSubmit,
+                            presentTransitionFence),
+              "vkQueueSubmit(present transition)");
+        waitFence(device, presentTransitionFence);
+        VkPresentInfoKHR presentInfo =
+            makeVkStruct<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = &headlessSwapchain;
+        presentInfo.pImageIndices = &headlessImageIndex;
+        VkResult presentResult = vkQueuePresentKHR(queue, &presentInfo);
+        if (presentResult != VK_SUCCESS && presentResult != VK_SUBOPTIMAL_KHR) {
+            check(presentResult, "vkQueuePresentKHR(headless)");
+        }
+        check(vkQueueWaitIdle(queue), "vkQueueWaitIdle(headless present)");
+        std::cout << "PRESENT_LAYOUT_AND_QUEUE_OK" << std::endl;
 
         constexpr VkDeviceSize kSize = 4096;
         Buffer a = createBuffer(physicalDevice, device, kSize);
@@ -3567,8 +3688,12 @@ int main() {
         a.destroy();
         b.destroy();
         c.destroy();
+        vkDestroyFence(device, presentTransitionFence, nullptr);
+        vkDestroyFence(device, acquireFence, nullptr);
+        vkDestroySwapchainKHR(device, headlessSwapchain, nullptr);
         vkDestroyCommandPool(device, commandPool, nullptr);
         vkDestroyDevice(device, nullptr);
+        vkDestroySurfaceKHR(instance, headlessSurface, nullptr);
         vkDestroyInstance(instance, nullptr);
 
         std::cout << "METAL4_PHASE1C_E2E_PASS" << std::endl;

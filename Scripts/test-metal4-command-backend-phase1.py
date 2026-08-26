@@ -370,6 +370,11 @@ def main() -> int:
         r"GENERAL_LAYOUT_IMAGE_OK[\s\S]*?GENERAL_LAYOUT_IMAGE_OK",
         "GENERAL image-layout barriers lack a data-validating E2E gate",
     )
+    require(
+        pipeline_cmd_mm + e2e + runner,
+        r"presentLayout[\s\S]*?VK_IMAGE_LAYOUT_PRESENT_SRC_KHR[\s\S]*?VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR[\s\S]*?vkCreateHeadlessSurfaceEXT[\s\S]*?vkQueuePresentKHR[\s\S]*?PRESENT_LAYOUT_AND_QUEUE_OK[\s\S]*?PRESENT_LAYOUT_AND_QUEUE_OK",
+        "present-layout barriers are not handed from a real Metal 4 submission to queue presentation",
+    )
 
     # Strict ordinary-render slice: one dynamic-rendering color attachment, an optional
     # single-sample depth attachment, a descriptorless graphics pipeline, and a real

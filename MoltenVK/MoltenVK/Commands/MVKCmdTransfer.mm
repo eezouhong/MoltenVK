@@ -1554,10 +1554,17 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		return rejectMetal4("classic_clear_color_count");
 	}
 	for (const auto& rect : _clearRects) {
-		if (rect.baseArrayLayer != 0 || rect.layerCount != 1 ||
-			rect.rect.offset.x < 0 || rect.rect.offset.y < 0 ||
-			!rect.rect.extent.width || !rect.rect.extent.height) {
-			return rejectMetal4("classic_clear_rect");
+		if (rect.baseArrayLayer != 0) {
+			return rejectMetal4("classic_clear_base_layer");
+		}
+		if (rect.layerCount != 1) {
+			return rejectMetal4("classic_clear_layer_count");
+		}
+		if (rect.rect.offset.x < 0 || rect.rect.offset.y < 0) {
+			return rejectMetal4("classic_clear_negative_offset");
+		}
+		if (!rect.rect.extent.width || !rect.rect.extent.height) {
+			return rejectMetal4("classic_clear_zero_extent");
 		}
 	}
 

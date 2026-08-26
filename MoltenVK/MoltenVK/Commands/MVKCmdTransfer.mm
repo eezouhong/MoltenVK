@@ -1953,6 +1953,11 @@ VkResult MVKCmdUpdateBuffer::setContent(MVKCommandBuffer* cmdBuff,
     _dstBuffer = (MVKBuffer*)dstBuffer;
     _dstOffset = dstOffset;
     _dataSize = dataSize;
+	VkDeviceSize alignment = std::max<VkDeviceSize>(
+		cmdBuff->getMetalFeatures().mtlCopyBufferAlignment,
+		1);
+	_supportsMetal4Encoding = _dstBuffer && _dataSize > 0 && _dataSize <= 65536 &&
+		(_dstOffset % alignment) == 0 && (_dataSize % alignment) == 0;
 
     _srcDataCache.reserve(_dataSize);
     memcpy(_srcDataCache.data(), pData, _dataSize);
@@ -1982,4 +1987,18 @@ void MVKCmdUpdateBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     [cmdEncoder->_mtlCmdBuffer addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
         srcMTLBufferAlloc->returnToPool();
     }];
+}
+
+bool MVKCmdUpdateBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useBuffer(_dstBuffer) &&
+		cmdEncoder->useUpdateBufferData(_srcDataCache.data(), static_cast<size_t>(_dataSize));
+}
+
+bool MVKCmdUpdateBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->updateBuffer(_dstBuffer,
+							 _dstOffset,
+							 _srcDataCache.data(),
+							 static_cast<size_t>(_dataSize));
 }

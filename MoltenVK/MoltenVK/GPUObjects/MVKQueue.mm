@@ -144,6 +144,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> failureCount = 0;
 	atomic<uint64_t> bufferCopyCount = 0;
 	atomic<uint64_t> bufferFillCount = 0;
+	atomic<uint64_t> bufferUpdateCount = 0;
 	atomic<uint64_t> imageCopyCount = 0;
 	atomic<uint64_t> computeDispatchCount = 0;
 	atomic<uint64_t> renderSubmissionCount = 0;
@@ -460,6 +461,7 @@ struct MVKMetal4CommandQueueState {
 	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
+	void recordBufferUpdate(uint64_t count = 1) { bufferUpdateCount.fetch_add(count, memory_order_relaxed); }
 	void recordImageCopy(uint64_t count = 1) { imageCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordComputeDispatch(uint64_t count = 1) { computeDispatchCount.fetch_add(count, memory_order_relaxed); }
 	void recordRenderSubmission() { renderSubmissionCount.fetch_add(1, memory_order_relaxed); }
@@ -525,8 +527,9 @@ static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stage
 class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
 
 public:
-	explicit MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state) :
-		_state(std::move(state)) {}
+	MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state,
+								 id<MTLDevice> mtlDevice) :
+		_state(std::move(state)), _mtlDevice(mtlDevice) {}
 
 	struct BufferBinding {
 		id<MTLBuffer> buffer = nil;
@@ -552,6 +555,7 @@ public:
 	struct CommandCounters {
 		uint64_t bufferCopies = 0;
 		uint64_t bufferFills = 0;
+		uint64_t bufferUpdates = 0;
 		uint64_t imageCopies = 0;
 		uint64_t computeDispatches = 0;
 		uint64_t renderPasses = 0;
@@ -567,6 +571,10 @@ public:
 		uint32_t firstQuery = 0;
 		uint32_t queryCount = 0;
 	};
+	struct UpdateDataBinding {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger size = 0;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -576,6 +584,7 @@ public:
 		}
 		for (auto& item : _imageViews) { [item.second.texture release]; }
 		for (auto& item : _queryPools) { [item.second.resetBuffer release]; }
+		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) { [item.second release]; }
 	}
@@ -641,6 +650,20 @@ public:
 		id<MTLBuffer> resetBuffer = queryPool->getMetal4ResetMTLBuffer();
 		_queryPools.emplace(queryPool, QueryPoolBinding{[resetBuffer retain]});
 		if (resetBuffer) { _allocations.push_back((id<MTLAllocation>)resetBuffer); }
+		return true;
+	}
+
+	bool useUpdateBufferData(const void* data, size_t size) override {
+		if (!_mtlDevice || !data || !size || size > 65536) { return false; }
+		auto existing = _updateData.find(data);
+		if (existing != _updateData.end()) { return existing->second.size == size; }
+		id<MTLBuffer> buffer = [_mtlDevice newBufferWithBytes:data
+												 length:size
+												options:MTLResourceStorageModeShared |
+														MTLResourceCPUCacheModeWriteCombined];
+		if (!buffer) { return false; }
+		_updateData.emplace(data, UpdateDataBinding{buffer, size});
+		_allocations.push_back((id<MTLAllocation>)buffer);
 		return true;
 	}
 
@@ -917,6 +940,30 @@ public:
 		return true;
 	}
 
+	bool updateBuffer(MVKBuffer* dstBuffer,
+					  VkDeviceSize dstOffset,
+					  const void* data,
+					  size_t size) override {
+		auto dst = _buffers.find(dstBuffer);
+		auto src = _updateData.find(data);
+		if (dst == _buffers.end() || src == _updateData.end() || src->second.size != size ||
+			!size || !ensureComputeEncoder()) {
+			return false;
+		}
+		NSUInteger destinationOffset = dst->second.offset + static_cast<NSUInteger>(dstOffset);
+		if (destinationOffset > dst->second.buffer.length ||
+			size > dst->second.buffer.length - destinationOffset) {
+			return false;
+		}
+		[_computeEncoder copyFromBuffer:src->second.buffer
+						 sourceOffset:0
+							 toBuffer:dst->second.buffer
+					destinationOffset:destinationOffset
+								 size:size];
+		_counters.bufferUpdates++;
+		return true;
+	}
+
 	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
 		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
 			!renderingInfo.pColorAttachments) {
@@ -1010,6 +1057,7 @@ public:
 	void publishCommittedCounters() {
 		_state->recordBufferCopy(_counters.bufferCopies);
 		_state->recordBufferFill(_counters.bufferFills);
+		_state->recordBufferUpdate(_counters.bufferUpdates);
 		_state->recordImageCopy(_counters.imageCopies);
 		_state->recordComputeDispatch(_counters.computeDispatches);
 		_state->recordRenderPass(_counters.renderPasses);
@@ -1106,12 +1154,14 @@ private:
 	unordered_map<MVKImage*, ImageBinding> _images;
 	unordered_map<MVKImageView*, ImageViewBinding> _imageViews;
 	unordered_map<MVKQueryPool*, QueryPoolBinding> _queryPools;
+	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
 	vector<PendingBarrier> _pendingBarriers;
 	vector<MVKPipelineBarrier> _pendingImageBarriers;
 	vector<PendingQueryReset> _pendingQueryResets;
 	vector<id<MTLAllocation>> _allocations;
+	id<MTLDevice> _mtlDevice = nil;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
 	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
@@ -1852,7 +1902,7 @@ MVKQueue::~MVKQueue() {
 		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, unsupported_commands=%s.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, buffer_updates=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, unsupported_commands=%s.",
 			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
@@ -1860,6 +1910,7 @@ MVKQueue::~MVKQueue() {
 			(unsigned long long)_metal4CommandState->failureCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferFillCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferUpdateCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->imageCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
@@ -2099,7 +2150,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		return VK_SUCCESS;
 	}
 
-	MVKMetal4TransferCommandEncoder encoder(state);
+	MVKMetal4TransferCommandEncoder encoder(state, getMTLDevice());
 	if (!prepareMetal4CommandBuffers(&encoder)) {
 		recordFallback(MVKMetal4FallbackReason::PrepareFailed);
 		return VK_SUCCESS;

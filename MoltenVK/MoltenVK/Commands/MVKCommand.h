@@ -59,6 +59,9 @@ public:
 	/** Registers query-pool storage before a reset is claimed. */
 	virtual bool useQueryPool(MVKQueryPool* queryPool) = 0;
 
+	/** Creates resident staging storage for recorded vkCmdUpdateBuffer bytes. */
+	virtual bool useUpdateBufferData(const void* data, size_t size) = 0;
+
 	/** Registers a compute pipeline before execution is claimed. */
 	virtual bool useComputePipeline(MVKComputePipeline* pipeline) = 0;
 
@@ -79,6 +82,11 @@ public:
 	virtual bool resetQueryPool(MVKQueryPool* queryPool,
 							uint32_t firstQuery,
 							uint32_t queryCount) = 0;
+
+	virtual bool updateBuffer(MVKBuffer* dstBuffer,
+						  VkDeviceSize dstOffset,
+						  const void* data,
+						  size_t size) = 0;
 
 	virtual bool copyImage(MVKImage* srcImage,
 						   uint8_t srcPlane,

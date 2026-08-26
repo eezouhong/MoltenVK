@@ -169,7 +169,7 @@ def main() -> int:
     )
 
     # First real execution slice: buffer/image transfer, barriers, descriptorless compute, and strict basic render.
-    for command in ("MVKCmdCopyBuffer", "MVKCmdFillBuffer"):
+    for command in ("MVKCmdCopyBuffer", "MVKCmdFillBuffer", "MVKCmdUpdateBuffer"):
         require(transfer_h, rf"{command}[\s\S]*?supportsMetal4Encoding", f"{command} is not opted in")
         require(transfer_h, rf"{command}[\s\S]*?prepareMetal4Encoding", f"{command} does not resolve resources")
         require(transfer_h, rf"{command}[\s\S]*?encodeMetal4", f"{command} does not materialize")
@@ -179,6 +179,16 @@ def main() -> int:
         "copy eligibility does not reject empty work or preserve Metal alignment rules",
     )
     require(transfer_mm, r"0x01010101u", "fill eligibility does not require a repeated byte")
+    require(
+        transfer_mm,
+        r"MVKCmdUpdateBuffer::setContent[\s\S]*?mtlCopyBufferAlignment[\s\S]*?_dataSize\s*<=\s*65536[\s\S]*?_dstOffset\s*%\s*alignment[\s\S]*?_dataSize\s*%\s*alignment",
+        "update-buffer eligibility does not preserve Vulkan size and Metal alignment limits",
+    )
+    require(
+        command_h + queue_mm,
+        r"useUpdateBufferData[\s\S]*?newBufferWithBytes[\s\S]*?updateBuffer[\s\S]*?copyFromBuffer",
+        "update-buffer staging is not resident and materialized by MTL4",
+    )
     require(queue_mm, r"MTL4ComputeCommandEncoder", "real MTL4 compute/transfer encoder is missing")
     require(queue_mm, r"copyFromBuffer:[\s\S]*?destinationOffset:[\s\S]*?size:", "MTL4 buffer copy is missing")
     require(queue_mm, r"fillBuffer:[\s\S]*?range:[\s\S]*?value:", "MTL4 buffer fill is missing")
@@ -593,6 +603,7 @@ def main() -> int:
     # pixel readback, and exact path telemetry.
     for token in (
         "vkCmdFillBuffer",
+        "vkCmdUpdateBuffer",
         "vkCmdResetQueryPool",
         "vkCmdPipelineBarrier",
         "vkCmdCopyBuffer",
@@ -612,6 +623,7 @@ def main() -> int:
         "IMAGE_DATA_OK",
         "RENDER_OK",
         "QUERY_RESET_OK",
+        "UPDATE_BUFFER_OK",
         "METAL4_PHASE1C_E2E_PASS",
     ):
         require(e2e, re.escape(token), f"Vulkan e2e coverage is missing: {token}")
@@ -630,6 +642,7 @@ def main() -> int:
         "render_passes",
         "draws",
         "barriers",
+        "buffer_updates",
     ):
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
     require(runner, r"fallbacks=0", "controlled Metal 4 E2E does not require a zero-fallback path")

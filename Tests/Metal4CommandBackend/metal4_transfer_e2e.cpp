@@ -993,8 +993,32 @@ int main() {
         }
         std::cout << "QUERY_RESET_OK" << std::endl;
 
+        // vkCmdUpdateBuffer owns its source bytes in the recorded command. The
+        // MTL4 preflight must create resident staging storage before commit.
+        Buffer updated = createBuffer(physicalDevice, device, 256);
+        std::array<uint32_t, 64> updateWords{};
+        std::vector<uint8_t> expectedUpdate(sizeof(updateWords));
+        for (size_t index = 0; index < updateWords.size(); ++index) {
+            updateWords[index] = static_cast<uint32_t>(0x10203040u + index * 0x01010101u);
+        }
+        std::memcpy(expectedUpdate.data(), updateWords.data(), expectedUpdate.size());
+        VkCommandBuffer updateCommand = beginCommandBuffer(device, commandPool);
+        vkCmdUpdateBuffer(updateCommand, updated.buffer, 0, sizeof(updateWords), updateWords.data());
+        endCommandBuffer(updateCommand);
+        VkSubmitInfo updateSubmit = makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        updateSubmit.commandBufferCount = 1;
+        updateSubmit.pCommandBuffers = &updateCommand;
+        VkFence updateFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &updateSubmit, updateFence),
+              "vkQueueSubmit(update buffer)");
+        waitFence(device, updateFence);
+        validateBytes(device, updated, expectedUpdate);
+        std::cout << "UPDATE_BUFFER_OK" << std::endl;
+
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, updateFence, nullptr);
+        updated.destroy();
         vkDestroyFence(device, queryResetFence, nullptr);
         vkDestroyQueryPool(device, queryPool, nullptr);
         vkDestroyFence(device, renderFence, nullptr);

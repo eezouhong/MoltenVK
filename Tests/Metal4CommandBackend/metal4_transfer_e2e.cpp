@@ -146,6 +146,7 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
     createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -280,6 +281,28 @@ void validateRepeatedByte(VkDevice device, Buffer& buffer, uint8_t expected) {
         }
     }
     vkUnmapMemory(device, buffer.memory);
+}
+
+void validateUint32(VkDevice device, Buffer& buffer, uint32_t expected) {
+    void* mapped = nullptr;
+    check(vkMapMemory(device, buffer.memory, 0, buffer.size, 0, &mapped),
+          "vkMapMemory(validate uint32)");
+    if (!buffer.coherent) {
+        VkMappedMemoryRange range = makeVkStruct<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        range.memory = buffer.memory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check(vkInvalidateMappedMemoryRanges(device, 1, &range),
+              "vkInvalidateMappedMemoryRanges(uint32)");
+    }
+    uint32_t actual = 0;
+    std::memcpy(&actual, mapped, sizeof(actual));
+    vkUnmapMemory(device, buffer.memory);
+    if (actual != expected) {
+        fail("Compute descriptor readback mismatch: expected " +
+             std::to_string(expected) + ", got " + std::to_string(actual));
+    }
 }
 
 void writeBytes(VkDevice device, Buffer& buffer, const std::vector<uint8_t>& bytes) {
@@ -437,6 +460,38 @@ VkShaderModule createDescriptorlessComputeShader(VkDevice device) {
     check(vkCreateShaderModule(device, &createInfo, nullptr, &module), "vkCreateShaderModule(compute)");
     return module;
 }
+
+// SPIR-V for descriptor_compute.comp. The compute shader reads a uniform buffer
+// at set 0 / binding 0 and writes the incremented value to a storage buffer at
+// set 0 / binding 1, exercising the Metal 3 descriptor argument-buffer path.
+static constexpr uint32_t kDescriptorComputeSpirv[] = {
+    0x07230203, 0x00010300, 0x000d000b, 0x00000018, 0x00000000, 0x00020011,
+    0x00000001, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0005000f, 0x00000005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00060010, 0x00000004, 0x00000011,
+    0x00000001, 0x00000001, 0x00000001, 0x00030047, 0x00000007, 0x00000002,
+    0x00050048, 0x00000007, 0x00000000, 0x00000023, 0x00000000, 0x00040047,
+    0x00000009, 0x00000021, 0x00000001, 0x00040047, 0x00000009, 0x00000022,
+    0x00000000, 0x00030047, 0x0000000c, 0x00000002, 0x00050048, 0x0000000c,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000e, 0x00000021,
+    0x00000000, 0x00040047, 0x0000000e, 0x00000022, 0x00000000, 0x00040047,
+    0x00000017, 0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000,
+    0x0003001e, 0x00000007, 0x00000006, 0x00040020, 0x00000008, 0x0000000c,
+    0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x0000000c, 0x00040015,
+    0x0000000a, 0x00000020, 0x00000001, 0x0004002b, 0x0000000a, 0x0000000b,
+    0x00000000, 0x0003001e, 0x0000000c, 0x00000006, 0x00040020, 0x0000000d,
+    0x00000002, 0x0000000c, 0x0004003b, 0x0000000d, 0x0000000e, 0x00000002,
+    0x00040020, 0x0000000f, 0x00000002, 0x00000006, 0x0004002b, 0x00000006,
+    0x00000012, 0x00000001, 0x00040020, 0x00000014, 0x0000000c, 0x00000006,
+    0x00040017, 0x00000016, 0x00000006, 0x00000003, 0x0006002c, 0x00000016,
+    0x00000017, 0x00000012, 0x00000012, 0x00000012, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041,
+    0x0000000f, 0x00000010, 0x0000000e, 0x0000000b, 0x0004003d, 0x00000006,
+    0x00000011, 0x00000010, 0x00050080, 0x00000006, 0x00000013, 0x00000011,
+    0x00000012, 0x00050041, 0x00000014, 0x00000015, 0x00000009, 0x0000000b,
+    0x0003003e, 0x00000015, 0x00000013, 0x000100fd, 0x00010038,
+};
 
 static constexpr uint32_t kRenderSmokeVertexSpirv[] = {
     0x07230203, 0x00010000, 0x0008000b, 0x00000028, 0x00000000, 0x00020011,
@@ -889,6 +944,135 @@ int main() {
               "vkQueueSubmit(compute)");
         waitFence(device, computeFence);
         std::cout << "COMPUTE_OK" << std::endl;
+
+        Buffer descriptorComputeInput = createBuffer(
+            physicalDevice, device, sizeof(uint32_t));
+        Buffer descriptorComputeOutput = createBuffer(
+            physicalDevice, device, sizeof(uint32_t));
+        const uint32_t descriptorComputeInputValue = 41;
+        const uint32_t descriptorComputeOutputValue = 0;
+        std::vector<uint8_t> descriptorComputeInputBytes(sizeof(uint32_t));
+        std::vector<uint8_t> descriptorComputeOutputBytes(sizeof(uint32_t));
+        std::memcpy(descriptorComputeInputBytes.data(), &descriptorComputeInputValue,
+                    sizeof(descriptorComputeInputValue));
+        std::memcpy(descriptorComputeOutputBytes.data(), &descriptorComputeOutputValue,
+                    sizeof(descriptorComputeOutputValue));
+        writeBytes(device, descriptorComputeInput, descriptorComputeInputBytes);
+        writeBytes(device, descriptorComputeOutput, descriptorComputeOutputBytes);
+
+        std::array<VkDescriptorSetLayoutBinding, 2> descriptorComputeBindings{};
+        descriptorComputeBindings[0].binding = 0;
+        descriptorComputeBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorComputeBindings[0].descriptorCount = 1;
+        descriptorComputeBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        descriptorComputeBindings[1].binding = 1;
+        descriptorComputeBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorComputeBindings[1].descriptorCount = 1;
+        descriptorComputeBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo descriptorComputeLayoutInfo =
+            makeVkStruct<VkDescriptorSetLayoutCreateInfo>(
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+        descriptorComputeLayoutInfo.bindingCount =
+            static_cast<uint32_t>(descriptorComputeBindings.size());
+        descriptorComputeLayoutInfo.pBindings = descriptorComputeBindings.data();
+        VkDescriptorSetLayout descriptorComputeSetLayout = VK_NULL_HANDLE;
+        check(vkCreateDescriptorSetLayout(device, &descriptorComputeLayoutInfo, nullptr,
+                                          &descriptorComputeSetLayout),
+              "vkCreateDescriptorSetLayout(descriptor compute)");
+
+        std::array<VkDescriptorPoolSize, 2> descriptorComputePoolSizes{};
+        descriptorComputePoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorComputePoolSizes[0].descriptorCount = 1;
+        descriptorComputePoolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorComputePoolSizes[1].descriptorCount = 1;
+        VkDescriptorPoolCreateInfo descriptorComputePoolInfo =
+            makeVkStruct<VkDescriptorPoolCreateInfo>(
+                VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+        descriptorComputePoolInfo.maxSets = 1;
+        descriptorComputePoolInfo.poolSizeCount =
+            static_cast<uint32_t>(descriptorComputePoolSizes.size());
+        descriptorComputePoolInfo.pPoolSizes = descriptorComputePoolSizes.data();
+        VkDescriptorPool descriptorComputePool = VK_NULL_HANDLE;
+        check(vkCreateDescriptorPool(device, &descriptorComputePoolInfo, nullptr,
+                                     &descriptorComputePool),
+              "vkCreateDescriptorPool(descriptor compute)");
+        VkDescriptorSetAllocateInfo descriptorComputeAllocateInfo =
+            makeVkStruct<VkDescriptorSetAllocateInfo>(
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+        descriptorComputeAllocateInfo.descriptorPool = descriptorComputePool;
+        descriptorComputeAllocateInfo.descriptorSetCount = 1;
+        descriptorComputeAllocateInfo.pSetLayouts = &descriptorComputeSetLayout;
+        VkDescriptorSet descriptorComputeSet = VK_NULL_HANDLE;
+        check(vkAllocateDescriptorSets(device, &descriptorComputeAllocateInfo,
+                                       &descriptorComputeSet),
+              "vkAllocateDescriptorSets(descriptor compute)");
+        std::array<VkDescriptorBufferInfo, 2> descriptorComputeBufferInfos{};
+        descriptorComputeBufferInfos[0].buffer = descriptorComputeInput.buffer;
+        descriptorComputeBufferInfos[0].range = sizeof(uint32_t);
+        descriptorComputeBufferInfos[1].buffer = descriptorComputeOutput.buffer;
+        descriptorComputeBufferInfos[1].range = sizeof(uint32_t);
+        std::array<VkWriteDescriptorSet, 2> descriptorComputeWrites{};
+        for (uint32_t binding = 0; binding < descriptorComputeWrites.size(); binding++) {
+            descriptorComputeWrites[binding] = makeVkStruct<VkWriteDescriptorSet>(
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+            descriptorComputeWrites[binding].dstSet = descriptorComputeSet;
+            descriptorComputeWrites[binding].dstBinding = binding;
+            descriptorComputeWrites[binding].descriptorCount = 1;
+            descriptorComputeWrites[binding].descriptorType =
+                descriptorComputeBindings[binding].descriptorType;
+            descriptorComputeWrites[binding].pBufferInfo =
+                &descriptorComputeBufferInfos[binding];
+        }
+        vkUpdateDescriptorSets(device,
+                               static_cast<uint32_t>(descriptorComputeWrites.size()),
+                               descriptorComputeWrites.data(), 0, nullptr);
+
+        VkPipelineLayoutCreateInfo descriptorComputePipelineLayoutInfo =
+            makeVkStruct<VkPipelineLayoutCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+        descriptorComputePipelineLayoutInfo.setLayoutCount = 1;
+        descriptorComputePipelineLayoutInfo.pSetLayouts = &descriptorComputeSetLayout;
+        VkPipelineLayout descriptorComputePipelineLayout = VK_NULL_HANDLE;
+        check(vkCreatePipelineLayout(device, &descriptorComputePipelineLayoutInfo,
+                                     nullptr, &descriptorComputePipelineLayout),
+              "vkCreatePipelineLayout(descriptor compute)");
+        VkShaderModule descriptorComputeModule = createShaderModule(
+            device, kDescriptorComputeSpirv, sizeof(kDescriptorComputeSpirv),
+            "vkCreateShaderModule(descriptor compute)");
+        VkPipelineShaderStageCreateInfo descriptorComputeStage =
+            makeVkStruct<VkPipelineShaderStageCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+        descriptorComputeStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        descriptorComputeStage.module = descriptorComputeModule;
+        descriptorComputeStage.pName = "main";
+        VkComputePipelineCreateInfo descriptorComputePipelineInfo =
+            makeVkStruct<VkComputePipelineCreateInfo>(
+                VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+        descriptorComputePipelineInfo.stage = descriptorComputeStage;
+        descriptorComputePipelineInfo.layout = descriptorComputePipelineLayout;
+        VkPipeline descriptorComputePipeline = VK_NULL_HANDLE;
+        check(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1,
+                                       &descriptorComputePipelineInfo, nullptr,
+                                       &descriptorComputePipeline),
+              "vkCreateComputePipelines(descriptor compute)");
+        VkCommandBuffer descriptorComputeCommand = beginCommandBuffer(device, commandPool);
+        vkCmdBindPipeline(descriptorComputeCommand, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          descriptorComputePipeline);
+        vkCmdBindDescriptorSets(descriptorComputeCommand, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                descriptorComputePipelineLayout, 0, 1,
+                                &descriptorComputeSet, 0, nullptr);
+        vkCmdDispatch(descriptorComputeCommand, 1, 1, 1);
+        endCommandBuffer(descriptorComputeCommand);
+        VkSubmitInfo descriptorComputeSubmit =
+            makeVkStruct<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        descriptorComputeSubmit.commandBufferCount = 1;
+        descriptorComputeSubmit.pCommandBuffers = &descriptorComputeCommand;
+        VkFence descriptorComputeFence = createFence(device);
+        check(vkQueueSubmit(queue, 1, &descriptorComputeSubmit, descriptorComputeFence),
+              "vkQueueSubmit(descriptor compute)");
+        waitFence(device, descriptorComputeFence);
+        validateUint32(device, descriptorComputeOutput, 42);
+        std::cout << "DESCRIPTOR_COMPUTE_OK" << std::endl;
 
         // Legacy upload -> MTL4 image copy -> legacy readback proves image data
         // and both directions of hybrid queue ordering.
@@ -2667,6 +2851,14 @@ int main() {
         dstImage.destroy();
         imageUpload.destroy();
         imageReadback.destroy();
+        vkDestroyFence(device, descriptorComputeFence, nullptr);
+        vkDestroyPipeline(device, descriptorComputePipeline, nullptr);
+        vkDestroyShaderModule(device, descriptorComputeModule, nullptr);
+        vkDestroyPipelineLayout(device, descriptorComputePipelineLayout, nullptr);
+        vkDestroyDescriptorPool(device, descriptorComputePool, nullptr);
+        vkDestroyDescriptorSetLayout(device, descriptorComputeSetLayout, nullptr);
+        descriptorComputeInput.destroy();
+        descriptorComputeOutput.destroy();
         a.destroy();
         b.destroy();
         c.destroy();

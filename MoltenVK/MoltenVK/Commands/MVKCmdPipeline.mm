@@ -412,7 +412,7 @@ void MVKCmdBindComputePipeline::encode(MVKCommandEncoder* cmdEncoder) {
 
 bool MVKCmdBindComputePipeline::supportsMetal4Encoding() const {
 	auto* pipeline = static_cast<MVKComputePipeline*>(_pipeline);
-	return pipeline && pipeline->supportsMetal4DescriptorlessExecution();
+	return pipeline && pipeline->supportsMetal4Execution();
 }
 
 bool MVKCmdBindComputePipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -461,7 +461,8 @@ void MVKCmdBindDescriptorSetsStatic<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 template <size_t N>
 bool MVKCmdBindDescriptorSetsStatic<N>::supportsMetal4Encoding() const {
-	if (_pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS || !_pipelineLayout ||
+	if ((_pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS &&
+		 _pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) || !_pipelineLayout ||
 		_descriptorSets.empty() ||
 		_firstSet + _descriptorSets.size() > _pipelineLayout->getDescriptorSetCount()) {
 		return false;
@@ -483,6 +484,7 @@ bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
 	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
 	for (size_t setOffset = 0; setOffset < _descriptorSets.size(); setOffset++) {
 		if (!cmdEncoder->useDescriptorSet(
+				_pipelineBindPoint,
 				_descriptorSets[setOffset],
 				_firstSet + static_cast<uint32_t>(setOffset))) {
 			return false;

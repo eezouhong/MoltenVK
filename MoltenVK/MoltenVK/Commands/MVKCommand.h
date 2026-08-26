@@ -80,11 +80,15 @@ public:
 	virtual void resetPrepareState() = 0;
 
 	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
-	virtual bool useDescriptorSet(MVKDescriptorSet* descriptorSet,
+	virtual bool useDescriptorSet(VkPipelineBindPoint bindPoint,
+								 MVKDescriptorSet* descriptorSet,
 								 uint32_t setIndex) = 0;
 
 	/** Retains only the descriptor bindings statically used by the pending draw. */
 	virtual bool prepareGraphicsDraw() = 0;
+
+	/** Retains only the descriptor bindings statically used by the pending dispatch. */
+	virtual bool prepareComputeDispatch() = 0;
 
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,

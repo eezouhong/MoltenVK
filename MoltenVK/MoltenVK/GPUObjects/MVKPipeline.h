@@ -652,7 +652,22 @@ public:
 	bool supportsMetal4DescriptorlessExecution() const {
 		return _mtlPipelineState &&
 			_stageResources.resources.allBits.empty() &&
-			_stageResources.implicitBuffers.needed.empty();
+			_stageResources.implicitBuffers.needed.empty() &&
+			!_stageResources.usesPhysicalStorageBufferAddresses;
+	}
+
+	/** Returns whether Metal 4 can bind this pipeline through a Metal 3 descriptor argument buffer. */
+	bool supportsMetal4ArgumentTableExecution() const;
+
+	/** Returns whether this pipeline can execute on the Metal 4 command backend. */
+	bool supportsMetal4Execution() const {
+		return supportsMetal4DescriptorlessExecution() ||
+			supportsMetal4ArgumentTableExecution();
+	}
+
+	/** Returns whether this pipeline requires an MTL4 argument table. */
+	bool requiresMetal4ArgumentTable() const {
+		return supportsMetal4ArgumentTableExecution();
 	}
 
 	/** Constructs an instance for the device and parent (which may be NULL). */

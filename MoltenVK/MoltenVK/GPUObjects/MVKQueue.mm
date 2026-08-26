@@ -724,7 +724,11 @@ public:
 	}
 
 	bool useComputePipeline(MVKComputePipeline* pipeline) override {
-		if (!pipeline || !pipeline->supportsMetal4DescriptorlessExecution()) { return false; }
+		if (!pipeline || !pipeline->supportsMetal4Execution() ||
+			(pipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable())) {
+			return false;
+		}
+		_preparedComputePipeline = pipeline;
 		if (_computePipelines.count(pipeline)) { return true; }
 		id<MTLComputePipelineState> pipelineState = pipeline->getPipelineState();
 		if (!pipelineState) { return false; }
@@ -764,19 +768,61 @@ public:
 	}
 
 	void resetPrepareState() override {
+		_preparedComputePipeline = nullptr;
 		_preparedGraphicsPipeline = nullptr;
+		_preparedComputeDescriptorSets.fill(nullptr);
 		_preparedGraphicsDescriptorSets.fill(nullptr);
 	}
 
-	bool useDescriptorSet(MVKDescriptorSet* descriptorSet, uint32_t setIndex) override {
+	bool useDescriptorSet(VkPipelineBindPoint bindPoint,
+					  MVKDescriptorSet* descriptorSet,
+					  uint32_t setIndex) override {
+		if (bindPoint != VK_PIPELINE_BIND_POINT_COMPUTE &&
+			bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS) {
+			return false;
+		}
+		auto& preparedSets = bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE
+			? _preparedComputeDescriptorSets
+			: _preparedGraphicsDescriptorSets;
 		if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
-			setIndex >= _preparedGraphicsDescriptorSets.size() || !ensureArgumentTable()) {
+			setIndex >= preparedSets.size() || !ensureArgumentTable()) {
 			return false;
 		}
 		if (!retainDescriptorAllocation((id<MTLAllocation>)descriptorSet->gpuBufferObject)) {
 			return false;
 		}
-		_preparedGraphicsDescriptorSets[setIndex] = descriptorSet;
+		preparedSets[setIndex] = descriptorSet;
+		return true;
+	}
+
+	bool prepareComputeDispatch() override {
+		if (!_preparedComputePipeline) { return false; }
+		if (!_preparedComputePipeline->supportsMetal4ArgumentTableExecution()) {
+			return _preparedComputePipeline->supportsMetal4DescriptorlessExecution();
+		}
+		MVKPipelineLayout* pipelineLayout = _preparedComputePipeline->getLayout();
+		if (!pipelineLayout) { return false; }
+		vector<id<MTLResource>> resources;
+		const auto& uses =
+			_preparedComputePipeline->getStageResources().bindScript.descriptorBindings;
+		for (const auto& use : uses) {
+			if (use.set >= _preparedComputeDescriptorSets.size() ||
+				use.set >= pipelineLayout->getDescriptorSetCount()) {
+				return false;
+			}
+			MVKDescriptorSet* descriptorSet = _preparedComputeDescriptorSets[use.set];
+			if (!descriptorSet ||
+				descriptorSet->layout != pipelineLayout->getDescriptorSetLayout(use.set)) {
+				return false;
+			}
+			resources.clear();
+			descriptorSet->collectMetal4BindingResources(use.bindingIdx, resources);
+			for (id<MTLResource> resource : resources) {
+				if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) {
+					return false;
+				}
+			}
+		}
 		return true;
 	}
 
@@ -959,6 +1005,7 @@ public:
 		if (!ensureComputeEncoder() || it == _computePipelines.end()) { return false; }
 		[_computeEncoder setComputePipelineState:it->second];
 		_boundComputePipeline = pipeline;
+		_computeResourcesBoundForEncoder = false;
 		return true;
 	}
 
@@ -966,6 +1013,7 @@ public:
 							 uint32_t groupCountY,
 							 uint32_t groupCountZ) override {
 		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
+		if (!_computeResourcesBoundForEncoder && !applyComputeResources()) { return false; }
 		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
 					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
 		_counters.computeDispatches++;
@@ -1486,11 +1534,15 @@ public:
 							uint32_t firstSet,
 							uint32_t setCount,
 							MVKDescriptorSet*const* descriptorSets) override {
-		if (bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS || !layout || !setCount ||
+		if ((bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS &&
+			 bindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) || !layout || !setCount ||
 			!descriptorSets || firstSet + setCount > kMVKMaxDescriptorSetCount ||
 			firstSet + setCount > layout->getDescriptorSetCount()) {
 			return false;
 		}
+		auto& boundSets = bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE
+			? _computeDescriptorSets
+			: _graphicsDescriptorSets;
 		for (uint32_t setOffset = 0; setOffset < setCount; setOffset++) {
 			MVKDescriptorSet* descriptorSet = descriptorSets[setOffset];
 			MVKDescriptorSetLayout* descriptorLayout =
@@ -1500,13 +1552,17 @@ public:
 				(descriptorLayout->gpuSize() && !descriptorSet->gpuBufferObject)) {
 				return false;
 			}
-			_graphicsDescriptorSets[firstSet + setOffset] = BoundDescriptorSet{
+			boundSets[firstSet + setOffset] = BoundDescriptorSet{
 				descriptorLayout,
 				descriptorSet->gpuBufferObject,
 				descriptorSet->gpuBufferOffset,
 			};
 		}
-		_graphicsResourcesBoundForEncoder = false;
+		if (bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE) {
+			_computeResourcesBoundForEncoder = false;
+		} else {
+			_graphicsResourcesBoundForEncoder = false;
+		}
 		return true;
 	}
 
@@ -1671,6 +1727,7 @@ private:
 		[_computeEncoder release];
 		_computeEncoder = nil;
 		_boundComputePipeline = nullptr;
+		_computeResourcesBoundForEncoder = false;
 	}
 
 	void endRenderEncoding() {
@@ -1969,6 +2026,31 @@ private:
 		return true;
 	}
 
+	bool applyComputeResources() {
+		if (!_computeEncoder || !_boundComputePipeline) { return false; }
+		if (_boundComputePipeline->supportsMetal4ArgumentTableExecution()) {
+			if (!ensureArgumentTable()) { return false; }
+			MVKPipelineLayout* pipelineLayout = _boundComputePipeline->getLayout();
+			if (!pipelineLayout) { return false; }
+			const auto& resources = _boundComputePipeline->getStageResources();
+			for (size_t setIndex : resources.resources.descriptorSetData) {
+				if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
+				const BoundDescriptorSet& descriptorSet = _computeDescriptorSets[setIndex];
+				if (!descriptorSet.buffer ||
+					descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
+					return false;
+				}
+				[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
+							 atIndex:setIndex];
+			}
+			[_computeEncoder setArgumentTable:_argumentTable];
+		} else if (!_boundComputePipeline->supportsMetal4DescriptorlessExecution()) {
+			return false;
+		}
+		_computeResourcesBoundForEncoder = true;
+		return true;
+	}
+
 	shared_ptr<MVKMetal4CommandQueueState> _state;
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
 	unordered_map<MVKImage*, ImageBinding> _images;
@@ -1979,7 +2061,10 @@ private:
 	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
 	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
 	BoundIndexBuffer _boundIndexBuffer = {};
+	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _computeDescriptorSets = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
+	array<MVKDescriptorSet*, kMVKMaxDescriptorSetCount>
+		_preparedComputeDescriptorSets = {};
 	array<MVKDescriptorSet*, kMVKMaxDescriptorSetCount>
 		_preparedGraphicsDescriptorSets = {};
 	unordered_set<const void*> _descriptorAllocationSet;
@@ -1996,12 +2081,14 @@ private:
 	id<MTL4ArgumentTable> _argumentTable = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
+	MVKComputePipeline* _preparedComputePipeline = nullptr;
 	MVKGraphicsPipeline* _preparedGraphicsPipeline = nullptr;
 	MVKQueryPool* _visibilityQueryPool = nullptr;
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;
 	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
 	uint32_t _currentColorAttachmentCount = 0;
+	bool _computeResourcesBoundForEncoder = false;
 	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
 	VkFormat _currentStencilFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;

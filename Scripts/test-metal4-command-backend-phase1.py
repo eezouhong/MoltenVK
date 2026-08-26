@@ -265,18 +265,31 @@ def main() -> int:
 
     for token in (
         "supportsMetal4DescriptorlessExecution",
+        "supportsMetal4ArgumentTableExecution",
+        "supportsMetal4Execution",
         "MVKCmdBindComputePipeline",
         "useComputePipeline",
         "bindComputePipeline",
         "MVKCmdDispatch",
+        "prepareComputeDispatch",
         "dispatchThreadgroups",
         "setComputePipelineState",
     ):
-        require(implementation, re.escape(token), f"descriptorless compute path is missing: {token}")
+        require(implementation, re.escape(token), f"compute path is missing: {token}")
     require(
         pipeline_h,
-        r"supportsMetal4DescriptorlessExecution[\s\S]*?resources\.allBits\.empty[\s\S]*?implicitBuffers\.needed\.empty",
-        "compute pipeline eligibility does not reject descriptor or implicit-buffer use",
+        r"supportsMetal4DescriptorlessExecution[\s\S]*?resources\.allBits\.empty[\s\S]*?implicitBuffers\.needed\.empty[\s\S]*?usesPhysicalStorageBufferAddresses",
+        "descriptorless compute eligibility does not fail closed on implicit buffers or physical addresses",
+    )
+    require(
+        pipeline_h + pipeline_mm,
+        r"supportsMetal4ArgumentTableExecution[\s\S]*?descriptorSetData[\s\S]*?MVKArgumentBufferMode::Metal3",
+        "compute pipeline does not expose a fail-closed Metal 3 argument-buffer slice",
+    )
+    require(
+        pipeline_cmd_mm + dispatch_mm + queue_mm,
+        r"VK_PIPELINE_BIND_POINT_COMPUTE[\s\S]*?useDescriptorSet[\s\S]*?prepareComputeDispatch[\s\S]*?collectMetal4BindingResources[\s\S]*?setArgumentTable:",
+        "compute descriptor sets are not preflighted, retained, and snapshotted into an MTL4 argument table",
     )
     require(
         dispatch_h + dispatch_mm,

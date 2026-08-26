@@ -5068,6 +5068,31 @@ uint32_t MVKComputePipeline::getImplicitBufferIndex(uint32_t bufferIndexOffset) 
 	return getMetalFeatures().maxPerStageBufferCount - (bufferIndexOffset + 1);
 }
 
+bool MVKComputePipeline::supportsMetal4ArgumentTableExecution() const {
+	if (!_mtlPipelineState || !_layout ||
+		_stageResources.usesPhysicalStorageBufferAddresses ||
+		_stageResources.resources.textures.any() ||
+		_stageResources.resources.samplers.areAnyBitsSet() ||
+		!_stageResources.implicitBuffers.needed.empty() ||
+		!_stageResources.resources.descriptorSetData.areAnyBitsSet()) {
+		return false;
+	}
+	for (size_t bufferIndex : _stageResources.resources.buffers) {
+		if (bufferIndex >= kMVKMaxDescriptorSetCount ||
+			!_stageResources.resources.descriptorSetData.get(bufferIndex)) {
+			return false;
+		}
+	}
+	for (size_t setIndex : _stageResources.resources.descriptorSetData) {
+		if (setIndex >= _layout->getDescriptorSetCount() ||
+			_layout->getDescriptorSetLayout(setIndex)->argBufMode() !=
+				MVKArgumentBufferMode::Metal3) {
+			return false;
+		}
+	}
+	return true;
+}
+
 MVKComputePipeline::~MVKComputePipeline() {
 	@synchronized (getMTLDevice()) {
 		[_mtlPipelineState release];

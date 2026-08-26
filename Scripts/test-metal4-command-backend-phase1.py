@@ -408,9 +408,19 @@ def main() -> int:
         "graphics pipeline eligibility does not reject descriptor or implicit-buffer use",
     )
     require(
+        pipeline_mm,
+        r"kMetal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors",
+        "the supported Metal 4 dynamic-state set is incomplete",
+    )
+    require(
         pipeline_h + pipeline_mm,
-        r"hasSupportedVertexInput[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)[\s\S]*?metal4SupportedDynamicState[\s\S]*?VertexStride[\s\S]*?Viewports[\s\S]*?Scissors",
+        r"hasSupportedVertexInput[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)[\s\S]*?removingAll\(kMetal4SupportedDynamicState\)",
         "render eligibility does not isolate supported Metal 4 dynamic state",
+    )
+    require(
+        pipeline_mm,
+        r"getMetal4UnsupportedDynamicStateReason[\s\S]*?removingAll\(kMetal4SupportedDynamicState\)",
+        "dynamic-state telemetry still reports an already-supported Metal 4 state",
     )
     require(
         draw_h + draw_mm,

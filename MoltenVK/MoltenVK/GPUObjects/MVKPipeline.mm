@@ -2721,9 +2721,15 @@ static MVKRenderStateFlags getRenderStateFlags(VkDynamicState vk) {
 	}
 }
 
+static constexpr MVKRenderStateFlags kMetal4SupportedDynamicState {
+	MVKRenderStateFlag::VertexStride,
+	MVKRenderStateFlag::Viewports,
+	MVKRenderStateFlag::Scissors,
+};
+
 static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dynamicStateFlags) {
 	MVKRenderStateFlags unsupported =
-		dynamicStateFlags.removing(MVKRenderStateFlag::VertexStride);
+		dynamicStateFlags.removingAll(kMetal4SupportedDynamicState);
 	static constexpr MVKRenderStateFlags viewportScissor {
 		MVKRenderStateFlag::Viewports,
 		MVKRenderStateFlag::Scissors,
@@ -3153,13 +3159,8 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasSupportedDepthState = hasSupportedDepthFormat &&
 		(!needsDepthAttachment ||
 		 pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED);
-	static constexpr MVKRenderStateFlags metal4SupportedDynamicState {
-		MVKRenderStateFlag::VertexStride,
-		MVKRenderStateFlag::Viewports,
-		MVKRenderStateFlag::Scissors,
-	};
 	bool hasUnsupportedDynamicState =
-		!_dynamicStateFlags.removingAll(metal4SupportedDynamicState).empty();
+		!_dynamicStateFlags.removingAll(kMetal4SupportedDynamicState).empty();
 	bool hasDynamicViewport =
 		_dynamicStateFlags.has(MVKRenderStateFlag::Viewports);
 	bool hasDynamicScissor =

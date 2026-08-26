@@ -1429,6 +1429,122 @@ int main() {
         validateSolidColor(device, renderReadback, {0, 0, 0, 255});
         std::cout << "DEPTH_RENDER_OK" << std::endl;
 
+        // Ryujinx records its primary color pass with classic VkRenderPass
+        // commands. Prove that the strict single-subpass, one-color shape can
+        // execute through MTL4 and preserve the same pixels as dynamic rendering.
+        VkAttachmentDescription classicColorDescription{};
+        classicColorDescription.format = renderTarget.format;
+        classicColorDescription.samples = VK_SAMPLE_COUNT_1_BIT;
+        classicColorDescription.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        classicColorDescription.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        classicColorDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        classicColorDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        classicColorDescription.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        classicColorDescription.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference classicColorReference{};
+        classicColorReference.attachment = 0;
+        classicColorReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkSubpassDescription classicSubpass{};
+        classicSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        classicSubpass.colorAttachmentCount = 1;
+        classicSubpass.pColorAttachments = &classicColorReference;
+        VkRenderPassCreateInfo classicRenderPassInfo =
+            makeVkStruct<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+        classicRenderPassInfo.attachmentCount = 1;
+        classicRenderPassInfo.pAttachments = &classicColorDescription;
+        classicRenderPassInfo.subpassCount = 1;
+        classicRenderPassInfo.pSubpasses = &classicSubpass;
+        VkRenderPass classicRenderPass = VK_NULL_HANDLE;
+        check(vkCreateRenderPass(device, &classicRenderPassInfo, nullptr,
+                                 &classicRenderPass),
+              "vkCreateRenderPass(classic color)");
+
+        VkFramebufferCreateInfo classicFramebufferInfo =
+            makeVkStruct<VkFramebufferCreateInfo>(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+        classicFramebufferInfo.renderPass = classicRenderPass;
+        classicFramebufferInfo.attachmentCount = 1;
+        classicFramebufferInfo.pAttachments = &renderTarget.view;
+        classicFramebufferInfo.width = kImageWidth;
+        classicFramebufferInfo.height = kImageHeight;
+        classicFramebufferInfo.layers = 1;
+        VkFramebuffer classicFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &classicFramebufferInfo, nullptr,
+                                  &classicFramebuffer),
+              "vkCreateFramebuffer(classic color)");
+
+        graphicsInfo.pNext = nullptr;
+        graphicsInfo.pDepthStencilState = nullptr;
+        graphicsInfo.renderPass = classicRenderPass;
+        graphicsInfo.subpass = 0;
+        vertexInput.vertexBindingDescriptionCount = 0;
+        vertexInput.pVertexBindingDescriptions = nullptr;
+        vertexInput.vertexAttributeDescriptionCount = 0;
+        vertexInput.pVertexAttributeDescriptions = nullptr;
+        renderStages[0].module = vertexModule;
+        renderStages[1].module = fragmentModule;
+        VkPipeline classicPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &classicPipeline),
+              "vkCreateGraphicsPipelines(classic color)");
+
+        VkCommandBuffer prepareClassicRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareClassicRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareClassicRender);
+        VkClearValue classicClear{};
+        classicClear.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderPassBeginInfo classicBegin =
+            makeVkStruct<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+        classicBegin.renderPass = classicRenderPass;
+        classicBegin.framebuffer = classicFramebuffer;
+        classicBegin.renderArea = scissor;
+        classicBegin.clearValueCount = 1;
+        classicBegin.pClearValues = &classicClear;
+        VkCommandBuffer classicRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRenderPass(classicRender, &classicBegin, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(classicRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          classicPipeline);
+        vkCmdDraw(classicRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(classicRender);
+        endCommandBuffer(classicRender);
+
+        VkCommandBuffer finishClassicRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishClassicRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishClassicRender);
+        VkCommandBuffer readClassicRender = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readClassicRender, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readClassicRender);
+        std::array<VkSubmitInfo, 4> classicSubmits{};
+        for (auto& submit : classicSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        classicSubmits[0].commandBufferCount = 1;
+        classicSubmits[0].pCommandBuffers = &prepareClassicRender;
+        classicSubmits[1].commandBufferCount = 1;
+        classicSubmits[1].pCommandBuffers = &classicRender;
+        classicSubmits[2].commandBufferCount = 1;
+        classicSubmits[2].pCommandBuffers = &finishClassicRender;
+        classicSubmits[3].commandBufferCount = 1;
+        classicSubmits[3].pCommandBuffers = &readClassicRender;
+        VkFence classicFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(classicSubmits.size()),
+                            classicSubmits.data(), classicFence),
+              "vkQueueSubmit(classic render sequence)");
+        waitFence(device, classicFence);
+        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        std::cout << "CLASSIC_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1511,6 +1627,10 @@ int main() {
 
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, classicFence, nullptr);
+        vkDestroyPipeline(device, classicPipeline, nullptr);
+        vkDestroyFramebuffer(device, classicFramebuffer, nullptr);
+        vkDestroyRenderPass(device, classicRenderPass, nullptr);
         vkDestroyFence(device, depthFence, nullptr);
         vkDestroyPipeline(device, depthPipeline, nullptr);
         depthTarget.destroy();

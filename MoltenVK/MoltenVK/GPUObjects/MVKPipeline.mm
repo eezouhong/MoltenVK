@@ -3050,8 +3050,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	const auto* pRS = pCreateInfo->pRasterizationState;
 	const auto* pMS = pCreateInfo->pMultisampleState;
 	const auto* pVP = pCreateInfo->pViewportState;
-	bool hasOneDynamicColorWithOptionalDepth =
-		pCreateInfo->renderPass == VK_NULL_HANDLE &&
+	bool hasOneColorWithOptionalDepth =
 		pRendInfo && pRendInfo->viewMask == 0 &&
 		pRendInfo->colorAttachmentCount == 1 &&
 		pRendInfo->pColorAttachmentFormats &&
@@ -3103,11 +3102,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneDynamicColorWithOptionalDepth && hasDescriptorlessShaderStages &&
+		hasOneColorWithOptionalDepth && hasDescriptorlessShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneDynamicColorWithOptionalDepth && hasArgumentTableShaderStages &&
+		hasOneColorWithOptionalDepth && hasArgumentTableShaderStages &&
 		hasSupportedVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
 		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];

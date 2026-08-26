@@ -58,6 +58,39 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 	_clearValues.assign(pRenderPassBegin->pClearValues,
 						pRenderPassBegin->pClearValues + pRenderPassBegin->clearValueCount);
 
+	MVKRenderSubpass* subpass = _renderPass && _renderPass->getSubpassCount() == 1
+		? _renderPass->getSubpass(0)
+		: nullptr;
+	VkExtent2D framebufferExtent = _framebuffer
+		? _framebuffer->getExtent2D()
+		: VkExtent2D{};
+	_supportsMetal4Encoding = subpass &&
+		_contents == VK_SUBPASS_CONTENTS_INLINE &&
+		_framebuffer->getLayerCount() == 1 &&
+		_renderArea.offset.x == 0 && _renderArea.offset.y == 0 &&
+		_renderArea.extent.width == framebufferExtent.width &&
+		_renderArea.extent.height == framebufferExtent.height &&
+		!subpass->isMultiview() &&
+		subpass->getSampleCount() == VK_SAMPLE_COUNT_1_BIT &&
+		subpass->getColorAttachmentCount() == 1 &&
+		subpass->isColorAttachmentUsed(0) &&
+		!subpass->isStencilAttachmentUsed();
+	if (_supportsMetal4Encoding) {
+		for (MVKImageView* attachment : _attachments) {
+			id<MTLTexture> texture = attachment ? attachment->getMTLTexture() : nil;
+			if (!attachment || !texture ||
+				attachment->getPlaneCount() != 1 ||
+				attachment->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+				attachment->getMTLTextureType() != MTLTextureType2D ||
+				attachment->getPackedSwizzle() != 0 ||
+				texture.width != framebufferExtent.width ||
+				texture.height != framebufferExtent.height) {
+				_supportsMetal4Encoding = false;
+				break;
+			}
+		}
+	}
+
 	return VK_SUCCESS;
 }
 
@@ -71,6 +104,29 @@ void MVKCmdBeginRenderPass<N_CV, N_A>::encode(MVKCommandEncoder* cmdEncoder) {
 								_clearValues.contents(),
 								_attachments.contents(),
 								kMVKCommandUseBeginRenderPass);
+}
+
+template <size_t N_CV, size_t N_A>
+bool MVKCmdBeginRenderPass<N_CV, N_A>::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	for (MVKImageView* attachment : _attachments) {
+		if (!cmdEncoder->useImageView(attachment)) { return false; }
+	}
+	return true;
+}
+
+template <size_t N_CV, size_t N_A>
+bool MVKCmdBeginRenderPass<N_CV, N_A>::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->beginRenderPass(_renderPass,
+									_framebuffer,
+									_renderArea,
+									_clearValues.data(),
+									_clearValues.size(),
+									_attachments.data(),
+									_attachments.size());
 }
 
 template class MVKCmdBeginRenderPass<1, 0>;
@@ -127,6 +183,10 @@ VkResult MVKCmdEndRenderPass::setContent(MVKCommandBuffer* cmdBuff,
 
 void MVKCmdEndRenderPass::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->endRenderpass();
+}
+
+bool MVKCmdEndRenderPass::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->endRendering();
 }
 
 

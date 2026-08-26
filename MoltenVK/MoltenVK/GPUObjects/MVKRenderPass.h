@@ -128,7 +128,8 @@ public:
 										 MVKArrayRef<MVKImageView*const> attachments,
 										 MVKArrayRef<const VkClearValue> clearValues,
 										 bool isRenderingEntireAttachment,
-                                         bool loadOverride = false);
+										 bool loadOverride = false,
+										 bool deferStoreActions = true);
 
 	/**
 	 * Populates the specified vector with the attachments that need to be cleared
@@ -247,14 +248,15 @@ public:
      * Populates the specified Metal color attachment description with the load and store actions for
      * the specified render subpass, and returns whether the load action will clear the attachment.
      */
-    bool populateMTLRenderPassAttachmentDescriptor(MTLRenderPassAttachmentDescriptor* mtlAttDesc,
-                                                   MVKRenderSubpass* subpass,
-												   MVKImageView* attachment,
-                                                   bool isRenderingEntireAttachment,
-												   bool hasResolveAttachment,
-												   bool canResolveFormat,
-                                                   bool isStencil,
-                                                   bool loadOverride);
+	bool populateMTLRenderPassAttachmentDescriptor(MTLRenderPassAttachmentDescriptor* mtlAttDesc,
+														   MVKRenderSubpass* subpass,
+														   MVKImageView* attachment,
+														   bool isRenderingEntireAttachment,
+														   bool hasResolveAttachment,
+														   bool canResolveFormat,
+														   bool isStencil,
+														   bool loadOverride,
+														   bool deferStoreActions);
 
 	/** If a render encoder is active, sets the store action for this attachment to it. */
 	void encodeStoreAction(MVKCommandEncoder* cmdEncoder,

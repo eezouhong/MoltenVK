@@ -72,11 +72,16 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
 	MVKSmallVector<VkClearValue, N_CV> _clearValues;
     MVKSmallVector<MVKImageView*, N_A> _attachments;
+	bool _supportsMetal4Encoding = false;
 };
 
 // Concrete template class implementations.
@@ -129,6 +134,10 @@ public:
 						const VkSubpassEndInfo* pSubpassEndInfo);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder*) override { return true; }
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -262,6 +271,7 @@ public:
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 };
+
 
 
 #pragma mark -
@@ -668,4 +678,3 @@ public:
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 };
-

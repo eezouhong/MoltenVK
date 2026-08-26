@@ -29,6 +29,8 @@
 #include "MVKImage.h"
 #include "MVKPipeline.h"
 #include "MVKQueryPool.h"
+#include "MVKFramebuffer.h"
+#include "MVKRenderPass.h"
 #include "mvk_datatypes.hpp"
 #include <algorithm>
 #include <array>
@@ -1127,6 +1129,68 @@ public:
 			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = binding.width;
 		_currentRenderHeight = binding.height;
+		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_counters.renderPasses++;
+		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+	}
+
+	bool beginRenderPass(MVKRenderPass* renderPass,
+						 MVKFramebuffer* framebuffer,
+						 const VkRect2D& renderArea,
+						 const VkClearValue* clearValues,
+						 size_t clearValueCount,
+						 MVKImageView*const* attachments,
+						 size_t attachmentCount) override {
+		if (!_commandBuffer || _renderEncoder || !renderPass || !framebuffer ||
+			renderPass->getSubpassCount() != 1 || !attachments || !attachmentCount) {
+			return false;
+		}
+		MVKRenderSubpass* subpass = renderPass->getSubpass(0);
+		if (!subpass || subpass->getColorAttachmentCount() != 1 ||
+			!subpass->isColorAttachmentUsed(0) || subpass->isStencilAttachmentUsed()) {
+			return false;
+		}
+		endComputeEncoding();
+
+		MTLRenderPassDescriptor* legacyDescriptor =
+			[MTLRenderPassDescriptor renderPassDescriptor];
+		subpass->populateMTLRenderPassDescriptor(
+			legacyDescriptor,
+			0,
+			framebuffer,
+			MVKArrayRef<MVKImageView*const>(attachments, attachmentCount),
+			MVKArrayRef<const VkClearValue>(clearValues, clearValueCount),
+			true,
+			false,
+			false);
+
+		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
+		descriptor.colorAttachments[0] = legacyDescriptor.colorAttachments[0];
+		if (subpass->isDepthAttachmentUsed()) {
+			descriptor.depthAttachment = legacyDescriptor.depthAttachment;
+		}
+		descriptor.renderTargetWidth = renderArea.extent.width;
+		descriptor.renderTargetHeight = renderArea.extent.height;
+		descriptor.renderTargetArrayLength = 1;
+		if (_visibilityQueryPool) {
+			descriptor.visibilityResultBuffer =
+				_queryPools.find(_visibilityQueryPool)->second.resetBuffer;
+			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
+		}
+		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor]
+			retain];
+		[descriptor release];
+		if (!_renderEncoder) { return false; }
+		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+
+		VkExtent2D extent = framebuffer->getExtent2D();
+		_currentRenderFormat = subpass->getColorAttachmentFormat(0);
+		_currentDepthFormat = subpass->isDepthAttachmentUsed()
+			? subpass->getDepthFormat()
+			: VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = extent.width;
+		_currentRenderHeight = extent.height;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_counters.renderPasses++;

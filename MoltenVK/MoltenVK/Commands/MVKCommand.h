@@ -28,10 +28,12 @@ class MVKCommandPool;
 class MVKComputePipeline;
 struct MVKDescriptorSet;
 class MVKGraphicsPipeline;
+class MVKFramebuffer;
 class MVKImage;
 class MVKImageView;
 class MVKPipelineLayout;
 class MVKQueryPool;
+class MVKRenderPass;
 struct MVKPipelineBarrier;
 struct MVKVertexMTLBufferBinding;
 
@@ -128,6 +130,13 @@ public:
 	virtual bool trackImageBarrier(const MVKPipelineBarrier& barrier) = 0;
 
 	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
+	virtual bool beginRenderPass(MVKRenderPass* renderPass,
+								 MVKFramebuffer* framebuffer,
+								 const VkRect2D& renderArea,
+								 const VkClearValue* clearValues,
+								 size_t clearValueCount,
+								 MVKImageView*const* attachments,
+								 size_t attachmentCount) = 0;
 	virtual bool endRendering() = 0;
 	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
 	virtual bool bindVertexBuffers(uint32_t firstBinding,

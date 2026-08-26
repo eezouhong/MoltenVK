@@ -160,7 +160,8 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 													   MVKArrayRef<MVKImageView*const> attachments,
 													   MVKArrayRef<const VkClearValue> clearValues,
 													   bool isRenderingEntireAttachment,
-													   bool loadOverride) {
+													   bool loadOverride,
+													   bool deferStoreActions) {
 	MVKPixelFormats* pixFmts = _renderPass->getPixelFormats();
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
@@ -205,10 +206,10 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 
             // Configure the color attachment
             MVKAttachmentDescription* clrMVKRPAtt = &_renderPass->_attachments[clrRPAttIdx];
-			if (clrMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(mtlColorAttDesc, this, attachments[clrRPAttIdx],
-                                                                       isRenderingEntireAttachment,
-                                                                       hasResolveAttachment, canResolveFormat,
-																	   false, loadOverride)) {
+			if (clrMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(
+					mtlColorAttDesc, this, attachments[clrRPAttIdx],
+					isRenderingEntireAttachment, hasResolveAttachment,
+					canResolveFormat, false, loadOverride, deferStoreActions)) {
 				mtlColorAttDesc.clearColor = pixFmts->getMTLClearColor(clearValues[clrRPAttIdx].color, clrMVKRPAtt->getFormat());
 			}
 			if (isMultiview()) {
@@ -242,10 +243,9 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 				mtlDepthAttDesc.resolveSlice += getFirstViewIndexInMetalPass(passIdx);
 			}
 		}
-		if (depthMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(mtlDepthAttDesc, this, depthImage,
-																	 isRenderingEntireAttachment,
-																	 hasDepthResolve, true,
-																	 false, loadOverride)) {
+		if (depthMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(
+				mtlDepthAttDesc, this, depthImage, isRenderingEntireAttachment,
+				hasDepthResolve, true, false, loadOverride, deferStoreActions)) {
 			mtlDepthAttDesc.clearDepth = pixFmts->getMTLClearDepthValue(clearValues[depthRPAttIdx].depthStencil);
 		}
 		if (isMultiview()) {
@@ -274,10 +274,9 @@ void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* 
 				mtlStencilAttDesc.resolveSlice += getFirstViewIndexInMetalPass(passIdx);
 			}
 		}
-		if (stencilMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(mtlStencilAttDesc, this, stencilImage,
-																	   isRenderingEntireAttachment,
-																	   hasStencilResolve, true,
-																	   true, loadOverride)) {
+		if (stencilMVKRPAtt->populateMTLRenderPassAttachmentDescriptor(
+				mtlStencilAttDesc, this, stencilImage, isRenderingEntireAttachment,
+				hasStencilResolve, true, true, loadOverride, deferStoreActions)) {
 			mtlStencilAttDesc.clearStencil = pixFmts->getMTLClearStencilValue(clearValues[stencilRPAttIdx].depthStencil);
 		}
 		if (isMultiview()) {
@@ -797,11 +796,12 @@ VkSampleCountFlagBits MVKAttachmentDescription::getSampleCount() { return _info.
 bool MVKAttachmentDescription::populateMTLRenderPassAttachmentDescriptor(MTLRenderPassAttachmentDescriptor* mtlAttDesc,
 																		 MVKRenderSubpass* subpass,
 																		 MVKImageView* attachment,
-																		 bool isRenderingEntireAttachment,
-																		 bool hasResolveAttachment,
-																		 bool canResolveFormat,
-																		 bool isStencil,
-																		 bool loadOverride) {
+																							 bool isRenderingEntireAttachment,
+																							 bool hasResolveAttachment,
+																							 bool canResolveFormat,
+																							 bool isStencil,
+																							 bool loadOverride,
+																							 bool deferStoreActions) {
 	// Populate from the attachment image view
 	attachment->populateMTLRenderPassAttachmentDescriptor(mtlAttDesc);
 
@@ -824,10 +824,21 @@ bool MVKAttachmentDescription::populateMTLRenderPassAttachmentDescriptor(MTLRend
 
 	mtlAttDesc.loadAction = mtlLA;
 
-    // Use late-specified store actions and then set them later.
-    // That way, if we wind up doing a tessellated draw, we can set the store action to store then,
-    // and then when the render pass actually ends, we can use the true store action.
-    mtlAttDesc.storeAction = MTLStoreActionUnknown;
+	if (deferStoreActions) {
+		// Use late-specified store actions and then set them later. That way, if
+		// we wind up doing a tessellated draw, we can force a store and restore
+		// the true action when the render pass ends.
+		mtlAttDesc.storeAction = MTLStoreActionUnknown;
+	} else {
+		mtlAttDesc.storeAction = getMTLStoreAction(
+			subpass,
+			isRenderingEntireAttachment,
+			isMemorylessAttachment,
+			hasResolveAttachment,
+			canResolveFormat,
+			isStencil,
+			false);
+	}
     return (mtlLA == MTLLoadActionClear);
 }
 

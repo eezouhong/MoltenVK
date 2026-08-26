@@ -748,8 +748,13 @@ def main() -> int:
         ),
         (
             pipeline_h + pipeline_cmd_mm + pipeline_mm,
-            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state",
+            r"metal4RenderExecutionUnsupportedReason[\s\S]*?descriptor_resources[\s\S]*?vertex_input[\s\S]*?attachment_render_pass_mrt[\s\S]*?attachment_render_pass_stencil_active[\s\S]*?attachment_render_pass_stencil_inactive[\s\S]*?attachment_rendering_info[\s\S]*?attachment_multiview[\s\S]*?attachment_color_count[\s\S]*?attachment_color_format[\s\S]*?attachment_stencil[\s\S]*?attachment_depth_format[\s\S]*?attachment_depth_state",
             "graphics-pipeline blockers are not classified before expanding the render backend",
+        ),
+        (
+            pipeline_mm,
+            r"hasActiveStencilState[\s\S]*?StencilTestEnable[\s\S]*?stencilTestEnabled",
+            "classic render-pass stencil telemetry does not distinguish active stencil testing from an inert attachment",
         ),
         (
             pipeline_mm,

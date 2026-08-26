@@ -3227,6 +3227,9 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasSupportedDepthState = hasSupportedDepthFormat &&
 		(!needsDepthAttachment ||
 		 pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED);
+	bool hasActiveStencilState =
+		_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) ||
+		_staticStateData.depthStencil.stencilTestEnabled;
 	bool hasUnsupportedDynamicState =
 		!_dynamicStateFlags.removingAll(kMetal4SupportedDynamicState).empty();
 	bool hasDynamicViewport =
@@ -3290,7 +3293,9 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
 			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
 		_metal4RenderExecutionUnsupportedReason =
-			"MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil";
+			hasActiveStencilState
+				? "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_active"
+				: "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_inactive";
 	} else if (!pRendInfo) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_rendering_info";

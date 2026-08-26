@@ -2199,6 +2199,9 @@ void MVKPipelineLayout::populateBindOperations(MVKPipelineBindScript& script, co
 		uint32_t descIdx = layout->getBindingIndex(binding);
 		if (descIdx >= layout->bindings().size()) { assert(!"Binding missing from layout"); continue; }
 		const MVKDescriptorBinding& desc = layout->bindings()[descIdx];
+		if (layout->argBufMode() == MVKArgumentBufferMode::Metal3) {
+			script.descriptorBindings.push_back({static_cast<uint8_t>(set), descIdx});
+		}
 		auto counts = desc.perDescriptorResourceCount;
 		uint32_t nonTexOffset = counts.texture * sizeof(id);
 		if (!desc.descriptorCount) { continue; }

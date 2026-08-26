@@ -463,8 +463,10 @@ struct MVKDescriptorSet {
 	/** Returns whether this set can be snapshotted into a Metal 4 argument table. */
 	bool supportsMetal4ArgumentTable() const;
 
-	/** Appends every Metal resource referenced by this immutable set snapshot. */
-	void collectMetal4Resources(std::vector<id<MTLResource>>& resources) const;
+	/** Appends the Metal resources referenced by one statically used binding. */
+	void collectMetal4BindingResources(
+		uint32_t bindingIndex,
+		std::vector<id<MTLResource>>& resources) const;
 
 	void setGPUBuffer(id<MTLBuffer> buffer, void* contents, size_t offset, size_t size) {
 		gpuBufferObject = buffer;

@@ -76,8 +76,15 @@ public:
 	/** Registers a graphics pipeline before execution is claimed. */
 	virtual bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
 
-	/** Registers one immutable Metal 3 descriptor-set snapshot for MTL4 use. */
-	virtual bool useDescriptorSet(MVKDescriptorSet* descriptorSet) = 0;
+	/** Resets descriptor and pipeline tracking at a Vulkan command-buffer boundary. */
+	virtual void resetPrepareState() = 0;
+
+	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
+	virtual bool useDescriptorSet(MVKDescriptorSet* descriptorSet,
+								 uint32_t setIndex) = 0;
+
+	/** Retains only the descriptor bindings statically used by the pending draw. */
+	virtual bool prepareGraphicsDraw() = 0;
 
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,

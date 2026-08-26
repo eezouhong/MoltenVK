@@ -40,28 +40,28 @@ bool MVKDescriptorSet::supportsMetal4ArgumentTable() const {
 	constexpr uint8_t unsupportedFlags =
 		MVK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
 		MVK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
-		MVK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+		MVK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+		MVK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
 	for (const auto& binding : layout->bindings()) {
 		if (binding.flags & unsupportedFlags) { return false; }
 	}
 	return true;
 }
 
-void MVKDescriptorSet::collectMetal4Resources(
+void MVKDescriptorSet::collectMetal4BindingResources(
+	uint32_t bindingIndex,
 	std::vector<id<MTLResource>>& resources) const {
-	if (!supportsMetal4ArgumentTable()) { return; }
+	if (!supportsMetal4ArgumentTable() || bindingIndex >= layout->bindings().size()) { return; }
 	auto append = [&resources](id<MTLResource> resource) {
 		if (resource) { resources.push_back(resource); }
 	};
-	append(gpuBufferObject);
-
-	for (const auto& binding : layout->bindings()) {
-		const size_t stride = descriptorCPUSize(binding.cpuLayout);
-		if (!stride || !cpuBuffer) { continue; }
-		const char* descriptor = cpuBuffer + binding.cpuOffset;
-		for (uint32_t descriptorIndex = 0;
-			 descriptorIndex < binding.descriptorCount;
-			 descriptorIndex++, descriptor += stride) {
+	const auto& binding = layout->bindings()[bindingIndex];
+	const size_t stride = descriptorCPUSize(binding.cpuLayout);
+	if (!stride || !cpuBuffer) { return; }
+	const char* descriptor = cpuBuffer + binding.cpuOffset;
+	for (uint32_t descriptorIndex = 0;
+		 descriptorIndex < binding.descriptorCount;
+		 descriptorIndex++, descriptor += stride) {
 			switch (binding.descriptorType) {
 				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
 				case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
@@ -112,7 +112,6 @@ void MVKDescriptorSet::collectMetal4Resources(
 				default:
 					break;
 			}
-		}
 	}
 }
 

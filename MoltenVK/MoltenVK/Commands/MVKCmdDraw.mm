@@ -407,7 +407,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
 
 bool MVKCmdDraw::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
 }
 
 bool MVKCmdDraw::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -445,7 +445,7 @@ VkResult MVKCmdDrawIndexed::setContent(MVKCommandBuffer* cmdBuff,
 
 bool MVKCmdDrawIndexed::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
 }
 
 bool MVKCmdDrawIndexed::encodeMetal4(

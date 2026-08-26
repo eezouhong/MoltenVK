@@ -91,6 +91,11 @@ struct MVKDescriptorBindOperation {
 
 struct MVKPipelineBindScript {
 	MVKSmallVector<MVKDescriptorBindOperation> ops;
+	struct DescriptorBindingUse {
+		uint8_t set;
+		uint32_t bindingIdx;
+	};
+	MVKSmallVector<DescriptorBindingUse> descriptorBindings;
 };
 
 #pragma mark - MVKPipelineLayout

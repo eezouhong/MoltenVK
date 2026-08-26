@@ -481,8 +481,12 @@ template <size_t N>
 bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
-	for (MVKDescriptorSet* descriptorSet : _descriptorSets) {
-		if (!cmdEncoder->useDescriptorSet(descriptorSet)) { return false; }
+	for (size_t setOffset = 0; setOffset < _descriptorSets.size(); setOffset++) {
+		if (!cmdEncoder->useDescriptorSet(
+				_descriptorSets[setOffset],
+				_firstSet + static_cast<uint32_t>(setOffset))) {
+			return false;
+		}
 	}
 	return true;
 }

@@ -1212,16 +1212,20 @@ int main() {
         std::memcpy(descriptorColorBytes.data(), descriptorColor.data(), descriptorColorBytes.size());
         writeBytes(device, uniformColor, descriptorColorBytes);
 
-        VkDescriptorSetLayoutBinding uniformBinding{};
-        uniformBinding.binding = 0;
-        uniformBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        uniformBinding.descriptorCount = 1;
-        uniformBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        std::array<VkDescriptorSetLayoutBinding, 2> uniformBindings{};
+        uniformBindings[0].binding = 0;
+        uniformBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uniformBindings[0].descriptorCount = 1;
+        uniformBindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        uniformBindings[1].binding = 1;
+        uniformBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uniformBindings[1].descriptorCount = 1;
+        uniformBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo =
             makeVkStruct<VkDescriptorSetLayoutCreateInfo>(
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-        descriptorLayoutInfo.bindingCount = 1;
-        descriptorLayoutInfo.pBindings = &uniformBinding;
+        descriptorLayoutInfo.bindingCount = static_cast<uint32_t>(uniformBindings.size());
+        descriptorLayoutInfo.pBindings = uniformBindings.data();
         VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
         check(vkCreateDescriptorSetLayout(device, &descriptorLayoutInfo, nullptr,
                                           &descriptorSetLayout),
@@ -1229,7 +1233,7 @@ int main() {
 
         VkDescriptorPoolSize descriptorPoolSize{};
         descriptorPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorPoolSize.descriptorCount = 1;
+        descriptorPoolSize.descriptorCount = 2;
         VkDescriptorPoolCreateInfo descriptorPoolInfo =
             makeVkStruct<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
         descriptorPoolInfo.maxSets = 1;
@@ -1247,18 +1251,27 @@ int main() {
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
         check(vkAllocateDescriptorSets(device, &descriptorAllocateInfo, &descriptorSet),
               "vkAllocateDescriptorSets(uniform)");
-        VkDescriptorBufferInfo uniformDescriptor{};
-        uniformDescriptor.buffer = uniformColor.buffer;
-        uniformDescriptor.offset = 0;
-        uniformDescriptor.range = sizeof(float) * 4;
-        VkWriteDescriptorSet descriptorWrite =
-            makeVkStruct<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-        descriptorWrite.dstSet = descriptorSet;
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.pBufferInfo = &uniformDescriptor;
-        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        Buffer unusedDescriptorBuffer = createBuffer(
+            physicalDevice, device, sizeof(float) * 4);
+        std::array<VkDescriptorBufferInfo, 2> uniformDescriptors{};
+        uniformDescriptors[0].buffer = uniformColor.buffer;
+        uniformDescriptors[0].offset = 0;
+        uniformDescriptors[0].range = sizeof(float) * 4;
+        uniformDescriptors[1].buffer = unusedDescriptorBuffer.buffer;
+        uniformDescriptors[1].offset = 0;
+        uniformDescriptors[1].range = sizeof(float) * 4;
+        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        for (uint32_t binding = 0; binding < descriptorWrites.size(); binding++) {
+            descriptorWrites[binding] =
+                makeVkStruct<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+            descriptorWrites[binding].dstSet = descriptorSet;
+            descriptorWrites[binding].dstBinding = binding;
+            descriptorWrites[binding].descriptorCount = 1;
+            descriptorWrites[binding].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrites[binding].pBufferInfo = &uniformDescriptors[binding];
+        }
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()),
+                               descriptorWrites.data(), 0, nullptr);
 
         VkPipelineLayoutCreateInfo descriptorPipelineLayoutInfo =
             makeVkStruct<VkPipelineLayoutCreateInfo>(
@@ -1324,12 +1337,18 @@ int main() {
         descriptorSubmits[3].commandBufferCount = 1;
         descriptorSubmits[3].pCommandBuffers = &readDescriptorRender;
         VkFence descriptorFence = createFence(device);
+        // Binding 1 is not statically used by either shader. Vulkan does not
+        // require its stale contents to be accessed by this draw, and the
+        // Metal 4 residency gather must therefore leave the released Metal
+        // allocation alone instead of walking the entire descriptor set.
+        unusedDescriptorBuffer.destroy();
         check(vkQueueSubmit(queue, static_cast<uint32_t>(descriptorSubmits.size()),
                             descriptorSubmits.data(), descriptorFence),
               "vkQueueSubmit(descriptor render sequence)");
         waitFence(device, descriptorFence);
         validateSolidColor(device, renderReadback, {26, 51, 77, 255});
         std::cout << "DESCRIPTOR_RENDER_OK" << std::endl;
+        std::cout << "UNUSED_DESCRIPTOR_LIFETIME_OK" << std::endl;
 
         // A static vertex input must bind the VkBuffer at the Metal buffer
         // index compiled into the pipeline and snapshot that address through

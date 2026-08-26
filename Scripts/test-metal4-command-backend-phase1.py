@@ -514,13 +514,13 @@ def main() -> int:
     )
     require(
         descriptor_h + descriptor_mm,
-        r"supportsMetal4ArgumentTable[\s\S]*?MVKArgumentBufferMode::Metal3[\s\S]*?UPDATE_AFTER_BIND[\s\S]*?UPDATE_UNUSED_WHILE_PENDING[\s\S]*?VARIABLE_DESCRIPTOR_COUNT",
-        "descriptor-set eligibility does not reject mutable or variable-count layouts",
+        r"supportsMetal4ArgumentTable[\s\S]*?MVKArgumentBufferMode::Metal3[\s\S]*?UPDATE_AFTER_BIND[\s\S]*?UPDATE_UNUSED_WHILE_PENDING[\s\S]*?VARIABLE_DESCRIPTOR_COUNT[\s\S]*?PARTIALLY_BOUND",
+        "descriptor-set eligibility does not reject mutable, variable-count, or partially-bound layouts",
     )
     require(
-        descriptor_h + descriptor_mm + queue_mm,
-        r"collectMetal4Resources[\s\S]*?gpuBufferObject[\s\S]*?retainDescriptorAllocation[\s\S]*?_allocations\.push_back",
-        "descriptor resources are not retained and made resident before Metal 4 execution",
+        pipeline_h + pipeline_mm + descriptor_h + descriptor_mm + queue_mm,
+        r"descriptorBindings[\s\S]*?collectMetal4BindingResources[\s\S]*?prepareGraphicsDraw[\s\S]*?retainDescriptorAllocation[\s\S]*?_allocations\.push_back",
+        "only statically used descriptor bindings are not retained and made resident before Metal 4 execution",
     )
     require(
         queue_mm,

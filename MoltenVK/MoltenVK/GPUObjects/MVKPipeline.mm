@@ -2728,6 +2728,7 @@ static constexpr MVKRenderStateFlags kMetal4SupportedDynamicState {
 	MVKRenderStateFlag::VertexStride,
 	MVKRenderStateFlag::Viewports,
 	MVKRenderStateFlag::Scissors,
+	MVKRenderStateFlag::DepthBias,
 	MVKRenderStateFlag::BlendConstants,
 	MVKRenderStateFlag::StencilCompareMask,
 	MVKRenderStateFlag::StencilWriteMask,
@@ -2834,7 +2835,6 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 	uint8_t numStaticViewports,
 	uint8_t numStaticScissors,
 	bool hasCullBothFaces,
-	bool hasDepthBias,
 	bool hasDepthBoundsTest,
 	bool hasDepthClamp) {
 	if (!isMetal4SupportedStaticPrimitiveTopology(pIA)) {
@@ -2861,7 +2861,7 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 			!pVP->pScissors || numStaticScissors != 1)))) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
 	}
-	if (isRasterizing && (hasDepthBias || hasDepthBoundsTest || hasDepthClamp)) {
+	if (isRasterizing && (hasDepthBoundsTest || hasDepthClamp)) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_depth_stencil";
 	}
 	return "MVKCmdBindGraphicsPipeline:fixed_function_unknown";
@@ -3290,7 +3290,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			 (hasDynamicViewport || _staticStateData.numViewports == 1) &&
 			 (hasDynamicScissor || _staticStateData.numScissors == 1) &&
 			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
-			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias) &&
 			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&
 			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp))) &&
 		hasSupportedDepthState;
@@ -3376,7 +3375,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 				pIA, pRS, _isRasterizing, pMS, pVP, hasDynamicViewport, hasDynamicScissor,
 				_staticStateData.numViewports, _staticStateData.numScissors,
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces),
-				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias),
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest),
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp));
 	}

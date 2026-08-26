@@ -2063,6 +2063,110 @@ int main() {
         validateSolidColor(device, renderReadback, {0, 0, 0, 255});
         std::cout << "DEPTH_RENDER_OK" << std::endl;
 
+        // Ryujinx declares vkCmdSetDepthBias on every graphics pipeline and
+        // enables it for shadow/depth work. Clear depth to the unbiased
+        // triangle depth so LESS fails unless the large negative dynamic bias
+        // is actually materialized by the MTL4 render encoder.
+        VkPipelineRasterizationStateCreateInfo activeDepthBiasRasterization =
+            rasterization;
+        activeDepthBiasRasterization.depthBiasEnable = VK_TRUE;
+        const VkDynamicState activeDepthBiasStateValue =
+            VK_DYNAMIC_STATE_DEPTH_BIAS;
+        VkPipelineDynamicStateCreateInfo activeDepthBiasState =
+            makeVkStruct<VkPipelineDynamicStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+        activeDepthBiasState.dynamicStateCount = 1;
+        activeDepthBiasState.pDynamicStates = &activeDepthBiasStateValue;
+		std::vector<uint32_t> activeDepthBiasVertexWords(
+			std::begin(kRenderSmokeVertexSpirv), std::end(kRenderSmokeVertexSpirv));
+		bool patchedDepthBiasVertex = false;
+		for (size_t wordIndex = 0; wordIndex + 3 < activeDepthBiasVertexWords.size();
+			 wordIndex++) {
+			if (activeDepthBiasVertexWords[wordIndex] == 0x0004002b &&
+				activeDepthBiasVertexWords[wordIndex + 1] == 0x00000006 &&
+				activeDepthBiasVertexWords[wordIndex + 2] == 0x00000021 &&
+				activeDepthBiasVertexWords[wordIndex + 3] == 0x00000000) {
+				activeDepthBiasVertexWords[wordIndex + 3] = 0x3f000000;
+				patchedDepthBiasVertex = true;
+				break;
+			}
+		}
+		if (!patchedDepthBiasVertex) { fail("Depth-bias vertex Z constant not found"); }
+		VkShaderModule activeDepthBiasVertexModule = createShaderModule(
+			device, activeDepthBiasVertexWords.data(),
+			activeDepthBiasVertexWords.size() * sizeof(uint32_t),
+			"vkCreateShaderModule(active dynamic depth bias vertex)");
+        depthStencilState.depthCompareOp = VK_COMPARE_OP_LESS;
+        graphicsInfo.pRasterizationState = &activeDepthBiasRasterization;
+        graphicsInfo.pDynamicState = &activeDepthBiasState;
+		renderStages[0].module = activeDepthBiasVertexModule;
+        VkPipeline activeDepthBiasPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &activeDepthBiasPipeline),
+              "vkCreateGraphicsPipelines(active dynamic depth bias)");
+		renderStages[0].module = vertexModule;
+		vkDestroyShaderModule(device, activeDepthBiasVertexModule, nullptr);
+        graphicsInfo.pRasterizationState = &rasterization;
+        graphicsInfo.pDynamicState = nullptr;
+        depthStencilState.depthCompareOp = VK_COMPARE_OP_NEVER;
+
+        VkRenderingAttachmentInfo activeDepthBiasColor = colorAttachment;
+        activeDepthBiasColor.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingAttachmentInfo activeDepthBiasDepth = depthAttachment;
+        activeDepthBiasDepth.clearValue.depthStencil = {0.5f, 0};
+        VkRenderingInfo activeDepthBiasRendering = renderingInfo;
+        activeDepthBiasRendering.pColorAttachments = &activeDepthBiasColor;
+        activeDepthBiasRendering.pDepthAttachment = &activeDepthBiasDepth;
+
+        VkCommandBuffer prepareActiveDepthBias = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareActiveDepthBias, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareActiveDepthBias);
+        VkCommandBuffer renderActiveDepthBias = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(renderActiveDepthBias, &activeDepthBiasRendering);
+        vkCmdBindPipeline(renderActiveDepthBias, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          activeDepthBiasPipeline);
+        vkCmdSetDepthBias(renderActiveDepthBias, -1000000.0f, 0.0f, 0.0f);
+        vkCmdDraw(renderActiveDepthBias, 3, 1, 0, 0);
+        vkCmdEndRendering(renderActiveDepthBias);
+        endCommandBuffer(renderActiveDepthBias);
+        VkCommandBuffer finishActiveDepthBias = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishActiveDepthBias, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishActiveDepthBias);
+        VkCommandBuffer readActiveDepthBias = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readActiveDepthBias, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readActiveDepthBias);
+        std::array<VkSubmitInfo, 4> activeDepthBiasSubmits{};
+        for (auto& submit : activeDepthBiasSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        activeDepthBiasSubmits[0].commandBufferCount = 1;
+        activeDepthBiasSubmits[0].pCommandBuffers = &prepareActiveDepthBias;
+        activeDepthBiasSubmits[1].commandBufferCount = 1;
+        activeDepthBiasSubmits[1].pCommandBuffers = &renderActiveDepthBias;
+        activeDepthBiasSubmits[2].commandBufferCount = 1;
+        activeDepthBiasSubmits[2].pCommandBuffers = &finishActiveDepthBias;
+        activeDepthBiasSubmits[3].commandBufferCount = 1;
+        activeDepthBiasSubmits[3].pCommandBuffers = &readActiveDepthBias;
+        VkFence activeDepthBiasFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(activeDepthBiasSubmits.size()),
+                            activeDepthBiasSubmits.data(), activeDepthBiasFence),
+              "vkQueueSubmit(active dynamic depth bias sequence)");
+        waitFence(device, activeDepthBiasFence);
+        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        std::cout << "ACTIVE_DYNAMIC_DEPTH_BIAS_OK" << std::endl;
+
         // Ryujinx uses classic depth-only passes for shadow maps. A fragment
         // shader may still be present even though the subpass has no color
         // attachment; the MTL4 backend must retain the depth attachment and
@@ -3131,6 +3235,7 @@ int main() {
         vkDestroyPipeline(device, activeBlendConstantsPipeline, nullptr);
         vkDestroyPipeline(device, inactiveStencilDynamicPipeline, nullptr);
         vkDestroyPipeline(device, inactiveDepthBiasDynamicPipeline, nullptr);
+        vkDestroyPipeline(device, activeDepthBiasPipeline, nullptr);
         vkDestroyFence(device, dynamicVertexFence, nullptr);
         vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);

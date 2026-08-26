@@ -860,6 +860,11 @@ def main() -> int:
             "classic depth-only render passes are not admitted by the command, descriptor, pipeline, and E2E path",
         ),
         (
+            rendering_mm + queue_mm + pipeline_h + pipeline_mm + e2e,
+            r"MVKCmdSetDepthBias::encodeMetal4[\s\S]*?setDepthBias[\s\S]*?usesMetal4DynamicDepthBias[\s\S]*?MVKRenderStateFlag::DepthBias[\s\S]*?ACTIVE_DYNAMIC_DEPTH_BIAS_OK",
+            "active dynamic depth bias is not retained and materialized by the Metal 4 render path",
+        ),
+        (
             rendering_mm + queue_mm + transfer_mm + e2e,
             r"framebufferLayerCount[\s\S]*?MTLTextureType2DArray[\s\S]*?texture\.arrayLength[\s\S]*?renderTargetArrayLength\s*=\s*framebuffer->getLayerCount\(\)[\s\S]*?CLASSIC_LAYERED_RENDER_OK",
             "classic layered render passes are not admitted and exercised through the Metal 4 path",

@@ -575,10 +575,10 @@ void MVKCmdSetDepthBias::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 bool MVKCmdSetDepthBias::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	// Metal 4 pipelines reach this command only when depth bias is statically
-	// disabled, so the Vulkan value is semantically inert. Pipelines that can
-	// enable depth bias remain ineligible and force whole-buffer fallback.
-	return cmdEncoder;
+	return cmdEncoder && cmdEncoder->setDepthBias(
+		_value.depthBiasConstantFactor,
+		_value.depthBiasClamp,
+		_value.depthBiasSlopeFactor);
 }
 
 

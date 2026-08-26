@@ -429,6 +429,9 @@ public:
 	bool usesMetal4DynamicScissor() const {
 		return _dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
 	}
+	bool usesMetal4DynamicDepthBias() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::DepthBias);
+	}
 	bool usesMetal4DynamicBlendConstants() const {
 		return _dynamicStateFlags.has(MVKRenderStateFlag::BlendConstants);
 	}

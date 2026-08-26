@@ -1319,7 +1319,7 @@ public:
 		_graphicsViewportScissorAppliedForEncoder = false;
 		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
-		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+		return !_boundGraphicsPipeline || applyGraphicsPipeline(true);
 	}
 
 	bool beginRenderPass(MVKRenderPass* renderPass,
@@ -1419,7 +1419,7 @@ public:
 		_graphicsViewportScissorAppliedForEncoder = false;
 		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
-		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+		return !_boundGraphicsPipeline || applyGraphicsPipeline(true);
 	}
 
 	bool endRendering() override {
@@ -1434,7 +1434,7 @@ public:
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
 		_graphicsBlendConstantsAppliedForEncoder = false;
-		return !_renderEncoder || applyGraphicsPipeline();
+		return !_renderEncoder || applyGraphicsPipeline(true);
 	}
 
 	bool setViewports(uint32_t firstViewport,
@@ -1502,6 +1502,17 @@ public:
 		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
 			_dynamicStencilReference.backFaceValue = stencilReference;
 		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
+	}
+
+	bool setDepthBias(float constantFactor,
+					  float clamp,
+					  float slopeFactor) override {
+		_dynamicDepthBias.depthBiasConstantFactor = constantFactor;
+		_dynamicDepthBias.depthBiasClamp = clamp;
+		_dynamicDepthBias.depthBiasSlopeFactor = slopeFactor;
+		_hasDynamicDepthBias = true;
 		_graphicsPipelineBoundForEncoder = false;
 		return true;
 	}
@@ -2043,7 +2054,7 @@ private:
 		return state;
 	}
 
-	bool applyGraphicsPipeline() {
+	bool applyGraphicsPipeline(bool allowIncompleteDynamicState = false) {
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
 		if (it == _graphicsPipelines.end() ||
@@ -2098,6 +2109,18 @@ private:
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
 		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
 		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
+		const MVKDepthBias* depthBias = &stateData.depthBias;
+		if (_boundGraphicsPipeline->usesMetal4DynamicDepthBias()) {
+			if (!_hasDynamicDepthBias) { return allowIncompleteDynamicState; }
+			depthBias = &_dynamicDepthBias;
+		}
+		if (stateData.enable.has(MVKRenderStateEnableFlag::DepthBias)) {
+			[_renderEncoder setDepthBias:depthBias->depthBiasConstantFactor
+						 slopeScale:depthBias->depthBiasSlopeFactor
+							  clamp:depthBias->depthBiasClamp];
+		} else {
+			[_renderEncoder setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
+		}
 		if (stateData.depthStencil.stencilTestEnabled) {
 			uint32_t frontReference = stateData.stencilReference.frontFaceValue;
 			uint32_t backReference = stateData.stencilReference.backFaceValue;
@@ -2316,6 +2339,7 @@ private:
 	uint32_t _dynamicViewportCount = 0;
 	uint32_t _dynamicScissorCount = 0;
 	MVKColor32 _dynamicBlendConstants = {};
+	MVKDepthBias _dynamicDepthBias = {};
 	MVKStencilReference _dynamicStencilCompareMask = {};
 	MVKStencilReference _dynamicStencilWriteMask = {};
 	MVKStencilReference _dynamicStencilReference = {};
@@ -2324,6 +2348,7 @@ private:
 	bool _graphicsViewportScissorAppliedForEncoder = false;
 	bool _graphicsBlendConstantsAppliedForEncoder = false;
 	bool _hasDynamicBlendConstants = false;
+	bool _hasDynamicDepthBias = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
 };

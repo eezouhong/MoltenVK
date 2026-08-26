@@ -597,6 +597,12 @@ public:
 		NSUInteger size = 0;
 		NSUInteger stride = 0;
 	};
+	struct BoundIndexBuffer {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+		NSUInteger size = 0;
+		MTLIndexType type = MTLIndexTypeUInt16;
+	};
 	struct DepthStencilStateBinding {
 		MVKStencilReference compareMask = {};
 		MVKStencilReference writeMask = {};
@@ -1408,6 +1414,35 @@ public:
 		return true;
 	}
 
+	bool bindIndexBuffer(MVKBuffer* buffer,
+						 VkDeviceSize offset,
+						 VkDeviceSize size,
+						 VkIndexType indexType) override {
+		auto binding = _buffers.find(buffer);
+		if (!buffer || binding == _buffers.end() ||
+			(indexType != VK_INDEX_TYPE_UINT16 && indexType != VK_INDEX_TYPE_UINT32) ||
+			offset > buffer->getByteCount() || size > buffer->getByteCount() - offset) {
+			return false;
+		}
+		MTLIndexType mtlIndexType = indexType == VK_INDEX_TYPE_UINT16
+			? MTLIndexTypeUInt16
+			: MTLIndexTypeUInt32;
+		NSUInteger indexSize = indexType == VK_INDEX_TYPE_UINT16 ? 2 : 4;
+		NSUInteger mtlOffset = binding->second.offset + offset;
+		if (mtlOffset % indexSize != 0 ||
+			mtlOffset > binding->second.buffer.length ||
+			size > binding->second.buffer.length - mtlOffset) {
+			return false;
+		}
+		_boundIndexBuffer = BoundIndexBuffer{
+			binding->second.buffer,
+			mtlOffset,
+			static_cast<NSUInteger>(size),
+			mtlIndexType,
+		};
+		return true;
+	}
+
 	bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
 							MVKPipelineLayout* layout,
 							uint32_t firstSet,
@@ -1460,6 +1495,50 @@ public:
 						 vertexCount:vertexCount
 					   instanceCount:instanceCount
 						baseInstance:firstInstance];
+		_counters.draws++;
+		_renderWork = true;
+		return true;
+	}
+
+	bool drawIndexed(uint32_t firstIndex,
+						 uint32_t indexCount,
+						 int32_t vertexOffset,
+						 uint32_t firstInstance,
+						 uint32_t instanceCount) override {
+		if (!_renderEncoder || !_boundGraphicsPipeline || !_boundIndexBuffer.buffer ||
+			!indexCount || !instanceCount) {
+			return false;
+		}
+		NSUInteger indexSize = _boundIndexBuffer.type == MTLIndexTypeUInt16 ? 2 : 4;
+		uint64_t firstIndexOffset = uint64_t(firstIndex) * indexSize;
+		uint64_t indexBytes = uint64_t(indexCount) * indexSize;
+		if (firstIndexOffset > _boundIndexBuffer.size ||
+			indexBytes > _boundIndexBuffer.size - firstIndexOffset ||
+			firstIndexOffset > NSUIntegerMax - _boundIndexBuffer.offset) {
+			return false;
+		}
+		NSUInteger indexBufferOffset =
+			_boundIndexBuffer.offset + static_cast<NSUInteger>(firstIndexOffset);
+		NSUInteger indexBufferLength = static_cast<NSUInteger>(indexBytes);
+		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
+		if (!_graphicsViewportScissorAppliedForEncoder &&
+			!applyViewportScissorState()) {
+			return false;
+		}
+		if (!_graphicsBlendConstantsAppliedForEncoder &&
+			!applyBlendConstantsState()) {
+			return false;
+		}
+		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		[_renderEncoder drawIndexedPrimitives:(MTLPrimitiveType)stateData.primitiveType
+								 indexCount:indexCount
+								  indexType:_boundIndexBuffer.type
+								indexBuffer:_boundIndexBuffer.buffer.gpuAddress + indexBufferOffset
+						  indexBufferLength:indexBufferLength
+							  instanceCount:instanceCount
+								 baseVertex:vertexOffset
+							   baseInstance:firstInstance];
 		_counters.draws++;
 		_renderWork = true;
 		return true;
@@ -1861,6 +1940,7 @@ private:
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
 	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
+	BoundIndexBuffer _boundIndexBuffer = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
 	unordered_set<const void*> _descriptorAllocationSet;
 	vector<id<MTLAllocation>> _descriptorAllocations;

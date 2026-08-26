@@ -146,7 +146,8 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
     createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device, &createInfo, nullptr, &result.buffer), "vkCreateBuffer");
 
@@ -1128,6 +1129,79 @@ int main() {
         waitFence(device, renderFence);
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "RENDER_OK" << std::endl;
+
+        // Metal 4 consumes index buffers by GPU address and explicit byte
+        // length. Cover both Vulkan index widths, a non-zero firstIndex, a
+        // negative vertexOffset, and a non-zero firstInstance. The selected
+        // indices 1,2,3 plus baseVertex -1 must reproduce vertices 0,1,2.
+        auto runIndexedDraw = [&](VkIndexType indexType, const char* operation) {
+            Buffer indexBuffer = createBuffer(
+                physicalDevice, device,
+                indexType == VK_INDEX_TYPE_UINT16
+                    ? sizeof(uint16_t) * 4
+                    : sizeof(uint32_t) * 4);
+            std::vector<uint8_t> indexBytes(static_cast<size_t>(indexBuffer.size));
+            if (indexType == VK_INDEX_TYPE_UINT16) {
+                const std::array<uint16_t, 4> indices{{99, 1, 2, 3}};
+                std::memcpy(indexBytes.data(), indices.data(), sizeof(indices));
+            } else {
+                const std::array<uint32_t, 4> indices{{99, 1, 2, 3}};
+                std::memcpy(indexBytes.data(), indices.data(), sizeof(indices));
+            }
+            writeBytes(device, indexBuffer, indexBytes);
+
+            VkCommandBuffer prepare = beginCommandBuffer(device, commandPool);
+            imageBarrier(prepare, renderTarget.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            endCommandBuffer(prepare);
+            VkCommandBuffer render = beginCommandBuffer(device, commandPool);
+            vkCmdBeginRendering(render, &renderingInfo);
+            vkCmdBindPipeline(render, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+            vkCmdBindIndexBuffer(render, indexBuffer.buffer, 0, indexType);
+            vkCmdDrawIndexed(render, 3, 1, 1, -1, 2);
+            vkCmdEndRendering(render);
+            endCommandBuffer(render);
+            VkCommandBuffer finish = beginCommandBuffer(device, commandPool);
+            imageBarrier(finish, renderTarget.image,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            endCommandBuffer(finish);
+            VkCommandBuffer read = beginCommandBuffer(device, commandPool);
+            vkCmdCopyImageToBuffer(read, renderTarget.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   renderReadback.buffer, 1, &imageRegion);
+            endCommandBuffer(read);
+            std::array<VkSubmitInfo, 4> submits{};
+            for (auto& submit : submits) {
+                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            }
+            submits[0].commandBufferCount = 1;
+            submits[0].pCommandBuffers = &prepare;
+            submits[1].commandBufferCount = 1;
+            submits[1].pCommandBuffers = &render;
+            submits[2].commandBufferCount = 1;
+            submits[2].pCommandBuffers = &finish;
+            submits[3].commandBufferCount = 1;
+            submits[3].pCommandBuffers = &read;
+            VkFence fence = createFence(device);
+            check(vkQueueSubmit(queue, static_cast<uint32_t>(submits.size()),
+                                submits.data(), fence), operation);
+            waitFence(device, fence);
+            validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+            vkDestroyFence(device, fence, nullptr);
+        };
+        runIndexedDraw(VK_INDEX_TYPE_UINT16, "vkQueueSubmit(uint16 indexed draw)");
+        runIndexedDraw(VK_INDEX_TYPE_UINT32, "vkQueueSubmit(uint32 indexed draw)");
+        std::cout << "INDEXED_DRAW_OK" << std::endl;
 
         // The common descriptor path reuses MoltenVK's Metal 3 argument-buffer
         // encoding and exposes it through an MTL4 argument table. This must be a

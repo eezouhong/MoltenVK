@@ -81,11 +81,18 @@ public:
 						VkIndexType indexType);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override;
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
     MVKIndexMTLBufferBinding _binding;
+	MVKBuffer* _buffer = nullptr;
+	VkDeviceSize _bufferOffset = 0;
+	VkDeviceSize _bufferSize = 0;
+	VkIndexType _indexType = VK_INDEX_TYPE_UINT16;
 };
 
 
@@ -131,6 +138,11 @@ public:
 						uint32_t firstInstance);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override {
+		return _indexCount > 0 && _instanceCount > 0;
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

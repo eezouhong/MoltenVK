@@ -532,6 +532,16 @@ def main() -> int:
         r"MVKCmdDraw[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?cmdEncoder->draw",
         "real non-indexed Vulkan draw is not routed to Metal 4",
     )
+    require(
+        draw_h + draw_mm + command_h,
+        r"MVKCmdBindIndexBuffer[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?useBuffer[\s\S]*?encodeMetal4[\s\S]*?bindIndexBuffer[\s\S]*?MVKCmdDrawIndexed[\s\S]*?supportsMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?drawIndexed",
+        "indexed Vulkan draws are not preflighted and routed to Metal 4",
+    )
+    require(
+        queue_mm,
+        r"bindIndexBuffer[\s\S]*?VK_INDEX_TYPE_UINT16[\s\S]*?VK_INDEX_TYPE_UINT32[\s\S]*?_boundIndexBuffer[\s\S]*?drawIndexedPrimitives:[\s\S]*?indexBufferLength:[\s\S]*?baseVertex:[\s\S]*?baseInstance:",
+        "Metal 4 does not validate and encode bounded uint16/uint32 indexed draws",
+    )
     for token in (
         "MTL4RenderPassDescriptor",
         "MTL4ArgumentTable",

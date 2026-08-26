@@ -155,6 +155,10 @@ public:
 	virtual bool bindVertexBuffers(uint32_t firstBinding,
 							   uint32_t bindingCount,
 							   const MVKVertexMTLBufferBinding* bindings) = 0;
+	virtual bool bindIndexBuffer(MVKBuffer* buffer,
+						 VkDeviceSize offset,
+						 VkDeviceSize size,
+						 VkIndexType indexType) = 0;
 	virtual bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
 								MVKPipelineLayout* layout,
 								uint32_t firstSet,
@@ -164,6 +168,11 @@ public:
 					  uint32_t vertexCount,
 					  uint32_t firstInstance,
 					  uint32_t instanceCount) = 0;
+	virtual bool drawIndexed(uint32_t firstIndex,
+						 uint32_t indexCount,
+						 int32_t vertexOffset,
+						 uint32_t firstInstance,
+						 uint32_t instanceCount) = 0;
 };
 
 

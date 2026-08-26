@@ -110,17 +110,22 @@ VkResult MVKCmdBindIndexBuffer::setContent(MVKCommandBuffer* cmdBuff,
 										   VkIndexType indexType) {
 	_binding.vkIndexType = indexType;
 	_binding.mtlIndexType = mvkMTLIndexTypeFromVkIndexType(indexType);
+	_buffer = (MVKBuffer*)buffer;
+	_bufferOffset = offset;
+	_indexType = indexType;
 
-	MVKBuffer* mvkBuffer = (MVKBuffer*)buffer;
+	MVKBuffer* mvkBuffer = _buffer;
 	if (mvkBuffer) {
 		_binding.mtlBuffer = mvkBuffer->getMTLBuffer();
 		_binding.offset = mvkBuffer->getMTLBufferOffset() + offset;
 		_binding.size = size == VK_WHOLE_SIZE ? mvkBuffer->getByteCount() - offset : size;
+		_bufferSize = _binding.size;
 	} else {
 		_binding.mtlBuffer = nullptr;
 		// Must be 0 for null buffer.
 		_binding.offset = 0;
 		_binding.size = size == VK_WHOLE_SIZE ? mvkMTLIndexTypeSizeInBytes((MTLIndexType)_binding.mtlIndexType) : size;
+		_bufferSize = _binding.size;
 	}
 
 	return VK_SUCCESS;
@@ -136,6 +141,29 @@ void MVKCmdBindIndexBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     }
 
     cmdEncoder->getState().bindIndexBuffer(_binding);
+}
+
+bool MVKCmdBindIndexBuffer::supportsMetal4Encoding() const {
+	if (!_buffer || !_binding.mtlBuffer ||
+		(_indexType != VK_INDEX_TYPE_UINT16 && _indexType != VK_INDEX_TYPE_UINT32)) {
+		return false;
+	}
+	VkDeviceSize byteCount = _buffer->getByteCount();
+	VkDeviceSize indexSize = _indexType == VK_INDEX_TYPE_UINT16 ? 2 : 4;
+	return _bufferOffset <= byteCount &&
+		_bufferSize <= byteCount - _bufferOffset &&
+		_binding.offset % indexSize == 0;
+}
+
+bool MVKCmdBindIndexBuffer::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useBuffer(_buffer);
+}
+
+bool MVKCmdBindIndexBuffer::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->bindIndexBuffer(_buffer, _bufferOffset, _bufferSize, _indexType);
 }
 
 
@@ -413,6 +441,21 @@ VkResult MVKCmdDrawIndexed::setContent(MVKCommandBuffer* cmdBuff,
     }
 
 	return VK_SUCCESS;
+}
+
+bool MVKCmdDrawIndexed::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding();
+}
+
+bool MVKCmdDrawIndexed::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->drawIndexed(_firstIndex,
+							_indexCount,
+							_vertexOffset,
+							_firstInstance,
+							_instanceCount);
 }
 
 // Populates and encodes a MVKCmdDrawIndexedIndirect command, after populating an indexed indirect buffer.

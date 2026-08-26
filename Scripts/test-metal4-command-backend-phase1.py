@@ -57,6 +57,8 @@ def main() -> int:
     queries_mm = read("MoltenVK/MoltenVK/Commands/MVKCmdQueries.mm")
     pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
     pipeline_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm")
+    descriptor_h = read("MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.h")
+    descriptor_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm")
     query_pool_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.h")
     query_pool_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.mm")
     queue_h = read("MoltenVK/MoltenVK/GPUObjects/MVKQueue.h")
@@ -345,8 +347,8 @@ def main() -> int:
     )
     require(
         pipeline_cmd_h + pipeline_cmd_mm,
-        r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4DescriptorlessRenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
-        "descriptorless graphics-pipeline binding is not materialized",
+        r"MVKCmdBindGraphicsPipeline[\s\S]*?supportsMetal4RenderExecution[\s\S]*?useGraphicsPipeline[\s\S]*?bindGraphicsPipeline",
+        "eligible graphics-pipeline binding is not materialized",
     )
     require(
         pipeline_h,
@@ -364,12 +366,43 @@ def main() -> int:
         "strict render eligibility does not use the small-bitset clear predicate for vertex bindings",
     )
     require(
+        pipeline_h + pipeline_mm,
+        r"supportsMetal4ArgumentTableRenderExecution[\s\S]*?stageSupportsArgumentTable[\s\S]*?descriptorSetData[\s\S]*?MVKArgumentBufferMode::Metal3",
+        "graphics pipeline does not expose a fail-closed Metal 3 argument-buffer slice",
+    )
+    require(
+        pipeline_cmd_h + pipeline_cmd_mm,
+        r"MVKCmdBindDescriptorSetsStatic[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?useDescriptorSet[\s\S]*?encodeMetal4[\s\S]*?bindDescriptorSets",
+        "static descriptor-set binding is not preflighted and materialized",
+    )
+    require(
+        pipeline_cmd_h,
+        r"MVKCmdBindDescriptorSetsDynamic[\s\S]*?supportsMetal4Encoding\(\) const override \{ return false; \}",
+        "dynamic descriptor offsets must remain fail closed",
+    )
+    require(
+        descriptor_h + descriptor_mm,
+        r"supportsMetal4ArgumentTable[\s\S]*?MVKArgumentBufferMode::Metal3[\s\S]*?UPDATE_AFTER_BIND[\s\S]*?UPDATE_UNUSED_WHILE_PENDING[\s\S]*?VARIABLE_DESCRIPTOR_COUNT",
+        "descriptor-set eligibility does not reject mutable or variable-count layouts",
+    )
+    require(
+        descriptor_h + descriptor_mm + queue_mm,
+        r"collectMetal4Resources[\s\S]*?gpuBufferObject[\s\S]*?retainDescriptorAllocation[\s\S]*?_allocations\.push_back",
+        "descriptor resources are not retained and made resident before Metal 4 execution",
+    )
+    require(
+        queue_mm,
+        r"MTL4ArgumentTableDescriptor[\s\S]*?newArgumentTableWithDescriptor[\s\S]*?setAddress:[\s\S]*?setArgumentTable:",
+        "Metal 3 argument buffers are not snapshotted through an MTL4 argument table",
+    )
+    require(
         draw_h + draw_mm,
         r"MVKCmdDraw[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?cmdEncoder->draw",
         "real non-indexed Vulkan draw is not routed to Metal 4",
     )
     for token in (
         "MTL4RenderPassDescriptor",
+        "MTL4ArgumentTable",
         "renderCommandEncoderWithDescriptor",
         "setRenderPipelineState",
         "setViewport",

@@ -3022,6 +3022,29 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			resources.implicitBuffers.needed.empty() &&
 			!resources.usesPhysicalStorageBufferAddresses;
 	};
+	auto stageSupportsArgumentTable = [this](MVKShaderStage stage) {
+		const auto& resources = _stageResources[stage];
+		if (resources.usesPhysicalStorageBufferAddresses ||
+			resources.resources.textures.any() ||
+			resources.resources.samplers.areAnyBitsSet() ||
+			!resources.implicitBuffers.needed.empty()) {
+			return false;
+		}
+		for (size_t bufferIndex : resources.resources.buffers) {
+			if (bufferIndex >= kMVKMaxDescriptorSetCount ||
+				!resources.resources.descriptorSetData.get(bufferIndex)) {
+				return false;
+			}
+		}
+		for (size_t setIndex : resources.resources.descriptorSetData) {
+			if (setIndex >= _layout->getDescriptorSetCount() ||
+				_layout->getDescriptorSetLayout(setIndex)->argBufMode() !=
+					MVKArgumentBufferMode::Metal3) {
+				return false;
+			}
+		}
+		return true;
+	};
 	const auto* pVI = pCreateInfo->pVertexInputState;
 	const auto* pIA = pCreateInfo->pInputAssemblyState;
 	const auto* pRS = pCreateInfo->pRasterizationState;
@@ -3038,9 +3061,14 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
 		!pTessCtlSS && !pTessEvalSS;
-	bool hasStrictShaderStages = hasVertexFragmentStages &&
+	bool hasDescriptorlessShaderStages = hasVertexFragmentStages &&
 		stageIsDescriptorless(kMVKShaderStageVertex) &&
 		stageIsDescriptorless(kMVKShaderStageFragment);
+	bool hasArgumentTableShaderStages = hasVertexFragmentStages &&
+		stageSupportsArgumentTable(kMVKShaderStageVertex) &&
+		stageSupportsArgumentTable(kMVKShaderStageFragment) &&
+		(_stageResources[kMVKShaderStageVertex].resources.descriptorSetData.areAnyBitsSet() ||
+		 _stageResources[kMVKShaderStageFragment].resources.descriptorSetData.areAnyBitsSet());
 	bool hasNoVertexInput = pVI &&
 		pVI->vertexBindingDescriptionCount == 0 &&
 		pVI->vertexAttributeDescriptionCount == 0 &&
@@ -3064,12 +3092,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneDynamicColorAttachment && hasStrictShaderStages &&
+		hasOneDynamicColorAttachment && hasDescriptorlessShaderStages &&
 		hasNoVertexInput && hasStrictFixedFunction;
-	if (_supportsMetal4DescriptorlessRenderExecution) {
+	_supportsMetal4ArgumentTableRenderExecution =
+		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
+		hasOneDynamicColorAttachment && hasArgumentTableShaderStages &&
+		hasNoVertexInput && hasStrictFixedFunction;
+	if (supportsMetal4RenderExecution()) {
 		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
 		_metal4RenderExecutionUnsupportedReason = nullptr;
-	} else if (hasVertexFragmentStages && !hasStrictShaderStages) {
+	} else if (hasVertexFragmentStages &&
+			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:descriptor_resources";
 	} else if (!hasNoVertexInput) {

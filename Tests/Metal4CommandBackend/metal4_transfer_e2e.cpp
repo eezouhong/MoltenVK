@@ -143,7 +143,9 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
 
     VkBufferCreateInfo createInfo = makeVkStruct<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
     createInfo.size = size;
-    createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    createInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                       VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device, &createInfo, nullptr, &result.buffer), "vkCreateBuffer");
 
@@ -453,6 +455,37 @@ static constexpr uint32_t kRenderSmokeFragmentSpirv[] = {
     0x00000007, 0x0000000e, 0x0000000a, 0x0000000b, 0x0000000c, 0x0000000d,
     0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
     0x00000005, 0x0003003e, 0x00000009, 0x0000000e, 0x000100fd, 0x00010038,
+};
+
+// SPIR-V for descriptor_uniform.frag. The fragment shader reads one vec4 from
+// set 0 / binding 0 so the test exercises a real Metal argument-buffer binding.
+static constexpr uint32_t kDescriptorUniformFragmentSpirv[] = {
+    0x07230203, 0x00010000, 0x000d000b, 0x00000012, 0x00000000, 0x00020011,
+    0x00000001, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0006000f, 0x00000004,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00030010, 0x00000004,
+    0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x000a0004, 0x475f4c47,
+    0x4c474f4f, 0x70635f45, 0x74735f70, 0x5f656c79, 0x656e696c, 0x7269645f,
+    0x69746365, 0x00006576, 0x00080004, 0x475f4c47, 0x4c474f4f, 0x6e695f45,
+    0x64756c63, 0x69645f65, 0x74636572, 0x00657669, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00050005, 0x00000009, 0x4374756f, 0x726f6c6f,
+    0x00000000, 0x00050005, 0x0000000a, 0x6f6c6f43, 0x6f6c4272, 0x00006b63,
+    0x00050006, 0x0000000a, 0x00000000, 0x756c6176, 0x00000065, 0x00050005,
+    0x0000000c, 0x6f6c6f63, 0x6f6c4272, 0x00006b63, 0x00040047, 0x00000009,
+    0x0000001e, 0x00000000, 0x00030047, 0x0000000a, 0x00000002, 0x00050048,
+    0x0000000a, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000c,
+    0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016,
+    0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x0003001e, 0x0000000a, 0x00000007, 0x00040020,
+    0x0000000b, 0x00000002, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c,
+    0x00000002, 0x00040015, 0x0000000d, 0x00000020, 0x00000001, 0x0004002b,
+    0x0000000d, 0x0000000e, 0x00000000, 0x00040020, 0x0000000f, 0x00000002,
+    0x00000007, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x00050041, 0x0000000f, 0x00000010, 0x0000000c,
+    0x0000000e, 0x0004003d, 0x00000007, 0x00000011, 0x00000010, 0x0003003e,
+    0x00000009, 0x00000011, 0x000100fd, 0x00010038,
 };
 
 
@@ -961,6 +994,134 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "RENDER_OK" << std::endl;
 
+        // The common descriptor path reuses MoltenVK's Metal 3 argument-buffer
+        // encoding and exposes it through an MTL4 argument table. This must be a
+        // real MTL4 render submission, not a correctness-preserving fallback.
+        Buffer uniformColor = createBuffer(physicalDevice, device, sizeof(float) * 4);
+        const std::array<float, 4> descriptorColor{{0.1f, 0.2f, 0.3f, 1.0f}};
+        std::vector<uint8_t> descriptorColorBytes(sizeof(descriptorColor));
+        std::memcpy(descriptorColorBytes.data(), descriptorColor.data(), descriptorColorBytes.size());
+        writeBytes(device, uniformColor, descriptorColorBytes);
+
+        VkDescriptorSetLayoutBinding uniformBinding{};
+        uniformBinding.binding = 0;
+        uniformBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uniformBinding.descriptorCount = 1;
+        uniformBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo =
+            makeVkStruct<VkDescriptorSetLayoutCreateInfo>(
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+        descriptorLayoutInfo.bindingCount = 1;
+        descriptorLayoutInfo.pBindings = &uniformBinding;
+        VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+        check(vkCreateDescriptorSetLayout(device, &descriptorLayoutInfo, nullptr,
+                                          &descriptorSetLayout),
+              "vkCreateDescriptorSetLayout(uniform)");
+
+        VkDescriptorPoolSize descriptorPoolSize{};
+        descriptorPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorPoolSize.descriptorCount = 1;
+        VkDescriptorPoolCreateInfo descriptorPoolInfo =
+            makeVkStruct<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+        descriptorPoolInfo.maxSets = 1;
+        descriptorPoolInfo.poolSizeCount = 1;
+        descriptorPoolInfo.pPoolSizes = &descriptorPoolSize;
+        VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+        check(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool),
+              "vkCreateDescriptorPool(uniform)");
+        VkDescriptorSetAllocateInfo descriptorAllocateInfo =
+            makeVkStruct<VkDescriptorSetAllocateInfo>(
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+        descriptorAllocateInfo.descriptorPool = descriptorPool;
+        descriptorAllocateInfo.descriptorSetCount = 1;
+        descriptorAllocateInfo.pSetLayouts = &descriptorSetLayout;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        check(vkAllocateDescriptorSets(device, &descriptorAllocateInfo, &descriptorSet),
+              "vkAllocateDescriptorSets(uniform)");
+        VkDescriptorBufferInfo uniformDescriptor{};
+        uniformDescriptor.buffer = uniformColor.buffer;
+        uniformDescriptor.offset = 0;
+        uniformDescriptor.range = sizeof(float) * 4;
+        VkWriteDescriptorSet descriptorWrite =
+            makeVkStruct<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+        descriptorWrite.dstSet = descriptorSet;
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.pBufferInfo = &uniformDescriptor;
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+
+        VkPipelineLayoutCreateInfo descriptorPipelineLayoutInfo =
+            makeVkStruct<VkPipelineLayoutCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+        descriptorPipelineLayoutInfo.setLayoutCount = 1;
+        descriptorPipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+        VkPipelineLayout descriptorPipelineLayout = VK_NULL_HANDLE;
+        check(vkCreatePipelineLayout(device, &descriptorPipelineLayoutInfo, nullptr,
+                                     &descriptorPipelineLayout),
+              "vkCreatePipelineLayout(uniform)");
+        VkShaderModule descriptorFragmentModule = createShaderModule(
+            device, kDescriptorUniformFragmentSpirv,
+            sizeof(kDescriptorUniformFragmentSpirv),
+            "vkCreateShaderModule(uniform fragment)");
+        renderStages[1].module = descriptorFragmentModule;
+        graphicsInfo.layout = descriptorPipelineLayout;
+        VkPipeline descriptorPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &descriptorPipeline),
+              "vkCreateGraphicsPipelines(uniform)");
+
+        VkCommandBuffer prepareDescriptorRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDescriptorRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareDescriptorRender);
+        VkCommandBuffer descriptorRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(descriptorRender, &renderingInfo);
+        vkCmdBindPipeline(descriptorRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          descriptorPipeline);
+        vkCmdBindDescriptorSets(descriptorRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                descriptorPipelineLayout, 0, 1, &descriptorSet,
+                                0, nullptr);
+        vkCmdDraw(descriptorRender, 3, 1, 0, 0);
+        vkCmdEndRendering(descriptorRender);
+        endCommandBuffer(descriptorRender);
+        VkCommandBuffer finishDescriptorRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDescriptorRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDescriptorRender);
+        VkCommandBuffer readDescriptorRender = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDescriptorRender, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDescriptorRender);
+        std::array<VkSubmitInfo, 4> descriptorSubmits{};
+        for (auto& submit : descriptorSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        descriptorSubmits[0].commandBufferCount = 1;
+        descriptorSubmits[0].pCommandBuffers = &prepareDescriptorRender;
+        descriptorSubmits[1].commandBufferCount = 1;
+        descriptorSubmits[1].pCommandBuffers = &descriptorRender;
+        descriptorSubmits[2].commandBufferCount = 1;
+        descriptorSubmits[2].pCommandBuffers = &finishDescriptorRender;
+        descriptorSubmits[3].commandBufferCount = 1;
+        descriptorSubmits[3].pCommandBuffers = &readDescriptorRender;
+        VkFence descriptorFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(descriptorSubmits.size()),
+                            descriptorSubmits.data(), descriptorFence),
+              "vkQueueSubmit(descriptor render sequence)");
+        waitFence(device, descriptorFence);
+        validateSolidColor(device, renderReadback, {26, 51, 77, 255});
+        std::cout << "DESCRIPTOR_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1043,6 +1204,13 @@ int main() {
 
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, descriptorFence, nullptr);
+        vkDestroyPipeline(device, descriptorPipeline, nullptr);
+        vkDestroyShaderModule(device, descriptorFragmentModule, nullptr);
+        vkDestroyPipelineLayout(device, descriptorPipelineLayout, nullptr);
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+        uniformColor.destroy();
         vkDestroyFence(device, updateFence, nullptr);
         updated.destroy();
         vkDestroyFence(device, queryFence, nullptr);

@@ -179,6 +179,9 @@ public:
 						const VkDescriptorSet* pDescriptorSets);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override;
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 	~MVKCmdBindDescriptorSetsStatic() override;
 
@@ -219,6 +222,7 @@ public:
 						const uint32_t* pDynamicOffsets);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return false; }
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

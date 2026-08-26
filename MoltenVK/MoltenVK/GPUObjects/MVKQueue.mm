@@ -25,6 +25,7 @@
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
 #include "MVKBuffer.h"
+#include "MVKDescriptorSet.h"
 #include "MVKImage.h"
 #include "MVKPipeline.h"
 #include "MVKQueryPool.h"
@@ -583,6 +584,11 @@ public:
 		id<MTLBuffer> buffer = nil;
 		NSUInteger size = 0;
 	};
+	struct BoundDescriptorSet {
+		MVKDescriptorSetLayout* layout = nullptr;
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -595,6 +601,8 @@ public:
 		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) { [item.second release]; }
+		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
+		[_argumentTable release];
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -698,12 +706,28 @@ public:
 	}
 
 	bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
-		if (!pipeline || !pipeline->supportsMetal4DescriptorlessRenderExecution()) { return false; }
+		if (!pipeline || !pipeline->supportsMetal4RenderExecution() ||
+			(pipeline->supportsMetal4ArgumentTableRenderExecution() && !ensureArgumentTable())) {
+			return false;
+		}
 		if (_graphicsPipelines.count(pipeline)) { return true; }
 		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
 		if (!pipelineState) { return false; }
 		_graphicsPipelines.emplace(pipeline, [pipelineState retain]);
 		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		return true;
+	}
+
+	bool useDescriptorSet(MVKDescriptorSet* descriptorSet) override {
+		if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+			!ensureArgumentTable()) {
+			return false;
+		}
+		vector<id<MTLResource>> resources;
+		descriptorSet->collectMetal4Resources(resources);
+		for (id<MTLResource> resource : resources) {
+			if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) { return false; }
+		}
 		return true;
 	}
 
@@ -1053,6 +1077,7 @@ public:
 		_currentRenderWidth = binding.width;
 		_currentRenderHeight = binding.height;
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
 		_counters.renderPasses++;
 		return !_boundGraphicsPipeline || applyGraphicsPipeline();
 	}
@@ -1066,7 +1091,37 @@ public:
 	bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
 		if (_graphicsPipelines.find(pipeline) == _graphicsPipelines.end()) { return false; }
 		_boundGraphicsPipeline = pipeline;
+		_graphicsResourcesBoundForEncoder = false;
 		return !_renderEncoder || applyGraphicsPipeline();
+	}
+
+	bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
+							MVKPipelineLayout* layout,
+							uint32_t firstSet,
+							uint32_t setCount,
+							MVKDescriptorSet*const* descriptorSets) override {
+		if (bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS || !layout || !setCount ||
+			!descriptorSets || firstSet + setCount > kMVKMaxDescriptorSetCount ||
+			firstSet + setCount > layout->getDescriptorSetCount()) {
+			return false;
+		}
+		for (uint32_t setOffset = 0; setOffset < setCount; setOffset++) {
+			MVKDescriptorSet* descriptorSet = descriptorSets[setOffset];
+			MVKDescriptorSetLayout* descriptorLayout =
+				layout->getDescriptorSetLayout(firstSet + setOffset);
+			if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+				descriptorSet->layout != descriptorLayout ||
+				(descriptorLayout->gpuSize() && !descriptorSet->gpuBufferObject)) {
+				return false;
+			}
+			_graphicsDescriptorSets[firstSet + setOffset] = BoundDescriptorSet{
+				descriptorLayout,
+				descriptorSet->gpuBufferObject,
+				descriptorSet->gpuBufferOffset,
+			};
+		}
+		_graphicsResourcesBoundForEncoder = false;
+		return true;
 	}
 
 	bool draw(uint32_t firstVertex,
@@ -1077,6 +1132,7 @@ public:
 			!vertexCount || !instanceCount) {
 			return false;
 		}
+		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
 						 vertexStart:firstVertex
@@ -1104,6 +1160,7 @@ public:
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
 	}
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
@@ -1183,6 +1240,31 @@ private:
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+	}
+
+	bool ensureArgumentTable() {
+		if (_argumentTable) { return true; }
+		if (!_mtlDevice) { return false; }
+		MTL4ArgumentTableDescriptor* descriptor = [MTL4ArgumentTableDescriptor new];
+		descriptor.maxBufferBindCount = kMVKMaxBufferCount;
+		descriptor.maxTextureBindCount = kMVKMaxTextureCount;
+		descriptor.maxSamplerStateBindCount = kMVKMaxSamplerCount;
+		descriptor.initializeBindings = YES;
+		NSError* error = nil;
+		_argumentTable = [_mtlDevice newArgumentTableWithDescriptor:descriptor error:&error];
+		[descriptor release];
+		return _argumentTable != nil;
+	}
+
+	bool retainDescriptorAllocation(id<MTLAllocation> allocation) {
+		if (!allocation) { return true; }
+		if (_descriptorAllocationSet.insert((const void*)allocation).second) {
+			[allocation retain];
+			_descriptorAllocations.push_back(allocation);
+			_allocations.push_back(allocation);
+		}
+		return true;
 	}
 
 	bool applyGraphicsPipeline() {
@@ -1211,6 +1293,42 @@ private:
 		return true;
 	}
 
+	bool applyGraphicsResources() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		if (_boundGraphicsPipeline->supportsMetal4DescriptorlessRenderExecution()) {
+			_graphicsResourcesBoundForEncoder = true;
+			return true;
+		}
+		if (!_boundGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution() ||
+			!ensureArgumentTable()) {
+			return false;
+		}
+		MVKPipelineLayout* pipelineLayout = _boundGraphicsPipeline->getLayout();
+		MTLRenderStages stages = 0;
+		for (MVKShaderStage stage : {kMVKShaderStageVertex, kMVKShaderStageFragment}) {
+			const auto& resources = _boundGraphicsPipeline->getStageResources(stage);
+			for (size_t setIndex : resources.resources.descriptorSetData) {
+				if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
+				const BoundDescriptorSet& descriptorSet = _graphicsDescriptorSets[setIndex];
+				if (!descriptorSet.buffer ||
+					descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
+					return false;
+				}
+				[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
+								 atIndex:setIndex];
+			}
+			if (resources.resources.descriptorSetData.areAnyBitsSet()) {
+				stages |= stage == kMVKShaderStageVertex
+					? MTLRenderStageVertex
+					: MTLRenderStageFragment;
+			}
+		}
+		if (!stages) { return false; }
+		[_renderEncoder setArgumentTable:_argumentTable atStages:stages];
+		_graphicsResourcesBoundForEncoder = true;
+		return true;
+	}
+
 	shared_ptr<MVKMetal4CommandQueueState> _state;
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
 	unordered_map<MVKImage*, ImageBinding> _images;
@@ -1219,6 +1337,9 @@ private:
 	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
+	unordered_set<const void*> _descriptorAllocationSet;
+	vector<id<MTLAllocation>> _descriptorAllocations;
 	vector<PendingBarrier> _pendingBarriers;
 	vector<MVKPipelineBarrier> _pendingImageBarriers;
 	vector<PendingQueryReset> _pendingQueryResets;
@@ -1228,6 +1349,7 @@ private:
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
 	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
+	id<MTL4ArgumentTable> _argumentTable = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
 	MVKQueryPool* _visibilityQueryPool = nullptr;
@@ -1237,6 +1359,7 @@ private:
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
 	bool _graphicsPipelineBoundForEncoder = false;
+	bool _graphicsResourcesBoundForEncoder = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
 };

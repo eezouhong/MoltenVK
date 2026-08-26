@@ -31,6 +31,91 @@ static constexpr uint32_t alignDescriptorOffset(uint32_t offset, uint32_t align)
 	return (offset + align - 1) & ~(align - 1);
 }
 
+bool MVKDescriptorSet::supportsMetal4ArgumentTable() const {
+	if (!layout || layout->argBufMode() != MVKArgumentBufferMode::Metal3 ||
+		variableDescriptorCount != 0 ||
+		(layout->gpuSize() != 0 && !gpuBufferObject)) {
+		return false;
+	}
+	constexpr uint8_t unsupportedFlags =
+		MVK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+		MVK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
+		MVK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+	for (const auto& binding : layout->bindings()) {
+		if (binding.flags & unsupportedFlags) { return false; }
+	}
+	return true;
+}
+
+void MVKDescriptorSet::collectMetal4Resources(
+	std::vector<id<MTLResource>>& resources) const {
+	if (!supportsMetal4ArgumentTable()) { return; }
+	auto append = [&resources](id<MTLResource> resource) {
+		if (resource) { resources.push_back(resource); }
+	};
+	append(gpuBufferObject);
+
+	for (const auto& binding : layout->bindings()) {
+		const size_t stride = descriptorCPUSize(binding.cpuLayout);
+		if (!stride || !cpuBuffer) { continue; }
+		const char* descriptor = cpuBuffer + binding.cpuOffset;
+		for (uint32_t descriptorIndex = 0;
+			 descriptorIndex < binding.descriptorCount;
+			 descriptorIndex++, descriptor += stride) {
+			switch (binding.descriptorType) {
+				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+				case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+				case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
+					auto* value = reinterpret_cast<const MVKCPUDescriptorOneID2Meta*>(descriptor);
+					append((id<MTLResource>)value->a);
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+				case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+				case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: {
+					auto* value = reinterpret_cast<id const*>(descriptor);
+					append((id<MTLResource>)*value);
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+				case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
+					if (binding.cpuLayout == MVKDescriptorCPULayout::TwoID2Meta) {
+						auto* value = reinterpret_cast<const MVKCPUDescriptorTwoID2Meta*>(descriptor);
+						append((id<MTLResource>)value->a);
+						append((id<MTLResource>)value->b);
+					} else {
+						auto* value = reinterpret_cast<id const*>(descriptor);
+						append((id<MTLResource>)*value);
+					}
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+					auto* first = reinterpret_cast<id const*>(descriptor);
+					append((id<MTLResource>)*first);
+					MVKSampler*const* immutableSampler =
+						layout->getImmutableSampler(binding, descriptorIndex);
+					if (immutableSampler && *immutableSampler && (*immutableSampler)->isYCBCR()) {
+						if (binding.cpuLayout == MVKDescriptorCPULayout::OneIDMeta) {
+							auto* value = reinterpret_cast<const MVKCPUDescriptorOneIDMeta*>(descriptor);
+							append((id<MTLResource>)value->b);
+						} else if (binding.cpuLayout == MVKDescriptorCPULayout::TwoIDMeta) {
+							auto* value = reinterpret_cast<const MVKCPUDescriptorTwoIDMeta*>(descriptor);
+							append((id<MTLResource>)value->b);
+							append((id<MTLResource>)value->c);
+						}
+					}
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_SAMPLER:
+				case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+				default:
+					break;
+			}
+		}
+	}
+}
+
 static constexpr uint32_t descriptorCPUAlign(MVKDescriptorCPULayout layout) {
 	switch (layout) {
 		case MVKDescriptorCPULayout::None:

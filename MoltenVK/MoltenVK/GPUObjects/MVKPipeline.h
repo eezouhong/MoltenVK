@@ -402,6 +402,17 @@ public:
 	/** Returns whether the strict descriptorless Metal 4 render slice can execute this pipeline. */
 	bool supportsMetal4DescriptorlessRenderExecution() const { return _supportsMetal4DescriptorlessRenderExecution; }
 
+	/** Returns whether the common Metal 3 descriptor-set path fits an MTL4 argument table. */
+	bool supportsMetal4ArgumentTableRenderExecution() const {
+		return _supportsMetal4ArgumentTableRenderExecution;
+	}
+
+	/** Returns whether either validated Metal 4 render resource path can execute this pipeline. */
+	bool supportsMetal4RenderExecution() const {
+		return _supportsMetal4DescriptorlessRenderExecution ||
+			_supportsMetal4ArgumentTableRenderExecution;
+	}
+
 	/** Returns the first stable eligibility blocker for bounded command-backend telemetry. */
 	const char* metal4RenderExecutionUnsupportedReason() const {
 		return _metal4RenderExecutionUnsupportedReason;
@@ -549,6 +560,7 @@ protected:
 	bool _inputAttachmentIsDSAttachment = false;
 	bool _hasRemappedAttachmentLocations = false;
 	bool _supportsMetal4DescriptorlessRenderExecution = false;
+	bool _supportsMetal4ArgumentTableRenderExecution = false;
 	const char* _metal4RenderExecutionUnsupportedReason = "MVKCmdBindGraphicsPipeline:unclassified";
 	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
 };

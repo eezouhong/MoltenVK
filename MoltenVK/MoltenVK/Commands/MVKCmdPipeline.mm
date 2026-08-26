@@ -335,7 +335,7 @@ void MVKCmdBindGraphicsPipeline::encode(MVKCommandEncoder* cmdEncoder) {
 
 bool MVKCmdBindGraphicsPipeline::supportsMetal4Encoding() const {
 	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
-	return pipeline && pipeline->supportsMetal4DescriptorlessRenderExecution();
+	return pipeline && pipeline->supportsMetal4RenderExecution();
 }
 
 const char* MVKCmdBindGraphicsPipeline::getMetal4UnsupportedReason() const {
@@ -413,6 +413,45 @@ VkResult MVKCmdBindDescriptorSetsStatic<N>::setContent(MVKCommandBuffer* cmdBuff
 template <size_t N>
 void MVKCmdBindDescriptorSetsStatic<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	encode(cmdEncoder, MVKArrayRef<uint32_t>());
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::supportsMetal4Encoding() const {
+	if (_pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS || !_pipelineLayout ||
+		_descriptorSets.empty() ||
+		_firstSet + _descriptorSets.size() > _pipelineLayout->getDescriptorSetCount()) {
+		return false;
+	}
+	for (size_t setIndex = 0; setIndex < _descriptorSets.size(); setIndex++) {
+		const MVKDescriptorSet* descriptorSet = _descriptorSets[setIndex];
+		if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+			descriptorSet->layout !=
+				_pipelineLayout->getDescriptorSetLayout(_firstSet + setIndex)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	for (MVKDescriptorSet* descriptorSet : _descriptorSets) {
+		if (!cmdEncoder->useDescriptorSet(descriptorSet)) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->bindDescriptorSets(_pipelineBindPoint,
+									  _pipelineLayout,
+									  _firstSet,
+									  static_cast<uint32_t>(_descriptorSets.size()),
+									  _descriptorSets.data());
 }
 
 template <size_t N>

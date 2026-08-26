@@ -26,9 +26,11 @@ class MVKCommandBuffer;
 class MVKCommandEncoder;
 class MVKCommandPool;
 class MVKComputePipeline;
+struct MVKDescriptorSet;
 class MVKGraphicsPipeline;
 class MVKImage;
 class MVKImageView;
+class MVKPipelineLayout;
 class MVKQueryPool;
 struct MVKPipelineBarrier;
 
@@ -70,6 +72,9 @@ public:
 
 	/** Registers a graphics pipeline before execution is claimed. */
 	virtual bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+
+	/** Registers one immutable Metal 3 descriptor-set snapshot for MTL4 use. */
+	virtual bool useDescriptorSet(MVKDescriptorSet* descriptorSet) = 0;
 
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,
@@ -124,6 +129,11 @@ public:
 	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
 	virtual bool endRendering() = 0;
 	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+	virtual bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
+								MVKPipelineLayout* layout,
+								uint32_t firstSet,
+								uint32_t setCount,
+								MVKDescriptorSet*const* descriptorSets) = 0;
 	virtual bool draw(uint32_t firstVertex,
 					  uint32_t vertexCount,
 					  uint32_t firstInstance,

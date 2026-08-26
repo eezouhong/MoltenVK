@@ -70,6 +70,7 @@ MVK_CONFIG_METAL4_COMMAND_BACKEND=0 \
 
 grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/legacy.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/legacy.log"
+grep -q 'ALLOCATOR_REUSE_BURST_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'COMPUTE_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'DESCRIPTOR_COMPUTE_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'IMAGE_DATA_OK' "${BUILD_DIR}/legacy.log"
@@ -127,6 +128,7 @@ MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
 
 grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4.log"
+grep -q 'ALLOCATOR_REUSE_BURST_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'COMPUTE_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'DESCRIPTOR_COMPUTE_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'IMAGE_DATA_OK' "${BUILD_DIR}/metal4.log"
@@ -183,7 +185,9 @@ grep -Eq 'barriers=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'query_resets=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'query_copies=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'buffer_updates=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
-grep -q 'fallbacks=0' "${BUILD_DIR}/metal4.log"
+grep -q 'fallbacks=1' "${BUILD_DIR}/metal4.log"
+grep -q 'Metal 4 command materialization failed for MVKCmdClearSingleAttachment1:clear_attachments_active_query' "${BUILD_DIR}/metal4.log"
+grep -q 'failures=0' "${BUILD_DIR}/metal4.log"
 grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4.log"
 
 MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0 \
@@ -194,6 +198,7 @@ MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
 
 grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'ALLOCATOR_REUSE_BURST_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'DESCRIPTOR_COMPUTE_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'GENERAL_LAYOUT_IMAGE_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'PRESENT_LAYOUT_AND_QUEUE_OK' "${BUILD_DIR}/metal4-single-queue.log"
@@ -232,7 +237,9 @@ grep -q 'RENDER_SCOPE_PIPELINE_BARRIER_OK' "${BUILD_DIR}/metal4-single-queue.log
 grep -q 'RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'GRAPHICS_REBIND_AFTER_RENDER_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4-single-queue.log"
-grep -q 'fallbacks=0' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'fallbacks=1' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'Metal 4 command materialization failed for MVKCmdClearSingleAttachment1:clear_attachments_active_query' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'failures=0' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4-single-queue.log"
 if grep -q 'unsupported_semaphore' "${BUILD_DIR}/metal4-single-queue.log"; then
   echo "Single-queue semaphore unexpectedly forced Metal 4 fallback" >&2

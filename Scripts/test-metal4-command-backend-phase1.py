@@ -656,8 +656,13 @@ def main() -> int:
     )
     require(
         acquire_allocator,
-        r"nextAllocatorIndex[\s\S]*?inFlightCount\s*!=\s*0[\s\S]*?continue",
-        "allocator selection is not bounded round-robin or reuses in-flight allocator memory",
+        r"nextAllocatorIndex[\s\S]*?slot\.retired\s*\|\|\s*slot\.encoding[\s\S]*?continue",
+        "allocator selection is not bounded round-robin or excludes active encoders",
+    )
+    reject(
+        acquire_allocator,
+        r"inFlightCount\s*!=\s*0[\s\S]*?continue",
+        "ended command buffers unnecessarily block serial allocator reuse",
     )
     finish_encoding = function_body(
         queue_mm,
@@ -771,13 +776,23 @@ def main() -> int:
         r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
         "replayable materialization failures do not identify the concrete Vulkan command",
     )
+    require(
+        command_h + command_buffer_mm + queue_mm,
+        r"recordMetal4PreparationFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command preparation failed for %s",
+        "resource-preparation failures do not identify the concrete Vulkan command",
+    )
+    require(
+        queue_mm,
+        r"slot\.retired\s*\|\|\s*slot\.encoding[\s\S]*?inFlightCount[\s\S]*?reset",
+        "command allocators are not serially reusable before GPU completion",
+    )
     for token in (
         "begin_query_pool_mismatch",
         "begin_query_already_active",
         "dispatch_compute_encoder_unavailable",
         "dispatch_pipeline_unbound",
         "dispatch_resources_unavailable",
-        "clear_attachments_query_render_pass_unavailable",
+        "clear_attachments_active_query",
         "draw_indexed_pipeline_incompatible",
     ):
         require(
@@ -785,6 +800,21 @@ def main() -> int:
             re.escape(token),
             f"query and dispatch materialization telemetry is missing: {token}",
         )
+    clear_attachments = function_body(
+        queue_mm,
+        "bool clearAttachments(",
+        "void endEncoding()",
+    )
+    require(
+        clear_attachments,
+        r"_activeQueryPool[\s\S]*?failMetal4Encoding\(\"clear_attachments_active_query\"\)",
+        "attachment clears inside active visibility queries do not safely fall back",
+    )
+    reject(
+        clear_attachments,
+        r"clearAttachmentsDuringVisibility|setVisibilityResultMode:MTLVisibilityResultModeDisabled",
+        "query clears still mutate or split active visibility state instead of falling back",
+    )
     require(
         queue_mm,
         r"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu",
@@ -1014,6 +1044,7 @@ def main() -> int:
         "vkWaitForFences",
         "vkInvalidateMappedMemoryRanges",
         "TIMELINE_OK",
+        "ALLOCATOR_REUSE_BURST_OK",
         "COMPUTE_OK",
         "IMAGE_DATA_OK",
         "RENDER_OK",
@@ -1048,7 +1079,13 @@ def main() -> int:
         "buffer_updates",
     ):
         require(runner, rf"{counter}=\[1-9\]", f"strict runtime counter gate is missing: {counter}")
-    require(runner, r"fallbacks=0", "controlled Metal 4 E2E does not require a zero-fallback path")
+    require(runner, r"fallbacks=1", "controlled Metal 4 E2E does not require the active-query clear fallback")
+    require(
+        runner,
+        r"MVKCmdClearSingleAttachment1:clear_attachments_active_query",
+        "controlled Metal 4 E2E does not constrain the fallback to active-query attachment clears",
+    )
+    require(runner, r"failures=0", "controlled Metal 4 E2E permits unrecoverable failures")
     require(runner, r"unsupported_commands=none", "controlled Metal 4 E2E permits unsupported commands")
 
     print("PASS: usable Metal 4 Phase 1C compute/transfer/render backend source contract")

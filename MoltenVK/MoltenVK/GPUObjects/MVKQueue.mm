@@ -167,6 +167,7 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> visibilityQueryCount = 0;
 	string lastError;
 	unordered_set<string> replayableExceptions;
+	unordered_set<string> preparationFailures;
 
 	MVKMetal4CommandQueueState() {
 		for (auto& counter : fallbackReasonCounts) { counter.store(0, memory_order_relaxed); }
@@ -259,7 +260,10 @@ struct MVKMetal4CommandQueueState {
 		for (size_t offset = 0; offset < allocators.size(); offset++) {
 			size_t idx = (nextAllocatorIndex + offset) % allocators.size();
 			auto& slot = allocators[idx];
-			if (slot.retired || slot.encoding || slot.inFlightCount != 0) { continue; }
+			// Metal permits serial reuse after endCommandBuffer, even while older
+			// command buffers backed by this allocator remain in flight. Only reset
+			// the allocator after all of those command buffers have completed.
+			if (slot.retired || slot.encoding) { continue; }
 			if (slot.resetPending && slot.inFlightCount == 0) {
 				[slot.allocator reset];
 				slot.resetPending = false;
@@ -488,6 +492,15 @@ struct MVKMetal4CommandQueueState {
 		if (summary) { *summary = nextSummary; }
 		return changed;
 	}
+
+	bool recordPreparationFailure(const char* commandType, string* summary) {
+		string nextSummary = commandType ?: "MVKCommand";
+		lock_guard<mutex> guard(lock);
+		bool changed = preparationFailures.size() < kMetal4UnsupportedCommandCapacity &&
+			preparationFailures.insert(nextSummary).second;
+		if (summary) { *summary = nextSummary; }
+		return changed;
+	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferUpdate(uint64_t count = 1) { bufferUpdateCount.fetch_add(count, memory_order_relaxed); }
@@ -643,9 +656,6 @@ public:
 	};
 	struct ClearAttachmentsBinding {
 		MVKRPSKeyClearAtt pipelineKey = {};
-		MTLClearColor colorClearValues[kMVKMaxColorAttachmentCount] = {};
-		double depthClearValue = 0.0;
-		uint32_t stencilClearValue = 0;
 		id<MTLRenderPipelineState> pipelineState = nil;
 		id<MTLDepthStencilState> depthStencilState = nil;
 		id<MTLBuffer> clearColors = nil;
@@ -682,7 +692,6 @@ public:
 		}
 		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
 		[_argumentTable release];
-		[_currentRenderPassDescriptor release];
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -837,6 +846,13 @@ public:
 		_preparedGraphicsPipeline = nullptr;
 		_preparedComputeDescriptorSets.fill(nullptr);
 		_preparedGraphicsDescriptorSets.fill(nullptr);
+		_preparationFailureSummary.clear();
+	}
+
+	void recordMetal4PreparationFailure(const char* commandType) override {
+		if (_preparationFailureSummary.empty()) {
+			_preparationFailureSummary = commandType ?: "MVKCommand";
+		}
 	}
 
 	void recordMetal4EncodingFailure(const char* commandType) override {
@@ -852,6 +868,12 @@ public:
 		return _encodingFailureSummary.empty()
 			? "MVKCommand"
 			: _encodingFailureSummary.c_str();
+	}
+
+	const char* getMetal4PreparationFailureCommand() const {
+		return _preparationFailureSummary.empty()
+			? "MVKCommand"
+			: _preparationFailureSummary.c_str();
 	}
 
 	bool useDescriptorSet(VkPipelineBindPoint bindPoint,
@@ -1481,8 +1503,6 @@ public:
 			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
-		[_currentRenderPassDescriptor release];
-		_currentRenderPassDescriptor = [descriptor copy];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
@@ -1587,8 +1607,6 @@ public:
 		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor]
 			retain];
-		[_currentRenderPassDescriptor release];
-		_currentRenderPassDescriptor = [descriptor copy];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
 		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
@@ -1934,7 +1952,6 @@ public:
 				binding.pipelineKey.enableAttachment(colorIndex);
 				MTLClearColor color =
 					pixelFormats->getMTLClearColor(info.colorValues[colorIndex], format);
-				binding.colorClearValues[colorIndex] = color;
 				clearColors[colorIndex] = {
 					(float)color.red, (float)color.green,
 					(float)color.blue, (float)color.alpha,
@@ -1948,12 +1965,10 @@ public:
 		if (info.clearDepth) {
 			binding.pipelineKey.enableAttachment(kMVKClearAttachmentDepthIndex);
 			float depth = info.depthStencilValue.depth;
-			binding.depthClearValue = depth;
 			clearColors[kMVKClearAttachmentDepthIndex] = { depth, depth, depth, depth };
 		}
 		if (info.clearStencil) {
 			binding.pipelineKey.enableAttachment(kMVKClearAttachmentStencilIndex);
-			binding.stencilClearValue = info.depthStencilValue.stencil;
 		}
 
 		if (binding.pipelineKey.isAnyAttachmentEnabled()) {
@@ -1993,7 +2008,10 @@ public:
 		if (item == _clearAttachments.end()) { return failMetal4Encoding("clear_attachments_unprepared"); }
 		ClearAttachmentsBinding& binding = item->second;
 		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
-		if (_activeQueryPool) { return clearAttachmentsDuringVisibility(binding); }
+		// Vulkan attachment clears must not contribute to an active occlusion query.
+		// MTL4 cannot safely pause and resume the query in this encoder, and splitting
+		// the render pass corrupts real game attachments. Fall back before commit.
+		if (_activeQueryPool) { return failMetal4Encoding("clear_attachments_active_query"); }
 		return encodeClearAttachmentsDraw(binding);
 	}
 
@@ -2080,8 +2098,6 @@ public:
 		_renderEncoder = nil;
 		[_computeEncoder release];
 		_computeEncoder = nil;
-		[_currentRenderPassDescriptor release];
-		_currentRenderPassDescriptor = nil;
 		_commandBuffer = nil;
 		_boundComputePipeline = nullptr;
 		_currentColorAttachmentCount = 0;
@@ -2135,134 +2151,6 @@ private:
 			_encodingFailureDetail = detail ?: "unknown";
 		}
 		return false;
-	}
-
-	bool clearAttachmentsDuringVisibility(ClearAttachmentsBinding& binding) {
-		// Metal visibility state cannot be paused inside one render encoder without
-		// losing the accumulated result. Preserve the attachments, perform the clear
-		// in an encoder without a visibility buffer, then resume with accumulation.
-		if (!_currentRenderPassDescriptor || !_commandBuffer ||
-			_currentRenderArea.offset.x != 0 || _currentRenderArea.offset.y != 0) {
-			return failMetal4Encoding("clear_attachments_query_render_pass_unavailable");
-		}
-		bool useLoadActionClear = true;
-		for (const VkClearRect& rect : binding.rects) {
-			if (rect.rect.offset.x != _currentRenderArea.offset.x ||
-				rect.rect.offset.y != _currentRenderArea.offset.y ||
-				rect.rect.extent.width != _currentRenderArea.extent.width ||
-				rect.rect.extent.height != _currentRenderArea.extent.height ||
-				rect.baseArrayLayer != 0 || rect.layerCount != _currentRenderLayerCount) {
-				useLoadActionClear = false;
-			}
-		}
-
-		MTL4RenderPassDescriptor* clearDescriptor = [_currentRenderPassDescriptor copy];
-		MTL4RenderPassDescriptor* resumeDescriptor = [_currentRenderPassDescriptor copy];
-		if (!clearDescriptor || !resumeDescriptor) {
-			[clearDescriptor release];
-			[resumeDescriptor release];
-			return failMetal4Encoding("clear_attachments_query_descriptor_unavailable");
-		}
-
-		bool valid = true;
-		for (uint32_t colorIndex = 0;
-			 colorIndex < _currentColorAttachmentCount;
-			 colorIndex++) {
-			MTLRenderPassColorAttachmentDescriptor* current =
-				_currentRenderPassDescriptor.colorAttachments[colorIndex];
-			if (!current.texture) {
-				if (binding.pipelineKey.isAttachmentEnabled(colorIndex)) { valid = false; }
-				continue;
-			}
-			if (current.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
-			[_renderEncoder setColorStoreAction:MTLStoreActionStore atIndex:colorIndex];
-			MTLRenderPassColorAttachmentDescriptor* clear =
-				clearDescriptor.colorAttachments[colorIndex];
-			clear.loadAction = useLoadActionClear &&
-				binding.pipelineKey.isAttachmentEnabled(colorIndex)
-				? MTLLoadActionClear : MTLLoadActionLoad;
-			clear.storeAction = MTLStoreActionStore;
-			clear.resolveTexture = nil;
-			if (binding.pipelineKey.isAttachmentEnabled(colorIndex)) {
-				clear.clearColor = binding.colorClearValues[colorIndex];
-			}
-			resumeDescriptor.colorAttachments[colorIndex].loadAction = MTLLoadActionLoad;
-		}
-
-		MTLRenderPassDepthAttachmentDescriptor* currentDepth =
-			_currentRenderPassDescriptor.depthAttachment;
-		if (currentDepth.texture) {
-			if (currentDepth.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
-			[_renderEncoder setDepthStoreAction:MTLStoreActionStore];
-			clearDescriptor.depthAttachment.loadAction = useLoadActionClear &&
-				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentDepthIndex)
-					? MTLLoadActionClear : MTLLoadActionLoad;
-			clearDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
-			clearDescriptor.depthAttachment.resolveTexture = nil;
-			clearDescriptor.depthAttachment.clearDepth = binding.depthClearValue;
-			resumeDescriptor.depthAttachment.loadAction = MTLLoadActionLoad;
-		} else if (binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentDepthIndex)) {
-			valid = false;
-		}
-
-		MTLRenderPassStencilAttachmentDescriptor* currentStencil =
-			_currentRenderPassDescriptor.stencilAttachment;
-		if (currentStencil.texture) {
-			if (currentStencil.texture.storageMode == MTLStorageModeMemoryless) { valid = false; }
-			[_renderEncoder setStencilStoreAction:MTLStoreActionStore];
-			clearDescriptor.stencilAttachment.loadAction = useLoadActionClear &&
-				binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentStencilIndex)
-					? MTLLoadActionClear : MTLLoadActionLoad;
-			clearDescriptor.stencilAttachment.storeAction = MTLStoreActionStore;
-			clearDescriptor.stencilAttachment.resolveTexture = nil;
-			clearDescriptor.stencilAttachment.clearStencil = binding.stencilClearValue;
-			resumeDescriptor.stencilAttachment.loadAction = MTLLoadActionLoad;
-		} else if (binding.pipelineKey.isAttachmentEnabled(kMVKClearAttachmentStencilIndex)) {
-			valid = false;
-		}
-
-		if (!valid) {
-			[clearDescriptor release];
-			[resumeDescriptor release];
-			return failMetal4Encoding("clear_attachments_query_attachment_unsupported");
-		}
-
-		clearDescriptor.visibilityResultBuffer = nil;
-		[_renderEncoder endEncoding];
-		[_renderEncoder release];
-		_renderEncoder = nil;
-
-		id<MTL4RenderCommandEncoder> clearEncoder =
-			[[_commandBuffer renderCommandEncoderWithDescriptor:clearDescriptor] retain];
-		if (!clearEncoder) {
-			[clearDescriptor release];
-			[resumeDescriptor release];
-			return failMetal4Encoding("clear_attachments_query_clear_encoder_unavailable");
-		}
-		_renderEncoder = clearEncoder;
-		if (!useLoadActionClear && !encodeClearAttachmentsDraw(binding)) {
-			[clearDescriptor release];
-			[resumeDescriptor release];
-			return false;
-		}
-		[_renderEncoder endEncoding];
-		[_renderEncoder release];
-		_renderEncoder = nil;
-
-		_renderEncoder =
-			[[_commandBuffer renderCommandEncoderWithDescriptor:resumeDescriptor] retain];
-		[clearDescriptor release];
-		[resumeDescriptor release];
-		if (!_renderEncoder || !applyActiveVisibilityQuery()) {
-			return failMetal4Encoding("clear_attachments_query_resume_encoder_unavailable");
-		}
-		_graphicsPipelineBoundForEncoder = false;
-		_graphicsResourcesBoundForEncoder = false;
-		_graphicsViewportScissorAppliedForEncoder = false;
-		_graphicsBlendConstantsAppliedForEncoder = false;
-		_counters.renderPasses += 2;
-		_renderWork = true;
-		return true;
 	}
 
 	bool ensureComputeEncoder() {
@@ -2344,8 +2232,6 @@ private:
 		[_renderEncoder endEncoding];
 		[_renderEncoder release];
 		_renderEncoder = nil;
-		[_currentRenderPassDescriptor release];
-		_currentRenderPassDescriptor = nil;
 		_currentColorAttachmentCount = 0;
 		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentStencilFormat = VK_FORMAT_UNDEFINED;
@@ -2736,7 +2622,6 @@ private:
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
 	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
-	MTL4RenderPassDescriptor* _currentRenderPassDescriptor = nil;
 	id<MTL4ArgumentTable> _argumentTable = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
@@ -2774,6 +2659,7 @@ private:
 	CommandCounters _counters;
 	string _encodingFailureDetail;
 	string _encodingFailureSummary;
+	string _preparationFailureSummary;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
@@ -3764,6 +3650,14 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	MVKMetal4TransferCommandEncoder encoder(
 		state, getDevice(), getMTLDevice(), getPixelFormats());
 	if (!prepareMetal4CommandBuffers(&encoder)) {
+		string preparationSummary;
+		if (state->recordPreparationFailure(
+				encoder.getMetal4PreparationFailureCommand(), &preparationSummary)) {
+			_queue->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 command preparation failed for %s.",
+				preparationSummary.c_str());
+		}
 		recordFallback(MVKMetal4FallbackReason::PrepareFailed);
 		return VK_SUCCESS;
 	}

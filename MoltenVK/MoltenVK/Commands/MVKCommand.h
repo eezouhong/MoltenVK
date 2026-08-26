@@ -103,6 +103,9 @@ public:
 	/** Records the first command that failed after a successful Metal 4 preflight. */
 	virtual void recordMetal4EncodingFailure(const char*) {}
 
+	/** Records the first command whose Metal 4 resource preflight failed. */
+	virtual void recordMetal4PreparationFailure(const char*) {}
+
 	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
 	virtual bool useDescriptorSet(VkPipelineBindPoint bindPoint,
 								 MVKDescriptorSet* descriptorSet,

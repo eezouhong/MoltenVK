@@ -983,6 +983,33 @@ int main() {
         validateRepeatedByte(device, c, 0x5A);
         vkDestroyFence(device, orderedFence, nullptr);
 
+        // Ending an MTL4 command buffer makes its allocator immediately reusable
+        // for serial encoding, even while earlier buffers from that allocator are
+        // still executing. Submit more command buffers than the allocator arena
+        // contains to lock that contract and prevent load-driven fallback.
+        std::array<VkCommandBuffer, 8> allocatorBurstCommands{};
+        std::array<VkSubmitInfo, 8> allocatorBurstSubmits{};
+        for (size_t index = 0; index < allocatorBurstCommands.size(); ++index) {
+            allocatorBurstCommands[index] = beginCommandBuffer(device, commandPool);
+            uint32_t value = static_cast<uint32_t>(0xA0u + index);
+            value |= value << 8;
+            value |= value << 16;
+            vkCmdFillBuffer(allocatorBurstCommands[index], c.buffer, 0, kSize, value);
+            endCommandBuffer(allocatorBurstCommands[index]);
+            allocatorBurstSubmits[index].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            allocatorBurstSubmits[index].commandBufferCount = 1;
+            allocatorBurstSubmits[index].pCommandBuffers = &allocatorBurstCommands[index];
+        }
+        VkFence allocatorBurstFence = createFence(device);
+        check(vkQueueSubmit(queue,
+                            static_cast<uint32_t>(allocatorBurstSubmits.size()),
+                            allocatorBurstSubmits.data(), allocatorBurstFence),
+              "vkQueueSubmit(allocator reuse burst)");
+        waitFence(device, allocatorBurstFence);
+        validateRepeatedByte(device, c, 0xA7);
+        vkDestroyFence(device, allocatorBurstFence, nullptr);
+        std::cout << "ALLOCATOR_REUSE_BURST_OK" << std::endl;
+
         // Explicit binary semaphore path: both submissions are eligible for MTL4.
         VkCommandBuffer fillWithSemaphore = beginCommandBuffer(device, commandPool);
         vkCmdFillBuffer(fillWithSemaphore, a.buffer, 0, kSize, 0x3C3C3C3Cu);

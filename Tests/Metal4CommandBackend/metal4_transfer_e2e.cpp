@@ -3476,8 +3476,9 @@ int main() {
         std::cout << "DYNAMIC_STENCIL_VALUES_OK" << std::endl;
 
         // Vulkan compute bindings persist across intervening render scopes in
-        // the same command buffer. A new Metal encoder must rematerialize the
-        // previously bound compute pipeline without another Vulkan bind.
+        // the same command buffer. The second render scope also replaces an
+        // incompatible graphics pipeline before drawing, so beginning it must
+        // not eagerly materialize the stale color-only pipeline.
         VkCommandBuffer computeAcrossRender = beginCommandBuffer(device, commandPool);
         vkCmdBindPipeline(computeAcrossRender, VK_PIPELINE_BIND_POINT_COMPUTE,
                           computePipeline);
@@ -3485,6 +3486,11 @@ int main() {
         vkCmdBeginRendering(computeAcrossRender, &renderingInfo);
         vkCmdBindPipeline(computeAcrossRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           graphicsPipeline);
+        vkCmdDraw(computeAcrossRender, 3, 1, 0, 0);
+        vkCmdEndRendering(computeAcrossRender);
+        vkCmdBeginRendering(computeAcrossRender, &depthRenderingInfo);
+        vkCmdBindPipeline(computeAcrossRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          depthPipeline);
         vkCmdDraw(computeAcrossRender, 3, 1, 0, 0);
         vkCmdEndRendering(computeAcrossRender);
         vkCmdDispatch(computeAcrossRender, 1, 1, 1);
@@ -3498,6 +3504,7 @@ int main() {
                             computeAcrossRenderFence),
               "vkQueueSubmit(compute across render)");
         waitFence(device, computeAcrossRenderFence);
+        std::cout << "GRAPHICS_REBIND_AFTER_RENDER_OK" << std::endl;
         std::cout << "COMPUTE_REBIND_AFTER_RENDER_OK" << std::endl;
 
         // An isolated query reset must stay on the MTL4 backend and publish the

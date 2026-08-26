@@ -1496,7 +1496,8 @@ public:
 		_graphicsViewportScissorAppliedForEncoder = false;
 		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
-		return !_boundGraphicsPipeline || applyGraphicsPipeline(true);
+		if (_boundGraphicsPipeline) { applyGraphicsPipeline(true); }
+		return true;
 	}
 
 	bool beginRenderPass(MVKRenderPass* renderPass,
@@ -1598,7 +1599,8 @@ public:
 		_graphicsViewportScissorAppliedForEncoder = false;
 		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
-		return !_boundGraphicsPipeline || applyGraphicsPipeline(true);
+		if (_boundGraphicsPipeline) { applyGraphicsPipeline(true); }
+		return true;
 	}
 
 	bool endRendering() override {

@@ -1120,6 +1120,12 @@ public:
 				(MVKImageView*)renderingInfo.pDepthAttachment->imageView);
 			if (depthIt == _imageViews.end()) { return false; }
 		}
+		auto stencilIt = _imageViews.end();
+		if (renderingInfo.pStencilAttachment) {
+			stencilIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pStencilAttachment->imageView);
+			if (stencilIt == _imageViews.end()) { return false; }
+		}
 		endComputeEncoding();
 
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
@@ -1163,6 +1169,22 @@ public:
 					depth.storeOp, false, true, nullptr);
 			depthDescriptor.clearDepth = depth.clearValue.depthStencil.depth;
 		}
+		if (renderingInfo.pStencilAttachment) {
+			const VkRenderingAttachmentInfo& stencil = *renderingInfo.pStencilAttachment;
+			const ImageViewBinding& stencilBinding = stencilIt->second;
+			MTLRenderPassStencilAttachmentDescriptor* stencilDescriptor =
+				descriptor.stencilAttachment;
+			stencilDescriptor.texture = stencilBinding.texture;
+			stencilDescriptor.level = stencilBinding.level;
+			stencilDescriptor.slice = stencilBinding.slice;
+			stencilDescriptor.depthPlane = stencilBinding.depthPlane;
+			stencilDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(stencil.loadOp, nullptr);
+			stencilDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					stencil.storeOp, false, true, nullptr);
+			stencilDescriptor.clearStencil = stencil.clearValue.depthStencil.stencil;
+		}
 		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
 		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
 		descriptor.renderTargetArrayLength = 1;
@@ -1187,7 +1209,9 @@ public:
 		_currentDepthFormat = renderingInfo.pDepthAttachment
 			? depthIt->second.format
 			: VK_FORMAT_UNDEFINED;
-		_currentStencilFormat = VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = renderingInfo.pStencilAttachment
+			? stencilIt->second.format
+			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = firstColorBinding->width;
 		_currentRenderHeight = firstColorBinding->height;
 		_graphicsPipelineBoundForEncoder = false;

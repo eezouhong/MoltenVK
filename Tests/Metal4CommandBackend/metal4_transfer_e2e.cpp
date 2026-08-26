@@ -2174,6 +2174,120 @@ int main() {
         validateSolidColor(device, activeStencilMismatchReadback, {255, 0, 0, 255});
         std::cout << "CLASSIC_STATIC_STENCIL_RENDER_OK" << std::endl;
 
+        // The same static stencil state must work through vkCmdBeginRendering.
+        // Reuse the value 42 written above and prove both matching and rejecting
+        // dynamic-rendering passes with a combined depth/stencil attachment.
+        graphicsInfo.renderPass = VK_NULL_HANDLE;
+        graphicsInfo.pNext = &pipelineRendering;
+        pipelineRendering.depthAttachmentFormat = classicStencilTarget.format;
+        pipelineRendering.stencilAttachmentFormat = classicStencilTarget.format;
+        graphicsInfo.pDepthStencilState = &activeStencilMatchState;
+        VkPipeline dynamicStencilMatchPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &dynamicStencilMatchPipeline),
+              "vkCreateGraphicsPipelines(dynamic stencil match)");
+        graphicsInfo.pDepthStencilState = &activeStencilMismatchState;
+        VkPipeline dynamicStencilMismatchPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &dynamicStencilMismatchPipeline),
+              "vkCreateGraphicsPipelines(dynamic stencil mismatch)");
+
+        Image dynamicStencilMatchTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight);
+        Image dynamicStencilMismatchTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight);
+        Buffer dynamicStencilMatchReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        Buffer dynamicStencilMismatchReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        VkCommandBuffer prepareDynamicStencil = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDynamicStencil, dynamicStencilMatchTarget.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        imageBarrier(prepareDynamicStencil, dynamicStencilMismatchTarget.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareDynamicStencil);
+
+        VkRenderingAttachmentInfo dynamicStencilAttachment =
+            makeVkStruct<VkRenderingAttachmentInfo>(
+                VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+        dynamicStencilAttachment.imageView = classicStencilTarget.view;
+        dynamicStencilAttachment.imageLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        dynamicStencilAttachment.resolveMode = VK_RESOLVE_MODE_NONE;
+        dynamicStencilAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        dynamicStencilAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingAttachmentInfo dynamicStencilColor = colorAttachment;
+        dynamicStencilColor.imageView = dynamicStencilMatchTarget.view;
+        dynamicStencilColor.clearValue.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+        VkRenderingInfo dynamicStencilRendering = renderingInfo;
+        dynamicStencilRendering.pColorAttachments = &dynamicStencilColor;
+        dynamicStencilRendering.pDepthAttachment = &dynamicStencilAttachment;
+        dynamicStencilRendering.pStencilAttachment = &dynamicStencilAttachment;
+        VkCommandBuffer dynamicStencilRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(dynamicStencilRender, &dynamicStencilRendering);
+        vkCmdBindPipeline(dynamicStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          dynamicStencilMatchPipeline);
+        vkCmdDraw(dynamicStencilRender, 3, 1, 0, 0);
+        vkCmdEndRendering(dynamicStencilRender);
+        dynamicStencilColor.imageView = dynamicStencilMismatchTarget.view;
+        vkCmdBeginRendering(dynamicStencilRender, &dynamicStencilRendering);
+        vkCmdBindPipeline(dynamicStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          dynamicStencilMismatchPipeline);
+        vkCmdDraw(dynamicStencilRender, 3, 1, 0, 0);
+        vkCmdEndRendering(dynamicStencilRender);
+        endCommandBuffer(dynamicStencilRender);
+
+        VkCommandBuffer finishDynamicStencil = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDynamicStencil, dynamicStencilMatchTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        imageBarrier(finishDynamicStencil, dynamicStencilMismatchTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDynamicStencil);
+        VkCommandBuffer readDynamicStencil = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDynamicStencil, dynamicStencilMatchTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dynamicStencilMatchReadback.buffer, 1, &imageRegion);
+        vkCmdCopyImageToBuffer(readDynamicStencil, dynamicStencilMismatchTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               dynamicStencilMismatchReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDynamicStencil);
+        std::array<VkSubmitInfo, 4> dynamicStencilSubmits{};
+        for (auto& submit : dynamicStencilSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        dynamicStencilSubmits[0].commandBufferCount = 1;
+        dynamicStencilSubmits[0].pCommandBuffers = &prepareDynamicStencil;
+        dynamicStencilSubmits[1].commandBufferCount = 1;
+        dynamicStencilSubmits[1].pCommandBuffers = &dynamicStencilRender;
+        dynamicStencilSubmits[2].commandBufferCount = 1;
+        dynamicStencilSubmits[2].pCommandBuffers = &finishDynamicStencil;
+        dynamicStencilSubmits[3].commandBufferCount = 1;
+        dynamicStencilSubmits[3].pCommandBuffers = &readDynamicStencil;
+        VkFence dynamicStencilFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(dynamicStencilSubmits.size()),
+                            dynamicStencilSubmits.data(), dynamicStencilFence),
+              "vkQueueSubmit(dynamic stencil sequence)");
+        waitFence(device, dynamicStencilFence);
+        validateSolidColor(device, dynamicStencilMatchReadback, {64, 128, 191, 255});
+        validateSolidColor(device, dynamicStencilMismatchReadback, {255, 0, 0, 255});
+        std::cout << "DYNAMIC_STATIC_STENCIL_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -2259,6 +2373,13 @@ int main() {
         vkDestroyFence(device, classicFence, nullptr);
         vkDestroyFence(device, classicStencilFence, nullptr);
         vkDestroyFence(device, activeStencilFence, nullptr);
+        vkDestroyFence(device, dynamicStencilFence, nullptr);
+        vkDestroyPipeline(device, dynamicStencilMatchPipeline, nullptr);
+        vkDestroyPipeline(device, dynamicStencilMismatchPipeline, nullptr);
+        dynamicStencilMatchTarget.destroy();
+        dynamicStencilMismatchTarget.destroy();
+        dynamicStencilMatchReadback.destroy();
+        dynamicStencilMismatchReadback.destroy();
         vkDestroyPipeline(device, activeStencilWritePipeline, nullptr);
         vkDestroyPipeline(device, activeStencilMatchPipeline, nullptr);
         vkDestroyPipeline(device, activeStencilMismatchPipeline, nullptr);

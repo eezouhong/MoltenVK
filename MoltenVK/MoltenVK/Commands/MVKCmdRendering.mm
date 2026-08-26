@@ -207,6 +207,7 @@ static bool mvkSupportsMetal4RenderingAttachment(const VkRenderingAttachmentInfo
 	bool supportedLayout = depthAttachment
 		? (attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
 		   attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL ||
 		   attachment.imageLayout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL ||
 		   attachment.imageLayout == VK_IMAGE_LAYOUT_GENERAL)
 		: (attachment.imageLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
@@ -252,10 +253,6 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		return false;
 	}
 
-	if (renderingInfo.pStencilAttachment) {
-		return false;
-	}
-
 	for (uint32_t colorIndex = 0;
 		 colorIndex < renderingInfo.colorAttachmentCount;
 		 colorIndex++) {
@@ -267,9 +264,14 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		}
 	}
 
-	return !renderingInfo.pDepthAttachment ||
+	if (renderingInfo.pDepthAttachment &&
+		!mvkSupportsMetal4RenderingAttachment(
+			*renderingInfo.pDepthAttachment, renderingInfo.renderArea, true)) {
+		return false;
+	}
+	return !renderingInfo.pStencilAttachment ||
 		mvkSupportsMetal4RenderingAttachment(
-			*renderingInfo.pDepthAttachment, renderingInfo.renderArea, true);
+			*renderingInfo.pStencilAttachment, renderingInfo.renderArea, true);
 }
 
 template <size_t N>
@@ -314,6 +316,11 @@ bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmd
 	if (_renderingInfo.pDepthAttachment &&
 		!cmdEncoder->useImageView(
 			(MVKImageView*)_renderingInfo.pDepthAttachment->imageView)) {
+		return false;
+	}
+	if (_renderingInfo.pStencilAttachment &&
+		!cmdEncoder->useImageView(
+			(MVKImageView*)_renderingInfo.pStencilAttachment->imageView)) {
 		return false;
 	}
 	return true;

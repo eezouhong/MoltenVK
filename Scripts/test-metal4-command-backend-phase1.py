@@ -778,8 +778,18 @@ def main() -> int:
         ),
         (
             pipeline_mm,
-            r"hasSupportedClassicStencilAttachment[\s\S]*?isStencilFormat[\s\S]*?hasStrictFixedFunction[\s\S]*?hasSupportedDepthState;",
-            "static classic stencil pipelines are not eligible while dynamic stencil remains fail closed",
+            r"hasSupportedStencilAttachment[\s\S]*?isStencilFormat[\s\S]*?hasStrictFixedFunction[\s\S]*?hasSupportedDepthState;",
+            "static stencil pipelines are not eligible while dynamic stencil state remains fail closed",
+        ),
+        (
+            rendering_mm,
+            r"STENCIL_ATTACHMENT_OPTIMAL[\s\S]*?pStencilAttachment[\s\S]*?mvkSupportsMetal4RenderingAttachment[\s\S]*?useImageView",
+            "dynamic rendering does not validate and retain its Metal 4 stencil attachment",
+        ),
+        (
+            queue_mm,
+            r"renderingInfo\.pStencilAttachment[\s\S]*?descriptor\.stencilAttachment[\s\S]*?clearStencil[\s\S]*?_currentStencilFormat",
+            "dynamic rendering does not bind and format-track its Metal 4 stencil attachment",
         ),
         (
             pipeline_mm,

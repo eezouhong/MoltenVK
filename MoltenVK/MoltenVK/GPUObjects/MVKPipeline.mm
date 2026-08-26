@@ -3190,18 +3190,20 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasActiveStencilState =
 		_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) ||
 		_staticStateData.depthStencil.stencilTestEnabled;
+	bool hasSupportedStencilAttachment = pRendInfo &&
+		(pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED ||
+		 getPixelFormats()->isStencilFormat(
+			 getPixelFormats()->getMTLPixelFormat(pRendInfo->stencilAttachmentFormat)));
 	bool hasSupportedClassicStencilAttachment =
-		pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
-		pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
-		getPixelFormats()->isStencilFormat(
-			getPixelFormats()->getMTLPixelFormat(pRendInfo->stencilAttachmentFormat));
+		pCreateInfo->renderPass != VK_NULL_HANDLE &&
+		pRendInfo && pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+		hasSupportedStencilAttachment;
 	bool hasSupportedColorsWithOptionalDepth =
 		pRendInfo && pRendInfo->viewMask == 0 &&
 		pRendInfo->colorAttachmentCount > 0 &&
 		pRendInfo->colorAttachmentCount <= kMVKMaxColorAttachmentCount &&
 		pRendInfo->pColorAttachmentFormats &&
-		(pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED ||
-		 hasSupportedClassicStencilAttachment);
+		hasSupportedStencilAttachment;
 	bool hasAnyColorAttachment = false;
 	if (hasSupportedColorsWithOptionalDepth) {
 		for (uint32_t colorIndex = 0;
@@ -3315,7 +3317,8 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	} else if (!pRendInfo->pColorAttachmentFormats || !hasAnyColorAttachment) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_color_format";
-	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED) {
+	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+			   !hasSupportedStencilAttachment) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:attachment_stencil";
 	} else if (!hasSupportedDepthFormat) {

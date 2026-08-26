@@ -429,8 +429,11 @@ public:
 		return _metal4RenderExecutionUnsupportedReason;
 	}
 
-	/** Returns the one color format accepted by the strict Metal 4 render slice. */
+	/** Returns the color format accepted by the strict Metal 4 render slice. */
 	VkFormat getMetal4ColorAttachmentFormat() const { return _metal4ColorAttachmentFormat; }
+
+	/** Returns the optional depth format accepted by the strict Metal 4 render slice. */
+	VkFormat getMetal4DepthAttachmentFormat() const { return _metal4DepthAttachmentFormat; }
 
 	/** Returns the Metal vertex buffer index to use for the specified vertex attribute binding number.  */
 	uint32_t getMetalBufferIndexForVertexAttributeBinding(uint32_t binding) { return _device->getMetalBufferIndexForVertexAttributeBinding(binding); }
@@ -574,6 +577,7 @@ protected:
 	bool _supportsMetal4ArgumentTableRenderExecution = false;
 	const char* _metal4RenderExecutionUnsupportedReason = "MVKCmdBindGraphicsPipeline:unclassified";
 	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _metal4DepthAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 
 

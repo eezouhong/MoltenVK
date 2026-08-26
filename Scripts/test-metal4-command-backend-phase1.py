@@ -324,8 +324,9 @@ def main() -> int:
         "image/buffer/memory barriers are not encoded through the backend-neutral barrier boundary",
     )
 
-    # Strict ordinary-render slice: one dynamic-rendering color attachment, a descriptorless
-    # graphics pipeline, and a real non-indexed draw on MTL4RenderCommandEncoder.
+    # Strict ordinary-render slice: one dynamic-rendering color attachment, an optional
+    # single-sample depth attachment, a descriptorless graphics pipeline, and a real
+    # non-indexed draw on MTL4RenderCommandEncoder.
     for token in (
         "useImageView",
         "useGraphicsPipeline",
@@ -342,8 +343,23 @@ def main() -> int:
     )
     require(
         rendering_mm,
-        r"mvkSupportsMetal4RenderingInfo[\s\S]*?colorAttachmentCount\s*!=\s*1[\s\S]*?pDepthAttachment[\s\S]*?pStencilAttachment[\s\S]*?VK_SAMPLE_COUNT_1_BIT",
+        r"mvkSupportsMetal4RenderingAttachment[\s\S]*?VK_SAMPLE_COUNT_1_BIT[\s\S]*?mvkSupportsMetal4RenderingInfo[\s\S]*?colorAttachmentCount\s*!=\s*1[\s\S]*?pStencilAttachment[\s\S]*?pDepthAttachment",
         "dynamic-rendering eligibility does not fail closed on unsupported attachments or multisampling",
+    )
+    require(
+        rendering_mm,
+        r"prepareMetal4Encoding[\s\S]*?pDepthAttachment[\s\S]*?useImageView",
+        "depth attachment residency is not prepared before Metal 4 encoding",
+    )
+    require(
+        queue_mm,
+        r"descriptor\.depthAttachment[\s\S]*?clearDepth",
+        "depth attachments are not materialized on the Metal 4 render encoder",
+    )
+    require(
+        queue_mm,
+        r"newDepthStencilStateWithDescriptor[\s\S]*?setDepthStencilState",
+        "static Vulkan depth state is not bound to the Metal 4 render encoder",
     )
     require(
         pipeline_cmd_h + pipeline_cmd_mm,

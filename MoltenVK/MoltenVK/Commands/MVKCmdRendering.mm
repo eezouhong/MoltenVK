@@ -133,6 +133,44 @@ void MVKCmdEndRenderPass::encode(MVKCommandEncoder* cmdEncoder) {
 #pragma mark -
 #pragma mark MVKCmdBeginRendering
 
+static bool mvkSupportsMetal4RenderingAttachment(const VkRenderingAttachmentInfo& attachment,
+											 const VkRect2D& renderArea,
+											 bool depthAttachment) {
+	bool supportedLayout = depthAttachment
+		? (attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_GENERAL)
+		: (attachment.imageLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_GENERAL);
+	if (attachment.pNext ||
+		!attachment.imageView ||
+		attachment.resolveMode != VK_RESOLVE_MODE_NONE ||
+		attachment.resolveImageView ||
+		(attachment.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD &&
+		 attachment.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
+		 attachment.loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+		(attachment.storeOp != VK_ATTACHMENT_STORE_OP_STORE &&
+		 attachment.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
+		!supportedLayout) {
+		return false;
+	}
+
+	auto* imageView = (MVKImageView*)attachment.imageView;
+	id<MTLTexture> texture = imageView ? imageView->getMTLTexture() : nil;
+	if (!imageView || !texture ||
+		imageView->getPlaneCount() != 1 ||
+		imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
+		imageView->getMTLTextureType() != MTLTextureType2D ||
+		imageView->getPackedSwizzle() != 0) {
+		return false;
+	}
+
+	return renderArea.extent.width == texture.width &&
+		renderArea.extent.height == texture.height;
+}
+
 static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo) {
 	if (renderingInfo.pNext ||
 		renderingInfo.flags != 0 ||
@@ -145,38 +183,18 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		return false;
 	}
 
-	if (renderingInfo.pDepthAttachment || renderingInfo.pStencilAttachment) {
+	if (renderingInfo.pStencilAttachment) {
 		return false;
 	}
 
 	const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
-	if (color.pNext ||
-		!color.imageView ||
-		color.resolveMode != VK_RESOLVE_MODE_NONE ||
-		color.resolveImageView ||
-		(color.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD &&
-		 color.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
-		 color.loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
-		(color.storeOp != VK_ATTACHMENT_STORE_OP_STORE &&
-		 color.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
-		(color.imageLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
-		 color.imageLayout != VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL &&
-		 color.imageLayout != VK_IMAGE_LAYOUT_GENERAL)) {
+	if (!mvkSupportsMetal4RenderingAttachment(color, renderingInfo.renderArea, false)) {
 		return false;
 	}
 
-	auto* imageView = (MVKImageView*)color.imageView;
-	id<MTLTexture> texture = imageView ? imageView->getMTLTexture() : nil;
-	if (!imageView || !texture ||
-		imageView->getPlaneCount() != 1 ||
-		imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
-		imageView->getMTLTextureType() != MTLTextureType2D ||
-		imageView->getPackedSwizzle() != 0) {
-		return false;
-	}
-
-	return renderingInfo.renderArea.extent.width == texture.width &&
-		renderingInfo.renderArea.extent.height == texture.height;
+	return !renderingInfo.pDepthAttachment ||
+		mvkSupportsMetal4RenderingAttachment(
+			*renderingInfo.pDepthAttachment, renderingInfo.renderArea, true);
 }
 
 template <size_t N>
@@ -212,7 +230,13 @@ template <size_t N>
 bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
 	auto* imageView = (MVKImageView*)_renderingInfo.pColorAttachments[0].imageView;
-	return cmdEncoder->useImageView(imageView);
+	if (!cmdEncoder->useImageView(imageView)) { return false; }
+	if (_renderingInfo.pDepthAttachment &&
+		!cmdEncoder->useImageView(
+			(MVKImageView*)_renderingInfo.pDepthAttachment->imageView)) {
+		return false;
+	}
+	return true;
 }
 
 template <size_t N>

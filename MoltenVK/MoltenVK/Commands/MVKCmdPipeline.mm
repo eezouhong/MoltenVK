@@ -68,17 +68,20 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 			return false;
 		}
 		if (barrier.type == MVKPipelineBarrier::Image) {
-			bool supportedLayout = barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
-				barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
-				barrier.newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			bool colorLayout = barrier.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+			bool depthLayout = barrier.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 			uint32_t mipLevelCount = barrier.levelCount == (uint8_t)VK_REMAINING_MIP_LEVELS
 				? barrier.mvkImage ? barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel : 0
 				: barrier.levelCount;
 			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
 				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
 				: barrier.layerCount;
-			if (!barrier.mvkImage || !supportedLayout ||
-				barrier.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT ||
+			if (!barrier.mvkImage || (!colorLayout && !depthLayout) ||
 				barrier.baseMipLevel >= barrier.mvkImage->getMipLevelCount() ||
 				barrier.baseArrayLayer >= barrier.mvkImage->getLayerCount() ||
 				!mipLevelCount || !layerCount ||

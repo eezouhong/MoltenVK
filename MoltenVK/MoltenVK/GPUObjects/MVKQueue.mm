@@ -595,6 +595,10 @@ public:
 		NSUInteger size = 0;
 		NSUInteger stride = 0;
 	};
+	struct GraphicsPipelineBinding {
+		id<MTLRenderPipelineState> pipelineState = nil;
+		id<MTLDepthStencilState> depthStencilState = nil;
+	};
 
 	~MVKMetal4TransferCommandEncoder() override {
 		endEncoding();
@@ -606,7 +610,10 @@ public:
 		for (auto& item : _queryPools) { [item.second.resetBuffer release]; }
 		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
-		for (auto& item : _graphicsPipelines) { [item.second release]; }
+		for (auto& item : _graphicsPipelines) {
+			[item.second.pipelineState release];
+			[item.second.depthStencilState release];
+		}
 		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
 		[_argumentTable release];
 	}
@@ -719,7 +726,20 @@ public:
 		if (_graphicsPipelines.count(pipeline)) { return true; }
 		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
 		if (!pipelineState) { return false; }
-		_graphicsPipelines.emplace(pipeline, [pipelineState retain]);
+		const auto& stateData = pipeline->getStaticStateData();
+		MTLDepthStencilDescriptor* depthStencilDescriptor =
+			[MTLDepthStencilDescriptor new];
+		depthStencilDescriptor.depthCompareFunction =
+			(MTLCompareFunction)stateData.depthStencil.depthCompareFunction;
+		depthStencilDescriptor.depthWriteEnabled =
+			stateData.depthStencil.depthWriteEnabled;
+		id<MTLDepthStencilState> depthStencilState =
+			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
+		[depthStencilDescriptor release];
+		if (!depthStencilState) { return false; }
+		_graphicsPipelines.emplace(
+			pipeline,
+			GraphicsPipelineBinding{[pipelineState retain], depthStencilState});
 		_allocations.push_back((id<MTLAllocation>)pipelineState);
 		return true;
 	}
@@ -1051,6 +1071,12 @@ public:
 		const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
 		auto viewIt = _imageViews.find((MVKImageView*)color.imageView);
 		if (viewIt == _imageViews.end()) { return false; }
+		auto depthIt = _imageViews.end();
+		if (renderingInfo.pDepthAttachment) {
+			depthIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pDepthAttachment->imageView);
+			if (depthIt == _imageViews.end()) { return false; }
+		}
 		endComputeEncoding();
 
 		const ImageViewBinding& binding = viewIt->second;
@@ -1065,7 +1091,23 @@ public:
 		colorDescriptor.clearColor = MTLClearColorMake(color.clearValue.color.float32[0],
 												 color.clearValue.color.float32[1],
 												 color.clearValue.color.float32[2],
-												 color.clearValue.color.float32[3]);
+											 color.clearValue.color.float32[3]);
+		if (renderingInfo.pDepthAttachment) {
+			const VkRenderingAttachmentInfo& depth = *renderingInfo.pDepthAttachment;
+			const ImageViewBinding& depthBinding = depthIt->second;
+			MTLRenderPassDepthAttachmentDescriptor* depthDescriptor =
+				descriptor.depthAttachment;
+			depthDescriptor.texture = depthBinding.texture;
+			depthDescriptor.level = depthBinding.level;
+			depthDescriptor.slice = depthBinding.slice;
+			depthDescriptor.depthPlane = depthBinding.depthPlane;
+			depthDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(depth.loadOp, nullptr);
+			depthDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					depth.storeOp, false, true, nullptr);
+			depthDescriptor.clearDepth = depth.clearValue.depthStencil.depth;
+		}
 		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
 		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
 		descriptor.renderTargetArrayLength = 1;
@@ -1080,6 +1122,9 @@ public:
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
 
 		_currentRenderFormat = binding.format;
+		_currentDepthFormat = renderingInfo.pDepthAttachment
+			? depthIt->second.format
+			: VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = binding.width;
 		_currentRenderHeight = binding.height;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1188,6 +1233,7 @@ public:
 		_commandBuffer = nil;
 		_boundComputePipeline = nullptr;
 		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1268,6 +1314,7 @@ private:
 		[_renderEncoder release];
 		_renderEncoder = nil;
 		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentDepthFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_graphicsPipelineBoundForEncoder = false;
@@ -1303,7 +1350,8 @@ private:
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
 		if (it == _graphicsPipelines.end() ||
-			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat) {
+			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat ||
+			_boundGraphicsPipeline->getMetal4DepthAttachmentFormat() != _currentDepthFormat) {
 			return false;
 		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
@@ -1315,7 +1363,8 @@ private:
 			(uint64_t)scissor.offset.y + scissor.extent.height > _currentRenderHeight) {
 			return false;
 		}
-		[_renderEncoder setRenderPipelineState:it->second];
+		[_renderEncoder setRenderPipelineState:it->second.pipelineState];
+		[_renderEncoder setDepthStencilState:it->second.depthStencilState];
 		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(viewport)];
 		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(scissor)];
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
@@ -1384,7 +1433,7 @@ private:
 	unordered_map<MVKQueryPool*, QueryPoolBinding> _queryPools;
 	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
-	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
 	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
 	unordered_set<const void*> _descriptorAllocationSet;
@@ -1405,6 +1454,7 @@ private:
 	MVKQueryPool* _activeQueryPool = nullptr;
 	uint32_t _activeQuery = 0;
 	VkFormat _currentRenderFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
 	bool _graphicsPipelineBoundForEncoder = false;

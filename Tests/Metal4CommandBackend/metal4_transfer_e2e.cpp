@@ -175,10 +175,15 @@ Buffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSi
 Image createImage(VkPhysicalDevice physicalDevice,
                   VkDevice device,
                   uint32_t width,
-                  uint32_t height) {
+                  uint32_t height,
+                  VkFormat format = VK_FORMAT_R8G8B8A8_UNORM,
+                  VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
     Image result;
     result.device = device;
-    result.format = VK_FORMAT_R8G8B8A8_UNORM;
+    result.format = format;
     result.width = width;
     result.height = height;
 
@@ -190,9 +195,7 @@ Image createImage(VkPhysicalDevice physicalDevice,
     createInfo.arrayLayers = 1;
     createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    createInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                       VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.usage = usage;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     check(vkCreateImage(device, &createInfo, nullptr, &result.image), "vkCreateImage");
@@ -217,7 +220,7 @@ Image createImage(VkPhysicalDevice physicalDevice,
     viewInfo.image = result.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = result.format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.aspectMask = aspect;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
@@ -349,7 +352,8 @@ void imageBarrier(VkCommandBuffer commandBuffer,
                   VkAccessFlags srcAccess,
                   VkAccessFlags dstAccess,
                   VkPipelineStageFlags srcStage,
-                  VkPipelineStageFlags dstStage) {
+                  VkPipelineStageFlags dstStage,
+                  VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
     VkImageMemoryBarrier barrier = makeVkStruct<VkImageMemoryBarrier>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
     barrier.srcAccessMask = srcAccess;
     barrier.dstAccessMask = dstAccess;
@@ -358,7 +362,7 @@ void imageBarrier(VkCommandBuffer commandBuffer,
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.aspectMask = aspect;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
@@ -1334,6 +1338,97 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "DYNAMIC_VERTEX_RENDER_OK" << std::endl;
 
+        // A depth attachment plus a static NEVER comparison must execute on
+        // MTL4 without painting the color target. Leaving the MTL4 depth state
+        // unbound would draw the fragment and make this readback fail.
+        Image depthTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight,
+            VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkPipelineDepthStencilStateCreateInfo depthStencilState =
+            makeVkStruct<VkPipelineDepthStencilStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+        depthStencilState.depthTestEnable = VK_TRUE;
+        depthStencilState.depthWriteEnable = VK_TRUE;
+        depthStencilState.depthCompareOp = VK_COMPARE_OP_NEVER;
+        pipelineRendering.depthAttachmentFormat = depthTarget.format;
+        graphicsInfo.pDepthStencilState = &depthStencilState;
+        graphicsInfo.pDynamicState = nullptr;
+        renderStages[0].module = vertexModule;
+        VkPipeline depthPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &depthPipeline),
+              "vkCreateGraphicsPipelines(depth attachment)");
+
+        VkRenderingAttachmentInfo depthAttachment =
+            makeVkStruct<VkRenderingAttachmentInfo>(
+                VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+        depthAttachment.imageView = depthTarget.view;
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.resolveMode = VK_RESOLVE_MODE_NONE;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue.depthStencil = {1.0f, 0};
+        VkRenderingInfo depthRenderingInfo = renderingInfo;
+        depthRenderingInfo.pDepthAttachment = &depthAttachment;
+
+        VkCommandBuffer prepareDepthRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDepthRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        imageBarrier(prepareDepthRender, depthTarget.image,
+                     VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                     0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                     VK_IMAGE_ASPECT_DEPTH_BIT);
+        endCommandBuffer(prepareDepthRender);
+
+        VkCommandBuffer depthRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(depthRender, &depthRenderingInfo);
+        vkCmdBindPipeline(depthRender, VK_PIPELINE_BIND_POINT_GRAPHICS, depthPipeline);
+        vkCmdDraw(depthRender, 3, 1, 0, 0);
+        vkCmdEndRendering(depthRender);
+        endCommandBuffer(depthRender);
+
+        VkCommandBuffer finishDepthRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDepthRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDepthRender);
+        VkCommandBuffer readDepthRender = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDepthRender, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDepthRender);
+
+        std::array<VkSubmitInfo, 4> depthSubmits{};
+        for (auto& submit : depthSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        depthSubmits[0].commandBufferCount = 1;
+        depthSubmits[0].pCommandBuffers = &prepareDepthRender;
+        depthSubmits[1].commandBufferCount = 1;
+        depthSubmits[1].pCommandBuffers = &depthRender;
+        depthSubmits[2].commandBufferCount = 1;
+        depthSubmits[2].pCommandBuffers = &finishDepthRender;
+        depthSubmits[3].commandBufferCount = 1;
+        depthSubmits[3].pCommandBuffers = &readDepthRender;
+        VkFence depthFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(depthSubmits.size()),
+                            depthSubmits.data(), depthFence),
+              "vkQueueSubmit(depth render sequence)");
+        waitFence(device, depthFence);
+        validateSolidColor(device, renderReadback, {0, 0, 0, 255});
+        std::cout << "DEPTH_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1416,6 +1511,9 @@ int main() {
 
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, depthFence, nullptr);
+        vkDestroyPipeline(device, depthPipeline, nullptr);
+        depthTarget.destroy();
         vkDestroyFence(device, dynamicVertexFence, nullptr);
         vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);

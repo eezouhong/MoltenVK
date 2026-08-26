@@ -792,6 +792,16 @@ def main() -> int:
             "dynamic rendering does not bind and format-track its Metal 4 stencil attachment",
         ),
         (
+            pipeline_h + pipeline_mm,
+            r"usesMetal4DynamicStencilCompareMask[\s\S]*?usesMetal4DynamicStencilWriteMask[\s\S]*?usesMetal4DynamicStencilReference[\s\S]*?kMetal4SupportedDynamicState[\s\S]*?StencilCompareMask[\s\S]*?StencilWriteMask[\s\S]*?StencilReference",
+            "the Metal 4 render slice does not admit Ryujinx's three dynamic stencil values",
+        ),
+        (
+            queue_mm,
+            r"setStencilCompareMask[\s\S]*?_dynamicStencilCompareMask[\s\S]*?setStencilWriteMask[\s\S]*?_dynamicStencilWriteMask[\s\S]*?setStencilReference[\s\S]*?_dynamicStencilReference[\s\S]*?newDepthStencilStateWithDescriptor[\s\S]*?setStencilFrontReferenceValue",
+            "Metal 4 does not materialize dynamic stencil masks and references at draw time",
+        ),
+        (
             pipeline_mm,
             r"dynamic_viewport_scissor[\s\S]*?dynamic_depth_stencil[\s\S]*?dynamic_rasterization[\s\S]*?dynamic_topology[\s\S]*?dynamic_color_blend[\s\S]*?dynamic_sampling[\s\S]*?dynamic_tessellation[\s\S]*?dynamic_other",
             "dynamic-state blockers are not split into actionable capability groups",

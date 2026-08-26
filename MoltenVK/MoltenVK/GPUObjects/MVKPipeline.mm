@@ -2726,6 +2726,9 @@ static constexpr MVKRenderStateFlags kMetal4SupportedDynamicState {
 	MVKRenderStateFlag::Viewports,
 	MVKRenderStateFlag::Scissors,
 	MVKRenderStateFlag::BlendConstants,
+	MVKRenderStateFlag::StencilCompareMask,
+	MVKRenderStateFlag::StencilWriteMask,
+	MVKRenderStateFlag::StencilReference,
 };
 
 static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dynamicStateFlags) {

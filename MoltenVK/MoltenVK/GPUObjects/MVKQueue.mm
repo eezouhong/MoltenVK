@@ -597,9 +597,14 @@ public:
 		NSUInteger size = 0;
 		NSUInteger stride = 0;
 	};
+	struct DepthStencilStateBinding {
+		MVKStencilReference compareMask = {};
+		MVKStencilReference writeMask = {};
+		id<MTLDepthStencilState> state = nil;
+	};
 	struct GraphicsPipelineBinding {
 		id<MTLRenderPipelineState> pipelineState = nil;
-		id<MTLDepthStencilState> depthStencilState = nil;
+		vector<DepthStencilStateBinding> depthStencilStates;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
@@ -614,7 +619,9 @@ public:
 		for (auto& item : _computePipelines) { [item.second release]; }
 		for (auto& item : _graphicsPipelines) {
 			[item.second.pipelineState release];
-			[item.second.depthStencilState release];
+			for (auto& depthStencil : item.second.depthStencilStates) {
+				[depthStencil.state release];
+			}
 		}
 		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
 		[_argumentTable release];
@@ -729,48 +736,22 @@ public:
 		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
 		if (!pipelineState) { return false; }
 		const auto& stateData = pipeline->getStaticStateData();
-		MTLDepthStencilDescriptor* depthStencilDescriptor =
-			[MTLDepthStencilDescriptor new];
-		bool depthTestEnabled =
-			stateData.enable.has(MVKRenderStateEnableFlag::DepthTest);
-		depthStencilDescriptor.depthCompareFunction =
-			depthTestEnabled
-				? (MTLCompareFunction)stateData.depthStencil.depthCompareFunction
-				: MTLCompareFunctionAlways;
-		depthStencilDescriptor.depthWriteEnabled =
-			depthTestEnabled && stateData.depthStencil.depthWriteEnabled;
-		bool stencilTestEnabled = stateData.depthStencil.stencilTestEnabled;
-		auto newStencilDescriptor = [](const MVKMTLStencilDescriptorData& stencilData) {
-			MTLStencilDescriptor* descriptor = [MTLStencilDescriptor new];
-			descriptor.stencilCompareFunction =
-				(MTLCompareFunction)stencilData.op.stencilCompareFunction;
-			descriptor.stencilFailureOperation =
-				(MTLStencilOperation)stencilData.op.stencilFailureOperation;
-			descriptor.depthFailureOperation =
-				(MTLStencilOperation)stencilData.op.depthFailureOperation;
-			descriptor.depthStencilPassOperation =
-				(MTLStencilOperation)stencilData.op.depthStencilPassOperation;
-			descriptor.readMask = stencilData.readMask;
-			descriptor.writeMask = stencilData.writeMask;
-			return descriptor;
+		MVKStencilReference compareMask {
+			stateData.depthStencil.frontFaceStencilData.readMask,
+			stateData.depthStencil.backFaceStencilData.readMask,
 		};
-		MTLStencilDescriptor* frontFaceStencil = stencilTestEnabled
-			? newStencilDescriptor(stateData.depthStencil.frontFaceStencilData)
-			: nil;
-		MTLStencilDescriptor* backFaceStencil = stencilTestEnabled
-			? newStencilDescriptor(stateData.depthStencil.backFaceStencilData)
-			: nil;
-		depthStencilDescriptor.frontFaceStencil = frontFaceStencil;
-		depthStencilDescriptor.backFaceStencil = backFaceStencil;
+		MVKStencilReference writeMask {
+			stateData.depthStencil.frontFaceStencilData.writeMask,
+			stateData.depthStencil.backFaceStencilData.writeMask,
+		};
 		id<MTLDepthStencilState> depthStencilState =
-			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
-		[frontFaceStencil release];
-		[backFaceStencil release];
-		[depthStencilDescriptor release];
+			newDepthStencilState(pipeline, compareMask, writeMask);
 		if (!depthStencilState) { return false; }
-		_graphicsPipelines.emplace(
-			pipeline,
-			GraphicsPipelineBinding{[pipelineState retain], depthStencilState});
+		GraphicsPipelineBinding binding;
+		binding.pipelineState = [pipelineState retain];
+		binding.depthStencilStates.push_back(
+			DepthStencilStateBinding{compareMask, writeMask, depthStencilState});
+		_graphicsPipelines.emplace(pipeline, std::move(binding));
 		_allocations.push_back((id<MTLAllocation>)pipelineState);
 		return true;
 	}
@@ -1356,20 +1337,42 @@ public:
 	}
 
 	bool setStencilCompareMask(VkStencilFaceFlags faceMask,
-							   uint32_t) override {
-		// Metal 4 eligibility currently admits only pipelines with stencil testing
-		// disabled, so Vulkan defines this value as inert for every encoded draw.
-		return isValidStencilFaceMask(faceMask);
+							   uint32_t stencilCompareMask) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilCompareMask.frontFaceValue = stencilCompareMask;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilCompareMask.backFaceValue = stencilCompareMask;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
 	}
 
 	bool setStencilWriteMask(VkStencilFaceFlags faceMask,
-							 uint32_t) override {
-		return isValidStencilFaceMask(faceMask);
+							 uint32_t stencilWriteMask) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilWriteMask.frontFaceValue = stencilWriteMask;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilWriteMask.backFaceValue = stencilWriteMask;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
 	}
 
 	bool setStencilReference(VkStencilFaceFlags faceMask,
-							 uint32_t) override {
-		return isValidStencilFaceMask(faceMask);
+							 uint32_t stencilReference) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilReference.frontFaceValue = stencilReference;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilReference.backFaceValue = stencilReference;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
 	}
 
 	bool setBlendConstants(const float* blendConstants) override {
@@ -1438,10 +1441,10 @@ public:
 			  uint32_t vertexCount,
 			  uint32_t firstInstance,
 			  uint32_t instanceCount) override {
-		if (!_renderEncoder || !_boundGraphicsPipeline || !_graphicsPipelineBoundForEncoder ||
-			!vertexCount || !instanceCount) {
+		if (!_renderEncoder || !_boundGraphicsPipeline || !vertexCount || !instanceCount) {
 			return false;
 		}
+		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
 		if (!_graphicsViewportScissorAppliedForEncoder &&
 			!applyViewportScissorState()) {
 			return false;
@@ -1599,6 +1602,59 @@ private:
 		return true;
 	}
 
+	id<MTLDepthStencilState> newDepthStencilState(
+		MVKGraphicsPipeline* pipeline,
+		const MVKStencilReference& compareMask,
+		const MVKStencilReference& writeMask) {
+		if (!_mtlDevice || !pipeline) { return nil; }
+		const auto& stateData = pipeline->getStaticStateData();
+		MTLDepthStencilDescriptor* depthStencilDescriptor =
+			[MTLDepthStencilDescriptor new];
+		bool depthTestEnabled =
+			stateData.enable.has(MVKRenderStateEnableFlag::DepthTest);
+		depthStencilDescriptor.depthCompareFunction =
+			depthTestEnabled
+				? (MTLCompareFunction)stateData.depthStencil.depthCompareFunction
+				: MTLCompareFunctionAlways;
+		depthStencilDescriptor.depthWriteEnabled =
+			depthTestEnabled && stateData.depthStencil.depthWriteEnabled;
+		bool stencilTestEnabled = stateData.depthStencil.stencilTestEnabled;
+		auto newStencilDescriptor = [](const MVKMTLStencilDescriptorData& stencilData,
+									  uint32_t readMask,
+									  uint32_t writeMaskValue) {
+			MTLStencilDescriptor* descriptor = [MTLStencilDescriptor new];
+			descriptor.stencilCompareFunction =
+				(MTLCompareFunction)stencilData.op.stencilCompareFunction;
+			descriptor.stencilFailureOperation =
+				(MTLStencilOperation)stencilData.op.stencilFailureOperation;
+			descriptor.depthFailureOperation =
+				(MTLStencilOperation)stencilData.op.depthFailureOperation;
+			descriptor.depthStencilPassOperation =
+				(MTLStencilOperation)stencilData.op.depthStencilPassOperation;
+			descriptor.readMask = readMask;
+			descriptor.writeMask = writeMaskValue;
+			return descriptor;
+		};
+		MTLStencilDescriptor* frontFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.frontFaceStencilData,
+							   compareMask.frontFaceValue,
+							   writeMask.frontFaceValue)
+			: nil;
+		MTLStencilDescriptor* backFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.backFaceStencilData,
+							   compareMask.backFaceValue,
+							   writeMask.backFaceValue)
+			: nil;
+		depthStencilDescriptor.frontFaceStencil = frontFaceStencil;
+		depthStencilDescriptor.backFaceStencil = backFaceStencil;
+		id<MTLDepthStencilState> state =
+			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
+		[frontFaceStencil release];
+		[backFaceStencil release];
+		[depthStencilDescriptor release];
+		return state;
+	}
+
 	bool applyGraphicsPipeline() {
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
@@ -1618,14 +1674,49 @@ private:
 			}
 		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		MVKStencilReference compareMask {
+			stateData.depthStencil.frontFaceStencilData.readMask,
+			stateData.depthStencil.backFaceStencilData.readMask,
+		};
+		MVKStencilReference writeMask {
+			stateData.depthStencil.frontFaceStencilData.writeMask,
+			stateData.depthStencil.backFaceStencilData.writeMask,
+		};
+		if (_boundGraphicsPipeline->usesMetal4DynamicStencilCompareMask()) {
+			compareMask = _dynamicStencilCompareMask;
+		}
+		if (_boundGraphicsPipeline->usesMetal4DynamicStencilWriteMask()) {
+			writeMask = _dynamicStencilWriteMask;
+		}
+		id<MTLDepthStencilState> depthStencilState = nil;
+		for (auto& depthStencil : it->second.depthStencilStates) {
+			if (depthStencil.compareMask.frontFaceValue == compareMask.frontFaceValue &&
+				depthStencil.compareMask.backFaceValue == compareMask.backFaceValue &&
+				depthStencil.writeMask.frontFaceValue == writeMask.frontFaceValue &&
+				depthStencil.writeMask.backFaceValue == writeMask.backFaceValue) {
+				depthStencilState = depthStencil.state;
+				break;
+			}
+		}
+		if (!depthStencilState) {
+			depthStencilState = newDepthStencilState(
+				_boundGraphicsPipeline, compareMask, writeMask);
+			if (!depthStencilState) { return false; }
+			it->second.depthStencilStates.push_back(
+				DepthStencilStateBinding{compareMask, writeMask, depthStencilState});
+		}
 		[_renderEncoder setRenderPipelineState:it->second.pipelineState];
-		[_renderEncoder setDepthStencilState:it->second.depthStencilState];
+		[_renderEncoder setDepthStencilState:depthStencilState];
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
 		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
 		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
 		if (stateData.depthStencil.stencilTestEnabled) {
 			uint32_t frontReference = stateData.stencilReference.frontFaceValue;
 			uint32_t backReference = stateData.stencilReference.backFaceValue;
+			if (_boundGraphicsPipeline->usesMetal4DynamicStencilReference()) {
+				frontReference = _dynamicStencilReference.frontFaceValue;
+				backReference = _dynamicStencilReference.backFaceValue;
+			}
 			if (frontReference == backReference) {
 				[_renderEncoder setStencilReferenceValue:frontReference];
 			} else {
@@ -1799,6 +1890,9 @@ private:
 	uint32_t _dynamicViewportCount = 0;
 	uint32_t _dynamicScissorCount = 0;
 	MVKColor32 _dynamicBlendConstants = {};
+	MVKStencilReference _dynamicStencilCompareMask = {};
+	MVKStencilReference _dynamicStencilWriteMask = {};
+	MVKStencilReference _dynamicStencilReference = {};
 	bool _graphicsPipelineBoundForEncoder = false;
 	bool _graphicsResourcesBoundForEncoder = false;
 	bool _graphicsViewportScissorAppliedForEncoder = false;

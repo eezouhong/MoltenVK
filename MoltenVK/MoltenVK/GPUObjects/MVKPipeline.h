@@ -427,6 +427,15 @@ public:
 	bool usesMetal4DynamicBlendConstants() const {
 		return _dynamicStateFlags.has(MVKRenderStateFlag::BlendConstants);
 	}
+	bool usesMetal4DynamicStencilCompareMask() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilCompareMask);
+	}
+	bool usesMetal4DynamicStencilWriteMask() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilWriteMask);
+	}
+	bool usesMetal4DynamicStencilReference() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilReference);
+	}
 	bool usesMetal4BlendConstants() const {
 		return usesMetal4DynamicBlendConstants() ||
 			_staticStateFlags.has(MVKRenderStateFlag::BlendConstants);

@@ -1426,6 +1426,11 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	mvkClear(_shouldClearAtt, kMVKClearAttachmentCount);
 	_metal4Info = {};
 	_supportsMetal4Encoding = false;
+	_metal4UnsupportedReason = "clear_attachments_unknown";
+	auto rejectMetal4 = [this](const char* reason) {
+		_metal4UnsupportedReason = reason;
+		return VK_SUCCESS;
+	};
 
     for (uint32_t i = 0; i < attachmentCount; i++) {
         auto& clrAtt = pAttachments[i];
@@ -1456,25 +1461,32 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	const VkRenderingInfo* renderingInfo =
 		cmdBuff ? cmdBuff->_currentSubpassInfo.renderingInfo : nullptr;
 	uint32_t subpassIndex = cmdBuff ? cmdBuff->_currentSubpassInfo.subpassIndex : 0;
-	if (_commandUse != kMVKCommandUseClearAttachments ||
-		(!renderPass && !renderingInfo) || subpassIndex != 0 ||
-		!rectCount || !pRects) {
-		return VK_SUCCESS;
+	if (_commandUse != kMVKCommandUseClearAttachments) {
+		return rejectMetal4("clear_non_attachment_use");
 	}
+	if (!renderPass && !renderingInfo) {
+		return rejectMetal4("clear_missing_render_scope");
+	}
+	if (subpassIndex != 0) { return rejectMetal4("clear_subpass_index"); }
+	if (!rectCount || !pRects) { return rejectMetal4("clear_missing_rect"); }
 
 	if (renderingInfo) {
-		if (renderingInfo->flags != 0 || renderingInfo->viewMask != 0 ||
-			renderingInfo->layerCount != 1 ||
-			renderingInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount ||
-			(renderingInfo->colorAttachmentCount &&
-			 !renderingInfo->pColorAttachments)) {
-			return VK_SUCCESS;
+		if (renderingInfo->flags != 0) { return rejectMetal4("dynamic_clear_flags"); }
+		if (renderingInfo->viewMask != 0) { return rejectMetal4("dynamic_clear_multiview"); }
+		if (renderingInfo->layerCount != 1) {
+			return rejectMetal4("dynamic_clear_layer_count");
+		}
+		if (renderingInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+			return rejectMetal4("dynamic_clear_color_count");
+		}
+		if (renderingInfo->colorAttachmentCount && !renderingInfo->pColorAttachments) {
+			return rejectMetal4("dynamic_clear_color_attachments_missing");
 		}
 		for (const auto& rect : _clearRects) {
 			if (rect.baseArrayLayer != 0 || rect.layerCount != 1 ||
 				rect.rect.offset.x < 0 || rect.rect.offset.y < 0 ||
 				!rect.rect.extent.width || !rect.rect.extent.height) {
-				return VK_SUCCESS;
+				return rejectMetal4("dynamic_clear_rect");
 			}
 		}
 
@@ -1483,8 +1495,11 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_metal4Info.colorAttachmentCount = renderingInfo->colorAttachmentCount;
 		for (uint32_t caIdx = 0; caIdx < _metal4Info.colorAttachmentCount; caIdx++) {
 			auto* imageView = (MVKImageView*)renderingInfo->pColorAttachments[caIdx].imageView;
-			if (!imageView || imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
-				return VK_SUCCESS;
+			if (!imageView) {
+				return rejectMetal4("dynamic_clear_color_attachment_missing");
+			}
+			if (imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+				return rejectMetal4("dynamic_clear_multisample");
 			}
 			_metal4Info.colorAttachmentFormats[caIdx] = imageView->getVkFormat();
 			if (_shouldClearAtt[caIdx]) {
@@ -1494,7 +1509,9 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		}
 		for (uint32_t caIdx = _metal4Info.colorAttachmentCount;
 			 caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
-			if (_shouldClearAtt[caIdx]) { return VK_SUCCESS; }
+			if (_shouldClearAtt[caIdx]) {
+				return rejectMetal4("dynamic_clear_color_attachment_unused");
+			}
 		}
 
 		auto* depthView = renderingInfo->pDepthAttachment
@@ -1506,10 +1523,12 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_metal4Info.clearStencil =
 			_shouldClearAtt[kMVKClearAttachmentStencilIndex] && stencilView;
 		if ((_shouldClearAtt[kMVKClearAttachmentDepthIndex] && !depthView) ||
-			(_shouldClearAtt[kMVKClearAttachmentStencilIndex] && !stencilView) ||
-			(depthView && depthView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) ||
+			(_shouldClearAtt[kMVKClearAttachmentStencilIndex] && !stencilView)) {
+			return rejectMetal4("dynamic_clear_depth_stencil_attachment_missing");
+		}
+		if ((depthView && depthView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) ||
 			(stencilView && stencilView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT)) {
-			return VK_SUCCESS;
+			return rejectMetal4("dynamic_clear_depth_stencil_multisample");
 		}
 		_metal4Info.depthFormat = depthView ? depthView->getVkFormat() : VK_FORMAT_UNDEFINED;
 		_metal4Info.stencilFormat = stencilView ? stencilView->getVkFormat() : VK_FORMAT_UNDEFINED;
@@ -1517,21 +1536,28 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_metal4Info.rects = _clearRects.data();
 		_metal4Info.rectCount = _clearRects.size();
 		_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
+		_metal4UnsupportedReason = _supportsMetal4Encoding
+			? nullptr : "dynamic_clear_encoding_pool_missing";
 		return VK_SUCCESS;
 	}
 
-	if (renderPass->getSubpassCount() != 1) { return VK_SUCCESS; }
+	if (renderPass->getSubpassCount() != 1) {
+		return rejectMetal4("classic_clear_subpass_count");
+	}
 	MVKRenderSubpass* subpass = renderPass->getSubpass(subpassIndex);
-	if (!subpass || subpass->isMultiview() ||
-		subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT ||
-		subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
-		return VK_SUCCESS;
+	if (!subpass) { return rejectMetal4("classic_clear_subpass_missing"); }
+	if (subpass->isMultiview()) { return rejectMetal4("classic_clear_multiview"); }
+	if (subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		return rejectMetal4("classic_clear_multisample");
+	}
+	if (subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
+		return rejectMetal4("classic_clear_color_count");
 	}
 	for (const auto& rect : _clearRects) {
 		if (rect.baseArrayLayer != 0 || rect.layerCount != 1 ||
 			rect.rect.offset.x < 0 || rect.rect.offset.y < 0 ||
 			!rect.rect.extent.width || !rect.rect.extent.height) {
-			return VK_SUCCESS;
+			return rejectMetal4("classic_clear_rect");
 		}
 	}
 
@@ -1544,7 +1570,7 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		if (clearIdx != VK_ATTACHMENT_UNUSED && _shouldClearAtt[clearIdx]) {
 			if (!subpass->isColorAttachmentUsed(caIdx) ||
 				subpass->isColorAttachmentAlsoInputAttachment(caIdx)) {
-				return VK_SUCCESS;
+				return rejectMetal4("classic_clear_color_attachment_unsupported");
 			}
 			_metal4Info.clearColors[caIdx] = true;
 			_metal4Info.colorValues[caIdx] = getClearColorValue(clearIdx);
@@ -1560,12 +1586,14 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_shouldClearAtt[kMVKClearAttachmentStencilIndex];
 	if ((_metal4Info.clearDepth || _metal4Info.clearStencil) &&
 		subpass->isInputAttachmentDepthStencilAttachment()) {
-		return VK_SUCCESS;
+		return rejectMetal4("classic_clear_depth_stencil_input_attachment");
 	}
 	_metal4Info.depthStencilValue = _clearDepthStencilValue;
 	_metal4Info.rects = _clearRects.data();
 	_metal4Info.rectCount = _clearRects.size();
 	_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
+	_metal4UnsupportedReason = _supportsMetal4Encoding
+		? nullptr : "classic_clear_encoding_pool_missing";
 
 	return VK_SUCCESS;
 }

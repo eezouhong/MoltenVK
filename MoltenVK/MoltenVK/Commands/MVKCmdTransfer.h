@@ -282,6 +282,9 @@ public:
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
 	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	const char* getMetal4UnsupportedReason() const override {
+		return _metal4UnsupportedReason ? _metal4UnsupportedReason : getMetal4CommandTypeName();
+	}
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
@@ -302,6 +305,7 @@ protected:
 	bool _shouldClearAtt[kMVKClearAttachmentCount];
 	MVKMetal4ClearAttachmentsInfo _metal4Info = {};
 	bool _supportsMetal4Encoding = false;
+	const char* _metal4UnsupportedReason = nullptr;
 };
 
 

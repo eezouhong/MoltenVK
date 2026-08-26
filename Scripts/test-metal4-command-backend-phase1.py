@@ -866,8 +866,13 @@ def main() -> int:
         ),
         (
             transfer_mm + queue_mm + e2e,
-            r"MVKCmdClearAttachments<N>::setContent[\s\S]*?!subpass\s*\|\|\s*subpass->isMultiview\(\)[\s\S]*?useClearAttachments[\s\S]*?DYNAMIC_CLEAR_ATTACHMENTS_OK",
+            r"MVKCmdClearAttachments<N>::setContent[\s\S]*?if \(renderingInfo\)[\s\S]*?dynamic_clear_flags[\s\S]*?useClearAttachments[\s\S]*?DYNAMIC_CLEAR_ATTACHMENTS_OK",
             "dynamic-rendering single attachment clears are not admitted and exercised on Metal 4",
+        ),
+        (
+            transfer_h + transfer_mm,
+            r"MVKCmdClearAttachments[\s\S]*?getMetal4UnsupportedReason[\s\S]*?_metal4UnsupportedReason[\s\S]*?dynamic_clear_flags[\s\S]*?dynamic_clear_multiview[\s\S]*?dynamic_clear_layer_count[\s\S]*?dynamic_clear_rect[\s\S]*?dynamic_clear_color_attachment_missing[\s\S]*?dynamic_clear_multisample[\s\S]*?dynamic_clear_depth_stencil_attachment_missing[\s\S]*?classic_clear_multisample",
+            "clear-attachment fallback telemetry does not identify the actual unsupported shape",
         ),
         (
             queries_h + queries_mm + queue_mm + query_pool_h + e2e,

@@ -3069,9 +3069,10 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		stageSupportsArgumentTable(kMVKShaderStageFragment) &&
 		(_stageResources[kMVKShaderStageVertex].resources.descriptorSetData.areAnyBitsSet() ||
 		 _stageResources[kMVKShaderStageFragment].resources.descriptorSetData.areAnyBitsSet());
-	bool hasSupportedStaticVertexInput = pVI &&
-		!_dynamicStateFlags.has(MVKRenderStateFlag::VertexStride) &&
+	bool hasSupportedVertexInput = pVI &&
 		_translatedVertexBindings.empty() && _zeroDivisorVertexBindings.empty();
+	bool hasUnsupportedDynamicState =
+		!_dynamicStateFlags.removing(MVKRenderStateFlag::VertexStride).empty();
 	bool hasStrictFixedFunction =
 		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
 		!pIA->primitiveRestartEnable &&
@@ -3082,7 +3083,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
 		pVP && pVP->viewportCount == 1 && pVP->scissorCount == 1 &&
 		pVP->pViewports && pVP->pScissors &&
-		_dynamicStateFlags.empty() &&
+		!hasUnsupportedDynamicState &&
 		_staticStateData.numViewports == 1 && _staticStateData.numScissors == 1 &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthTest) &&
@@ -3092,11 +3093,11 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
 		hasOneDynamicColorAttachment && hasDescriptorlessShaderStages &&
-		hasSupportedStaticVertexInput && hasStrictFixedFunction;
+		hasSupportedVertexInput && hasStrictFixedFunction;
 	_supportsMetal4ArgumentTableRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
 		hasOneDynamicColorAttachment && hasArgumentTableShaderStages &&
-		hasSupportedStaticVertexInput && hasStrictFixedFunction;
+		hasSupportedVertexInput && hasStrictFixedFunction;
 	if (supportsMetal4RenderExecution()) {
 		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
 		_metal4RenderExecutionUnsupportedReason = nullptr;
@@ -3104,13 +3105,13 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:descriptor_resources";
-	} else if (!hasSupportedStaticVertexInput) {
+	} else if (!hasSupportedVertexInput) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:vertex_input";
 	} else if (!hasOneDynamicColorAttachment) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:depth_stencil_or_mrt";
-	} else if (!_dynamicStateFlags.empty()) {
+	} else if (hasUnsupportedDynamicState) {
 		_metal4RenderExecutionUnsupportedReason =
 			"MVKCmdBindGraphicsPipeline:dynamic_state";
 	} else if (!_mtlPipelineState) {

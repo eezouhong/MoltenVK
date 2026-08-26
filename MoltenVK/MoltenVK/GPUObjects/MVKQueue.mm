@@ -593,6 +593,7 @@ public:
 		id<MTLBuffer> buffer = nil;
 		NSUInteger offset = 0;
 		NSUInteger size = 0;
+		NSUInteger stride = 0;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
@@ -1118,6 +1119,7 @@ public:
 				binding.mtlBuffer,
 				static_cast<NSUInteger>(binding.offset),
 				binding.size ? binding.size : bufferLength - binding.offset,
+				binding.stride,
 			};
 		}
 		_graphicsResourcesBoundForEncoder = false;
@@ -1280,6 +1282,7 @@ private:
 		descriptor.maxTextureBindCount = kMVKMaxTextureCount;
 		descriptor.maxSamplerStateBindCount = kMVKMaxSamplerCount;
 		descriptor.initializeBindings = YES;
+		descriptor.supportAttributeStrides = YES;
 		NSError* error = nil;
 		_argumentTable = [_mtlDevice newArgumentTableWithDescriptor:descriptor error:&error];
 		[descriptor release];
@@ -1337,8 +1340,14 @@ private:
 			uint32_t metalBinding =
 				_boundGraphicsPipeline->getMetalBufferIndexForVertexAttributeBinding(
 					static_cast<uint32_t>(vkBinding));
-			[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
-							 atIndex:metalBinding];
+			if (_boundGraphicsPipeline->usesMetal4DynamicVertexStride()) {
+				[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
+						 attributeStride:vertexBuffer.stride
+								 atIndex:metalBinding];
+			} else {
+				[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
+								 atIndex:metalBinding];
+			}
 			stages |= MTLRenderStageVertex;
 		}
 		if (_boundGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution()) {

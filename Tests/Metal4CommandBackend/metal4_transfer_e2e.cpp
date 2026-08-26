@@ -621,6 +621,11 @@ int main() {
         if (hasExtension(deviceExtensions, kDynamicRendering)) {
             enabledDeviceExtensions.push_back(kDynamicRendering);
         }
+        constexpr const char* kExtendedDynamicState = "VK_EXT_extended_dynamic_state";
+        if (!hasExtension(deviceExtensions, kExtendedDynamicState)) {
+            fail("Extended dynamic state is unavailable");
+        }
+        enabledDeviceExtensions.push_back(kExtendedDynamicState);
 
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queueCreateInfo = makeVkStruct<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
@@ -629,6 +634,10 @@ int main() {
         queueCreateInfo.pQueuePriorities = &priority;
 
         VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures = makeVkStruct<VkPhysicalDeviceDynamicRenderingFeatures>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES);
+        VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures =
+            makeVkStruct<VkPhysicalDeviceExtendedDynamicStateFeaturesEXT>(
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT);
+        dynamicRenderingFeatures.pNext = &extendedDynamicStateFeatures;
         VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeatures = makeVkStruct<VkPhysicalDeviceTimelineSemaphoreFeatures>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES);
         timelineFeatures.pNext = &dynamicRenderingFeatures;
         VkPhysicalDeviceFeatures2 supportedFeatures = makeVkStruct<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
@@ -636,8 +645,12 @@ int main() {
         vkGetPhysicalDeviceFeatures2(physicalDevice, &supportedFeatures);
         if (!timelineFeatures.timelineSemaphore) { fail("Timeline semaphores are unavailable"); }
         if (!dynamicRenderingFeatures.dynamicRendering) { fail("Dynamic rendering is unavailable"); }
+        if (!extendedDynamicStateFeatures.extendedDynamicState) {
+            fail("Extended dynamic state feature is unavailable");
+        }
         timelineFeatures.timelineSemaphore = VK_TRUE;
         dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
+        extendedDynamicStateFeatures.extendedDynamicState = VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo = makeVkStruct<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
         deviceCreateInfo.pNext = &timelineFeatures;
@@ -1253,6 +1266,74 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "VERTEX_RENDER_OK" << std::endl;
 
+        // Ryujinx commonly declares the vertex binding stride dynamic and
+        // supplies it with vkCmdBindVertexBuffers2. Metal 4 argument tables
+        // carry that stride beside the GPU address for vertex-stage fetches.
+        VkDynamicState dynamicVertexStride =
+            VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE;
+        VkPipelineDynamicStateCreateInfo dynamicVertexState =
+            makeVkStruct<VkPipelineDynamicStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+        dynamicVertexState.dynamicStateCount = 1;
+        dynamicVertexState.pDynamicStates = &dynamicVertexStride;
+        graphicsInfo.pDynamicState = &dynamicVertexState;
+        VkPipeline dynamicVertexPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &dynamicVertexPipeline),
+              "vkCreateGraphicsPipelines(dynamic vertex stride)");
+
+        VkCommandBuffer prepareDynamicVertexRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(prepareDynamicVertexRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        endCommandBuffer(prepareDynamicVertexRender);
+        VkCommandBuffer dynamicVertexRender = beginCommandBuffer(device, commandPool);
+        vkCmdBeginRendering(dynamicVertexRender, &renderingInfo);
+        vkCmdBindPipeline(dynamicVertexRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          dynamicVertexPipeline);
+        VkDeviceSize vertexSize = sizeof(vertexPositions);
+        VkDeviceSize dynamicStride = sizeof(float) * 2;
+        vkCmdBindVertexBuffers2(dynamicVertexRender, 0, 1, &vertexBuffer.buffer,
+                                &vertexOffset, &vertexSize, &dynamicStride);
+        vkCmdDraw(dynamicVertexRender, 3, 1, 0, 0);
+        vkCmdEndRendering(dynamicVertexRender);
+        endCommandBuffer(dynamicVertexRender);
+        VkCommandBuffer finishDynamicVertexRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishDynamicVertexRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishDynamicVertexRender);
+        VkCommandBuffer readDynamicVertexRender = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readDynamicVertexRender, renderTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               renderReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readDynamicVertexRender);
+        std::array<VkSubmitInfo, 4> dynamicVertexSubmits{};
+        for (auto& submit : dynamicVertexSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        dynamicVertexSubmits[0].commandBufferCount = 1;
+        dynamicVertexSubmits[0].pCommandBuffers = &prepareDynamicVertexRender;
+        dynamicVertexSubmits[1].commandBufferCount = 1;
+        dynamicVertexSubmits[1].pCommandBuffers = &dynamicVertexRender;
+        dynamicVertexSubmits[2].commandBufferCount = 1;
+        dynamicVertexSubmits[2].pCommandBuffers = &finishDynamicVertexRender;
+        dynamicVertexSubmits[3].commandBufferCount = 1;
+        dynamicVertexSubmits[3].pCommandBuffers = &readDynamicVertexRender;
+        VkFence dynamicVertexFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(dynamicVertexSubmits.size()),
+                            dynamicVertexSubmits.data(), dynamicVertexFence),
+              "vkQueueSubmit(dynamic vertex render sequence)");
+        waitFence(device, dynamicVertexFence);
+        validateSolidColor(device, renderReadback, {64, 128, 191, 255});
+        std::cout << "DYNAMIC_VERTEX_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -1335,6 +1416,8 @@ int main() {
 
         check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
+        vkDestroyFence(device, dynamicVertexFence, nullptr);
+        vkDestroyPipeline(device, dynamicVertexPipeline, nullptr);
         vkDestroyFence(device, vertexFence, nullptr);
         vkDestroyPipeline(device, vertexInputPipeline, nullptr);
         vkDestroyShaderModule(device, vertexInputModule, nullptr);

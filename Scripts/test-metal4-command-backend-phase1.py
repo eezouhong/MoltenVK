@@ -362,8 +362,8 @@ def main() -> int:
     )
     require(
         pipeline_h + pipeline_mm,
-        r"hasSupportedStaticVertexInput[\s\S]*?VertexStride[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)",
-        "static vertex-input eligibility does not reject dynamic or translated bindings",
+        r"hasSupportedVertexInput[\s\S]*?_translatedVertexBindings\.empty\(\)[\s\S]*?_zeroDivisorVertexBindings\.empty\(\)[\s\S]*?removing\(MVKRenderStateFlag::VertexStride\)",
+        "vertex-input eligibility does not isolate dynamic stride from unsupported translations",
     )
     require(
         draw_h + draw_mm,
@@ -374,6 +374,11 @@ def main() -> int:
         queue_mm,
         r"getVkVertexBuffers[\s\S]*?getMetalBufferIndexForVertexAttributeBinding[\s\S]*?setAddress:[\s\S]*?MTLRenderStageVertex",
         "static vertex buffers are not mapped into the Metal 4 argument table",
+    )
+    require(
+        pipeline_h + queue_mm,
+        r"usesMetal4DynamicVertexStride[\s\S]*?supportAttributeStrides\s*=\s*YES[\s\S]*?setAddress:[\s\S]*?attributeStride:",
+        "dynamic vertex stride is not snapshotted into the Metal 4 argument table",
     )
     require(
         pipeline_h + pipeline_mm,

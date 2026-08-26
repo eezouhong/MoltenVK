@@ -415,6 +415,9 @@ public:
 
 	/** Returns whether the strict Metal 4 slice consumes static vertex buffers. */
 	bool usesMetal4VertexInput() const { return _vkVertexBuffers.areAnyBitsSet(); }
+	bool usesMetal4DynamicVertexStride() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::VertexStride);
+	}
 
 	/** Returns whether this pipeline needs the shared MTL4 argument table. */
 	bool requiresMetal4ArgumentTable() const {

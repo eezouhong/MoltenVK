@@ -2182,6 +2182,14 @@ int main() {
                                   "vkQueueSubmit(dynamic scissor)");
         std::cout << "DYNAMIC_VIEWPORT_SCISSOR_OK" << std::endl;
 
+        VkRect2D oversizedScissor = halfScissor;
+        oversizedScissor.extent.height = kImageHeight * 2;
+        runDynamicViewportScissor(dynamicViewportScissorPipeline,
+                                  &viewport, 1, &oversizedScissor, 1,
+                                  false, false, false,
+                                  "vkQueueSubmit(oversized dynamic scissor)");
+        std::cout << "OVERSIZED_SCISSOR_CLIP_OK" << std::endl;
+
         std::array<VkViewport, 2> multiViewports{{halfViewport, viewport}};
         std::array<VkRect2D, 2> multiScissors{{scissor, scissor}};
         viewportState.viewportCount = static_cast<uint32_t>(multiViewports.size());

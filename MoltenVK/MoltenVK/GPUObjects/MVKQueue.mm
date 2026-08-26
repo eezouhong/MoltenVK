@@ -1491,6 +1491,7 @@ public:
 		_currentRenderWidth = firstColorBinding->width;
 		_currentRenderHeight = firstColorBinding->height;
 		_currentRenderLayerCount = renderingInfo.layerCount;
+		_currentRenderArea = renderingInfo.renderArea;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -1594,6 +1595,7 @@ public:
 		_currentRenderWidth = extent.width;
 		_currentRenderHeight = extent.height;
 		_currentRenderLayerCount = framebuffer->getLayerCount();
+		_currentRenderArea = renderArea;
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -2062,6 +2064,7 @@ public:
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_currentRenderLayerCount = 0;
+		_currentRenderArea = {};
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -2193,6 +2196,7 @@ private:
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
 		_currentRenderLayerCount = 0;
+		_currentRenderArea = {};
 		_graphicsPipelineBoundForEncoder = false;
 		_graphicsResourcesBoundForEncoder = false;
 		_graphicsViewportScissorAppliedForEncoder = false;
@@ -2375,41 +2379,70 @@ private:
 		uint32_t viewportCount = 0;
 		uint32_t scissorCount = 0;
 		if (_boundGraphicsPipeline->usesMetal4DynamicViewport()) {
-			if (_dynamicViewportCount == 0) { return false; }
+			if (_dynamicViewportCount == 0) {
+				return failMetal4Encoding("viewport_scissor_dynamic_viewport_unset");
+			}
 			viewport = _dynamicViewports.data();
 			viewportCount = _dynamicViewportCount;
 		} else {
-			if (stateData.numViewports != 1) { return false; }
+			if (stateData.numViewports != 1) {
+				return failMetal4Encoding("viewport_scissor_static_viewport_count_unsupported");
+			}
 			viewport = _boundGraphicsPipeline->getViewports();
 			viewportCount = 1;
 		}
 		if (_boundGraphicsPipeline->usesMetal4DynamicScissor()) {
-			if (_dynamicScissorCount == 0) { return false; }
+			if (_dynamicScissorCount == 0) {
+				return failMetal4Encoding("viewport_scissor_dynamic_scissor_unset");
+			}
 			scissor = _dynamicScissors.data();
 			scissorCount = _dynamicScissorCount;
 		} else {
-			if (stateData.numScissors != 1) { return false; }
+			if (stateData.numScissors != 1) {
+				return failMetal4Encoding("viewport_scissor_static_scissor_count_unsupported");
+			}
 			scissor = _boundGraphicsPipeline->getScissors();
 			scissorCount = 1;
 		}
 		if (!viewport || !scissor || viewportCount == 0 || scissorCount == 0 ||
 			viewportCount > kMVKMaxViewportScissorCount ||
 			scissorCount > kMVKMaxViewportScissorCount) {
-			return false;
+			return failMetal4Encoding("viewport_scissor_state_invalid");
 		}
 		MTLViewport mtlViewports[kMVKMaxViewportScissorCount];
 		for (uint32_t viewportIndex = 0; viewportIndex < viewportCount; viewportIndex++) {
 			mtlViewports[viewportIndex] = mvkMTLViewportFromVkViewport(viewport[viewportIndex]);
 		}
 		MTLScissorRect mtlScissors[kMVKMaxViewportScissorCount];
+		uint64_t renderLeft = static_cast<uint64_t>(std::max(_currentRenderArea.offset.x, 0));
+		uint64_t renderTop = static_cast<uint64_t>(std::max(_currentRenderArea.offset.y, 0));
+		uint64_t renderRight = std::min<uint64_t>(
+			renderLeft + _currentRenderArea.extent.width, _currentRenderWidth);
+		uint64_t renderBottom = std::min<uint64_t>(
+			renderTop + _currentRenderArea.extent.height, _currentRenderHeight);
 		for (uint32_t scissorIndex = 0; scissorIndex < scissorCount; scissorIndex++) {
 			const VkRect2D& vkScissor = scissor[scissorIndex];
-			if (vkScissor.offset.x < 0 || vkScissor.offset.y < 0 ||
-				(uint64_t)vkScissor.offset.x + vkScissor.extent.width > _currentRenderWidth ||
-				(uint64_t)vkScissor.offset.y + vkScissor.extent.height > _currentRenderHeight) {
-				return false;
+			if (vkScissor.offset.x < 0 || vkScissor.offset.y < 0) {
+				return failMetal4Encoding("viewport_scissor_negative_offset");
 			}
-			mtlScissors[scissorIndex] = mvkMTLScissorRectFromVkRect2D(vkScissor);
+			uint64_t left = std::max<uint64_t>(vkScissor.offset.x, renderLeft);
+			uint64_t top = std::max<uint64_t>(vkScissor.offset.y, renderTop);
+			uint64_t right = std::min<uint64_t>(
+				static_cast<uint64_t>(vkScissor.offset.x) + vkScissor.extent.width,
+				renderRight);
+			uint64_t bottom = std::min<uint64_t>(
+				static_cast<uint64_t>(vkScissor.offset.y) + vkScissor.extent.height,
+				renderBottom);
+			if (left >= right || top >= bottom) {
+				mtlScissors[scissorIndex] = {0, 0, 0, 0};
+			} else {
+				mtlScissors[scissorIndex] = {
+					static_cast<NSUInteger>(left),
+					static_cast<NSUInteger>(top),
+					static_cast<NSUInteger>(right - left),
+					static_cast<NSUInteger>(bottom - top),
+				};
+			}
 		}
 		[_renderEncoder setViewports:mtlViewports count:viewportCount];
 		[_renderEncoder setScissorRects:mtlScissors count:scissorCount];
@@ -2564,6 +2597,7 @@ private:
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
 	uint32_t _currentRenderLayerCount = 0;
+	VkRect2D _currentRenderArea = {};
 	array<VkViewport, kMVKMaxViewportScissorCount> _dynamicViewports = {};
 	array<VkRect2D, kMVKMaxViewportScissorCount> _dynamicScissors = {};
 	uint32_t _dynamicViewportCount = 0;

@@ -331,8 +331,13 @@ def main() -> int:
     )
     require(
         pipeline_cmd_h + pipeline_cmd_mm,
-        r"getMetal4UnsupportedReason[\s\S]*?barrier_dependency_flags[\s\S]*?barrier_missing_type[\s\S]*?barrier_host_access[\s\S]*?barrier_image_layout[\s\S]*?barrier_image_range[\s\S]*?barrier_queue_family",
+        r"getMetal4UnsupportedReason[\s\S]*?barrier_dependency_flags[\s\S]*?barrier_missing_type[\s\S]*?barrier_host_access[\s\S]*?getMetal4ImageLayoutUnsupportedReason[\s\S]*?barrier_image_range[\s\S]*?barrier_queue_family",
         "Metal 4 barrier fallbacks are not split into actionable reason groups",
+    )
+    require(
+        pipeline_cmd_mm,
+        r"getMetal4ImageLayoutUnsupportedReason[\s\S]*?barrier_image_layout_general[\s\S]*?barrier_image_layout_shader_read[\s\S]*?barrier_image_layout_depth_stencil_read[\s\S]*?barrier_image_layout_present[\s\S]*?barrier_image_layout_undefined[\s\S]*?barrier_image_layout_other",
+        "unsupported Metal 4 image layouts are not classified before widening support",
     )
 
     # Strict ordinary-render slice: one dynamic-rendering color attachment, an optional

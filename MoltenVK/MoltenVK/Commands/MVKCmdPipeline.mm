@@ -56,6 +56,30 @@ template class MVKCmdExecuteCommands<16>;
 #pragma mark -
 #pragma mark MVKCmdPipelineBarrier
 
+static const char* getMetal4ImageLayoutUnsupportedReason(VkImageLayout layout) {
+	switch (layout) {
+		case VK_IMAGE_LAYOUT_GENERAL:
+			return "barrier_image_layout_general";
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:
+			return "barrier_image_layout_shader_read";
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
+			return "barrier_image_layout_depth_stencil_read";
+		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+		case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+			return "barrier_image_layout_present";
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+		case VK_IMAGE_LAYOUT_PREINITIALIZED:
+			return "barrier_image_layout_undefined";
+		default:
+			return "barrier_image_layout_other";
+	}
+}
+
 template <typename Barriers>
 static const char* getMetal4PipelineBarrierUnsupportedReason(
 	VkDependencyFlags dependencyFlags,
@@ -85,7 +109,7 @@ static const char* getMetal4PipelineBarrierUnsupportedReason(
 				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
 				: barrier.layerCount;
 			if (!colorLayout && !depthLayout) {
-				return "barrier_image_layout";
+				return getMetal4ImageLayoutUnsupportedReason(barrier.newLayout);
 			}
 			if (!barrier.mvkImage ||
 				barrier.baseMipLevel >= barrier.mvkImage->getMipLevelCount() ||

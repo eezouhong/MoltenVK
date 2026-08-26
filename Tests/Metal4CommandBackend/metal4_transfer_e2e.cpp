@@ -965,6 +965,31 @@ int main() {
         validateBytes(device, imageReadback, imagePattern);
         std::cout << "IMAGE_DATA_OK" << std::endl;
 
+        // VK_IMAGE_LAYOUT_GENERAL is the dominant Ryujinx image-barrier shape.
+        // Transition the already-populated color image to GENERAL and consume it
+        // in the same MTL4 command buffer so the marker proves both layout-state
+        // publication and real image data, rather than telemetry alone.
+        VkCommandBuffer generalImage = beginCommandBuffer(device, commandPool);
+        imageBarrier(generalImage, dstImage.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_GENERAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyImageToBuffer(generalImage, dstImage.image,
+                               VK_IMAGE_LAYOUT_GENERAL,
+                               imageReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(generalImage);
+        VkFence generalImageFence = createFence(device);
+        VkSubmitInfo generalImageSubmit = makeVkStruct<VkSubmitInfo>(
+            VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        generalImageSubmit.commandBufferCount = 1;
+        generalImageSubmit.pCommandBuffers = &generalImage;
+        check(vkQueueSubmit(queue, 1, &generalImageSubmit, generalImageFence),
+              "vkQueueSubmit(general image layout)");
+        waitFence(device, generalImageFence);
+        validateBytes(device, imageReadback, imagePattern);
+        std::cout << "GENERAL_LAYOUT_IMAGE_OK" << std::endl;
+
         // A real descriptorless graphics pipeline, dynamic-rendering pass, and
         // non-indexed draw must execute through MTL4. A following legacy image
         // readback proves both rendered data and hybrid queue ordering.

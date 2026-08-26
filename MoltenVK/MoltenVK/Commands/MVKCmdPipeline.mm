@@ -102,13 +102,20 @@ static const char* getMetal4PipelineBarrierUnsupportedReason(
 			bool depthLayout = barrier.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
 				(barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
 				 barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+			constexpr VkImageAspectFlags generalAspects =
+				VK_IMAGE_ASPECT_COLOR_BIT |
+				VK_IMAGE_ASPECT_DEPTH_BIT |
+				VK_IMAGE_ASPECT_STENCIL_BIT;
+			bool generalLayout = barrier.newLayout == VK_IMAGE_LAYOUT_GENERAL &&
+				barrier.aspectMask != 0 &&
+				(barrier.aspectMask & ~generalAspects) == 0;
 			uint32_t mipLevelCount = barrier.levelCount == (uint8_t)VK_REMAINING_MIP_LEVELS
 				? barrier.mvkImage ? barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel : 0
 				: barrier.levelCount;
 			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
 				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
 				: barrier.layerCount;
-			if (!colorLayout && !depthLayout) {
+			if (!colorLayout && !depthLayout && !generalLayout) {
 				return getMetal4ImageLayoutUnsupportedReason(barrier.newLayout);
 			}
 			if (!barrier.mvkImage ||

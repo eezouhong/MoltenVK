@@ -339,6 +339,16 @@ def main() -> int:
         r"getMetal4ImageLayoutUnsupportedReason[\s\S]*?barrier_image_layout_general[\s\S]*?barrier_image_layout_shader_read[\s\S]*?barrier_image_layout_depth_stencil_read[\s\S]*?barrier_image_layout_present[\s\S]*?barrier_image_layout_undefined[\s\S]*?barrier_image_layout_other",
         "unsupported Metal 4 image layouts are not classified before widening support",
     )
+    require(
+        pipeline_cmd_mm,
+        r"generalAspects[\s\S]*?VK_IMAGE_ASPECT_COLOR_BIT[\s\S]*?VK_IMAGE_ASPECT_DEPTH_BIT[\s\S]*?VK_IMAGE_ASPECT_STENCIL_BIT[\s\S]*?generalLayout[\s\S]*?VK_IMAGE_LAYOUT_GENERAL",
+        "the validated GENERAL image-layout barrier slice is not enabled",
+    )
+    require(
+        e2e + runner,
+        r"GENERAL_LAYOUT_IMAGE_OK[\s\S]*?GENERAL_LAYOUT_IMAGE_OK",
+        "GENERAL image-layout barriers lack a data-validating E2E gate",
+    )
 
     # Strict ordinary-render slice: one dynamic-rendering color attachment, an optional
     # single-sample depth attachment, a descriptorless graphics pipeline, and a real

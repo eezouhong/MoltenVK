@@ -2006,6 +2006,174 @@ int main() {
         validateSolidColor(device, renderReadback, {64, 128, 191, 255});
         std::cout << "CLASSIC_INACTIVE_STENCIL_RENDER_OK" << std::endl;
 
+        // Static stencil execution must preserve all three Vulkan semantics:
+        // an ALWAYS/REPLACE pass writes the reference, EQUAL accepts that
+        // value, and the same comparison rejects a different reference.
+        VkPipelineDepthStencilStateCreateInfo activeStencilWriteState =
+            makeVkStruct<VkPipelineDepthStencilStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+        activeStencilWriteState.stencilTestEnable = VK_TRUE;
+        activeStencilWriteState.front.failOp = VK_STENCIL_OP_KEEP;
+        activeStencilWriteState.front.passOp = VK_STENCIL_OP_REPLACE;
+        activeStencilWriteState.front.depthFailOp = VK_STENCIL_OP_KEEP;
+        activeStencilWriteState.front.compareOp = VK_COMPARE_OP_ALWAYS;
+        activeStencilWriteState.front.compareMask = 0xff;
+        activeStencilWriteState.front.writeMask = 0xff;
+        activeStencilWriteState.front.reference = 42;
+        activeStencilWriteState.back = activeStencilWriteState.front;
+        graphicsInfo.pDepthStencilState = &activeStencilWriteState;
+        VkPipeline activeStencilWritePipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &activeStencilWritePipeline),
+              "vkCreateGraphicsPipelines(static stencil write)");
+
+        VkPipelineDepthStencilStateCreateInfo activeStencilMatchState =
+            activeStencilWriteState;
+        activeStencilMatchState.front.failOp = VK_STENCIL_OP_KEEP;
+        activeStencilMatchState.front.passOp = VK_STENCIL_OP_KEEP;
+        activeStencilMatchState.front.depthFailOp = VK_STENCIL_OP_KEEP;
+        activeStencilMatchState.front.compareOp = VK_COMPARE_OP_EQUAL;
+        activeStencilMatchState.front.writeMask = 0;
+        activeStencilMatchState.front.reference = 42;
+        activeStencilMatchState.back = activeStencilMatchState.front;
+        graphicsInfo.pDepthStencilState = &activeStencilMatchState;
+        VkPipeline activeStencilMatchPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &activeStencilMatchPipeline),
+              "vkCreateGraphicsPipelines(static stencil match)");
+
+        VkPipelineDepthStencilStateCreateInfo activeStencilMismatchState =
+            activeStencilMatchState;
+        activeStencilMismatchState.front.reference = 41;
+        activeStencilMismatchState.back = activeStencilMismatchState.front;
+        graphicsInfo.pDepthStencilState = &activeStencilMismatchState;
+        VkPipeline activeStencilMismatchPipeline = VK_NULL_HANDLE;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsInfo,
+                                        nullptr, &activeStencilMismatchPipeline),
+              "vkCreateGraphicsPipelines(static stencil mismatch)");
+
+        std::array<VkAttachmentDescription, 2> activeStencilLoadDescriptions =
+            classicStencilDescriptions;
+        activeStencilLoadDescriptions[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        activeStencilLoadDescriptions[0].finalLayout =
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        activeStencilLoadDescriptions[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        activeStencilLoadDescriptions[1].initialLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkRenderPassCreateInfo activeStencilLoadRenderPassInfo =
+            classicStencilRenderPassInfo;
+        activeStencilLoadRenderPassInfo.pAttachments =
+            activeStencilLoadDescriptions.data();
+        VkRenderPass activeStencilLoadRenderPass = VK_NULL_HANDLE;
+        check(vkCreateRenderPass(device, &activeStencilLoadRenderPassInfo, nullptr,
+                                 &activeStencilLoadRenderPass),
+              "vkCreateRenderPass(static stencil load)");
+
+        Image activeStencilMatchTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight);
+        Image activeStencilMismatchTarget = createImage(
+            physicalDevice, device, kImageWidth, kImageHeight);
+        Buffer activeStencilMatchReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        Buffer activeStencilMismatchReadback = createBuffer(
+            physicalDevice, device, kImageBytes);
+        std::array<VkImageView, 2> activeStencilMatchViews{{
+            activeStencilMatchTarget.view, classicStencilTarget.view,
+        }};
+        VkFramebufferCreateInfo activeStencilMatchFramebufferInfo =
+            classicStencilFramebufferInfo;
+        activeStencilMatchFramebufferInfo.renderPass = activeStencilLoadRenderPass;
+        activeStencilMatchFramebufferInfo.pAttachments =
+            activeStencilMatchViews.data();
+        VkFramebuffer activeStencilMatchFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &activeStencilMatchFramebufferInfo, nullptr,
+                                  &activeStencilMatchFramebuffer),
+              "vkCreateFramebuffer(static stencil match)");
+        std::array<VkImageView, 2> activeStencilMismatchViews{{
+            activeStencilMismatchTarget.view, classicStencilTarget.view,
+        }};
+        VkFramebufferCreateInfo activeStencilMismatchFramebufferInfo =
+            activeStencilMatchFramebufferInfo;
+        activeStencilMismatchFramebufferInfo.pAttachments =
+            activeStencilMismatchViews.data();
+        VkFramebuffer activeStencilMismatchFramebuffer = VK_NULL_HANDLE;
+        check(vkCreateFramebuffer(device, &activeStencilMismatchFramebufferInfo, nullptr,
+                                  &activeStencilMismatchFramebuffer),
+              "vkCreateFramebuffer(static stencil mismatch)");
+
+        VkCommandBuffer activeStencilRender = beginCommandBuffer(device, commandPool);
+        imageBarrier(activeStencilRender, renderTarget.image,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        vkCmdBeginRenderPass(activeStencilRender, &classicStencilBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(activeStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          activeStencilWritePipeline);
+        vkCmdDraw(activeStencilRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(activeStencilRender);
+        VkRenderPassBeginInfo activeStencilMatchBegin = classicStencilBegin;
+        activeStencilMatchBegin.renderPass = activeStencilLoadRenderPass;
+        activeStencilMatchBegin.framebuffer = activeStencilMatchFramebuffer;
+        vkCmdBeginRenderPass(activeStencilRender, &activeStencilMatchBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(activeStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          activeStencilMatchPipeline);
+        vkCmdDraw(activeStencilRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(activeStencilRender);
+        VkRenderPassBeginInfo activeStencilMismatchBegin = activeStencilMatchBegin;
+        activeStencilMismatchBegin.framebuffer = activeStencilMismatchFramebuffer;
+        vkCmdBeginRenderPass(activeStencilRender, &activeStencilMismatchBegin,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(activeStencilRender, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          activeStencilMismatchPipeline);
+        vkCmdDraw(activeStencilRender, 3, 1, 0, 0);
+        vkCmdEndRenderPass(activeStencilRender);
+        endCommandBuffer(activeStencilRender);
+
+        VkCommandBuffer finishActiveStencil = beginCommandBuffer(device, commandPool);
+        imageBarrier(finishActiveStencil, activeStencilMatchTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        imageBarrier(finishActiveStencil, activeStencilMismatchTarget.image,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT);
+        endCommandBuffer(finishActiveStencil);
+        VkCommandBuffer readActiveStencil = beginCommandBuffer(device, commandPool);
+        vkCmdCopyImageToBuffer(readActiveStencil, activeStencilMatchTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               activeStencilMatchReadback.buffer, 1, &imageRegion);
+        vkCmdCopyImageToBuffer(readActiveStencil, activeStencilMismatchTarget.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               activeStencilMismatchReadback.buffer, 1, &imageRegion);
+        endCommandBuffer(readActiveStencil);
+        std::array<VkSubmitInfo, 3> activeStencilSubmits{};
+        for (auto& submit : activeStencilSubmits) {
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        }
+        activeStencilSubmits[0].commandBufferCount = 1;
+        activeStencilSubmits[0].pCommandBuffers = &activeStencilRender;
+        activeStencilSubmits[1].commandBufferCount = 1;
+        activeStencilSubmits[1].pCommandBuffers = &finishActiveStencil;
+        activeStencilSubmits[2].commandBufferCount = 1;
+        activeStencilSubmits[2].pCommandBuffers = &readActiveStencil;
+        VkFence activeStencilFence = createFence(device);
+        check(vkQueueSubmit(queue, static_cast<uint32_t>(activeStencilSubmits.size()),
+                            activeStencilSubmits.data(), activeStencilFence),
+              "vkQueueSubmit(static stencil sequence)");
+        waitFence(device, activeStencilFence);
+        validateSolidColor(device, activeStencilMatchReadback, {64, 128, 191, 255});
+        validateSolidColor(device, activeStencilMismatchReadback, {255, 0, 0, 255});
+        std::cout << "CLASSIC_STATIC_STENCIL_RENDER_OK" << std::endl;
+
         // An isolated query reset must stay on the MTL4 backend and publish the
         // unavailable state only after the reset command buffer commits.
         VkQueryPoolCreateInfo queryPoolInfo = makeVkStruct<VkQueryPoolCreateInfo>(
@@ -2090,6 +2258,17 @@ int main() {
 
         vkDestroyFence(device, classicFence, nullptr);
         vkDestroyFence(device, classicStencilFence, nullptr);
+        vkDestroyFence(device, activeStencilFence, nullptr);
+        vkDestroyPipeline(device, activeStencilWritePipeline, nullptr);
+        vkDestroyPipeline(device, activeStencilMatchPipeline, nullptr);
+        vkDestroyPipeline(device, activeStencilMismatchPipeline, nullptr);
+        vkDestroyFramebuffer(device, activeStencilMatchFramebuffer, nullptr);
+        vkDestroyFramebuffer(device, activeStencilMismatchFramebuffer, nullptr);
+        vkDestroyRenderPass(device, activeStencilLoadRenderPass, nullptr);
+        activeStencilMatchTarget.destroy();
+        activeStencilMismatchTarget.destroy();
+        activeStencilMatchReadback.destroy();
+        activeStencilMismatchReadback.destroy();
         vkDestroyPipeline(device, classicInactiveStencilPipeline, nullptr);
         vkDestroyFramebuffer(device, classicStencilFramebuffer, nullptr);
         vkDestroyRenderPass(device, classicStencilRenderPass, nullptr);

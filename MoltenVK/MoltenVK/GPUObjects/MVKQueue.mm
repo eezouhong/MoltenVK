@@ -739,8 +739,33 @@ public:
 				: MTLCompareFunctionAlways;
 		depthStencilDescriptor.depthWriteEnabled =
 			depthTestEnabled && stateData.depthStencil.depthWriteEnabled;
+		bool stencilTestEnabled = stateData.depthStencil.stencilTestEnabled;
+		auto newStencilDescriptor = [](const MVKMTLStencilDescriptorData& stencilData) {
+			MTLStencilDescriptor* descriptor = [MTLStencilDescriptor new];
+			descriptor.stencilCompareFunction =
+				(MTLCompareFunction)stencilData.op.stencilCompareFunction;
+			descriptor.stencilFailureOperation =
+				(MTLStencilOperation)stencilData.op.stencilFailureOperation;
+			descriptor.depthFailureOperation =
+				(MTLStencilOperation)stencilData.op.depthFailureOperation;
+			descriptor.depthStencilPassOperation =
+				(MTLStencilOperation)stencilData.op.depthStencilPassOperation;
+			descriptor.readMask = stencilData.readMask;
+			descriptor.writeMask = stencilData.writeMask;
+			return descriptor;
+		};
+		MTLStencilDescriptor* frontFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.frontFaceStencilData)
+			: nil;
+		MTLStencilDescriptor* backFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.backFaceStencilData)
+			: nil;
+		depthStencilDescriptor.frontFaceStencil = frontFaceStencil;
+		depthStencilDescriptor.backFaceStencil = backFaceStencil;
 		id<MTLDepthStencilState> depthStencilState =
 			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
+		[frontFaceStencil release];
+		[backFaceStencil release];
 		[depthStencilDescriptor release];
 		if (!depthStencilState) { return false; }
 		_graphicsPipelines.emplace(
@@ -1574,6 +1599,16 @@ private:
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
 		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
 		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
+		if (stateData.depthStencil.stencilTestEnabled) {
+			uint32_t frontReference = stateData.stencilReference.frontFaceValue;
+			uint32_t backReference = stateData.stencilReference.backFaceValue;
+			if (frontReference == backReference) {
+				[_renderEncoder setStencilReferenceValue:frontReference];
+			} else {
+				[_renderEncoder setStencilFrontReferenceValue:frontReference
+									 backReferenceValue:backReference];
+			}
+		}
 		_graphicsPipelineBoundForEncoder = true;
 		return true;
 	}

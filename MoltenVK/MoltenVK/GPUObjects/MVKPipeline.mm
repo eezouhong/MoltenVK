@@ -2814,8 +2814,7 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 	bool hasCullBothFaces,
 	bool hasDepthBias,
 	bool hasDepthBoundsTest,
-	bool hasDepthClamp,
-	bool hasStencilTest) {
+	bool hasDepthClamp) {
 	if (!pIA || pIA->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
 		pIA->primitiveRestartEnable) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_topology";
@@ -2840,7 +2839,7 @@ static const char* getMetal4UnsupportedFixedFunctionReason(
 			!pVP->pScissors || numStaticScissors != 1))) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
 	}
-	if (hasDepthBias || hasDepthBoundsTest || hasDepthClamp || hasStencilTest) {
+	if (hasDepthBias || hasDepthBoundsTest || hasDepthClamp) {
 		return "MVKCmdBindGraphicsPipeline:fixed_function_depth_stencil";
 	}
 	return "MVKCmdBindGraphicsPipeline:fixed_function_unknown";
@@ -3194,7 +3193,6 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	bool hasSupportedClassicStencilAttachment =
 		pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
 		pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
-		!hasActiveStencilState &&
 		getPixelFormats()->isStencilFormat(
 			getPixelFormats()->getMTLPixelFormat(pRendInfo->stencilAttachmentFormat));
 	bool hasSupportedColorsWithOptionalDepth =
@@ -3264,8 +3262,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&
 		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp) &&
-		hasSupportedDepthState &&
-		!_staticStateData.depthStencil.stencilTestEnabled;
+		hasSupportedDepthState;
 
 	_supportsMetal4DescriptorlessRenderExecution =
 		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
@@ -3300,7 +3297,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
 	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
 			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
-			   (hasActiveStencilState || !hasSupportedClassicStencilAttachment)) {
+			   !hasSupportedClassicStencilAttachment) {
 		_metal4RenderExecutionUnsupportedReason =
 			hasActiveStencilState
 				? "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_active"
@@ -3350,8 +3347,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces),
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias),
 				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest),
-				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp),
-				_staticStateData.depthStencil.stencilTestEnabled);
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp));
 	}
 }
 

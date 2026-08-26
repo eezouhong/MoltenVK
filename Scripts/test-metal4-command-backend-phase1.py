@@ -772,6 +772,16 @@ def main() -> int:
             "Metal 4 does not neutralize depth compare and writes when Vulkan depth testing is disabled",
         ),
         (
+            queue_mm,
+            r"stencilTestEnabled[\s\S]*?frontFaceStencilData[\s\S]*?backFaceStencilData[\s\S]*?frontFaceStencil[\s\S]*?backFaceStencil[\s\S]*?setStencilFrontReferenceValue",
+            "Metal 4 does not bind the complete static front/back stencil state and reference values",
+        ),
+        (
+            pipeline_mm,
+            r"hasSupportedClassicStencilAttachment[\s\S]*?isStencilFormat[\s\S]*?hasStrictFixedFunction[\s\S]*?hasSupportedDepthState;",
+            "static classic stencil pipelines are not eligible while dynamic stencil remains fail closed",
+        ),
+        (
             pipeline_mm,
             r"dynamic_viewport_scissor[\s\S]*?dynamic_depth_stencil[\s\S]*?dynamic_rasterization[\s\S]*?dynamic_topology[\s\S]*?dynamic_color_blend[\s\S]*?dynamic_sampling[\s\S]*?dynamic_tessellation[\s\S]*?dynamic_other",
             "dynamic-state blockers are not split into actionable capability groups",

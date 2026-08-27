@@ -96,7 +96,7 @@ MVKCommandPool::MVKCommandPool(MVKDevice* device,
 	MVKVulkanAPIDeviceObject(device),
 
 // Initialize the command type pool member variables.
-#	define MVK_CMD_TYPE_POOL_LAST(cmdType)  _cmd ##cmdType ##Pool(usePooling)
+#	define MVK_CMD_TYPE_POOL_LAST(cmdType)  _cmd ##cmdType ##Pool(usePooling, "MVKCmd" #cmdType)
 #	define MVK_CMD_TYPE_POOL(cmdType)  MVK_CMD_TYPE_POOL_LAST(cmdType),
 #	include "MVKCommandTypePools.def"
 	,
@@ -121,5 +121,4 @@ MVKCommandTypePool<MVKCommand>* MVKCmd ##cmdType ::getTypePool(MVKCommandPool* c
 	return (MVKCommandTypePool<MVKCommand>*)&cmdPool->_cmd  ##cmdType ##Pool;				\
 }
 #include "MVKCommandTypePools.def"
-
 

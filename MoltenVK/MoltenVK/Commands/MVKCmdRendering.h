@@ -72,11 +72,20 @@ public:
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	const char* getMetal4UnsupportedReason() const override {
+		return _metal4UnsupportedReason ? _metal4UnsupportedReason : getMetal4CommandTypeName();
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
+
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 
 	MVKSmallVector<VkClearValue, N_CV> _clearValues;
     MVKSmallVector<MVKImageView*, N_A> _attachments;
+	bool _supportsMetal4Encoding = false;
+	const char* _metal4UnsupportedReason = nullptr;
 };
 
 // Concrete template class implementations.
@@ -129,6 +138,12 @@ public:
 						const VkSubpassEndInfo* pSubpassEndInfo);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && cmdEncoder->endVisibilityQueryScopePreparation();
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -224,7 +239,9 @@ public:
 	void encode(MVKCommandEncoder* cmdEncoder) override;
 
 	bool supportsMetal4Encoding() const override { return true; }
-	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override { return cmdEncoder != nullptr; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && cmdEncoder->endVisibilityQueryScopePreparation();
+	}
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
@@ -264,6 +281,7 @@ protected:
 };
 
 
+
 #pragma mark -
 #pragma mark MVKCmdSetViewport
 
@@ -281,6 +299,14 @@ public:
 						const VkViewport* pViewports);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override {
+		return _firstViewport == 0 && !_viewports.empty() &&
+			_viewports.size() <= kMVKMaxViewportScissorCount;
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && supportsMetal4Encoding();
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -311,6 +337,14 @@ public:
 						const VkRect2D* pScissors);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override {
+		return _firstScissor == 0 && !_scissors.empty() &&
+			_scissors.size() <= kMVKMaxViewportScissorCount;
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder && supportsMetal4Encoding();
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -331,6 +365,11 @@ class MVKCmdSetDepthBias : public MVKSingleValueCommand<MVKDepthBias> {
 
 public:
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -357,6 +396,11 @@ class MVKCmdSetBlendConstants : public MVKSingleValueCommand<MVKColor32> {
 
 public:
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -491,6 +535,11 @@ public:
 						uint32_t stencilCompareMask);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -511,6 +560,11 @@ public:
 						uint32_t stencilWriteMask);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -531,6 +585,11 @@ public:
 						uint32_t stencilReference);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return true; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
+		return cmdEncoder;
+	}
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -668,4 +727,3 @@ public:
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
 };
-

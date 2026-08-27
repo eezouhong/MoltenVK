@@ -24,11 +24,38 @@
 class MVKBuffer;
 class MVKCommandBuffer;
 class MVKCommandEncoder;
+class MVKCommandEncodingPool;
 class MVKCommandPool;
 class MVKComputePipeline;
+struct MVKDescriptorSet;
 class MVKGraphicsPipeline;
+class MVKFramebuffer;
 class MVKImage;
 class MVKImageView;
+class MVKPipelineLayout;
+class MVKQueryPool;
+class MVKRenderPass;
+struct MVKPipelineBarrier;
+struct MVKVertexMTLBufferBinding;
+
+static constexpr uint32_t kMVKMetal4MaxColorAttachmentCount = 8;
+
+struct MVKMetal4ClearAttachmentsInfo {
+	const void* commandKey = nullptr;
+	MVKCommandEncodingPool* encodingPool = nullptr;
+	VkFormat colorAttachmentFormats[kMVKMetal4MaxColorAttachmentCount] = {};
+	VkClearColorValue colorValues[kMVKMetal4MaxColorAttachmentCount] = {};
+	bool clearColors[kMVKMetal4MaxColorAttachmentCount] = {};
+	uint32_t colorAttachmentCount = 0;
+	VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+	VkFormat stencilFormat = VK_FORMAT_UNDEFINED;
+	VkClearDepthStencilValue depthStencilValue = {};
+	bool clearDepth = false;
+	bool clearStencil = false;
+	const VkClearRect* rects = nullptr;
+	size_t rectCount = 0;
+	uint32_t framebufferLayerCount = 1;
+};
 
 
 #pragma mark -
@@ -54,11 +81,45 @@ public:
 	/** Registers an image view used as a render attachment before execution is claimed. */
 	virtual bool useImageView(MVKImageView* imageView) = 0;
 
+	/** Registers query-pool storage before a reset is claimed. */
+	virtual bool useQueryPool(MVKQueryPool* queryPool) = 0;
+	virtual bool useQueryResultPool(MVKQueryPool* queryPool) = 0;
+
+	/** Registers one visibility-result buffer used by this command submission. */
+	virtual bool useVisibilityQueryPool(MVKQueryPool* queryPool) = 0;
+	virtual bool beginVisibilityQueryScopePreparation() = 0;
+	virtual bool endVisibilityQueryScopePreparation() = 0;
+	virtual bool beginVisibilityQueryPreparation(MVKQueryPool* queryPool) = 0;
+	virtual bool endVisibilityQueryPreparation(MVKQueryPool* queryPool) = 0;
+
+	/** Creates resident staging storage for recorded vkCmdUpdateBuffer bytes. */
+	virtual bool useUpdateBufferData(const void* data, size_t size) = 0;
+
 	/** Registers a compute pipeline before execution is claimed. */
 	virtual bool useComputePipeline(MVKComputePipeline* pipeline) = 0;
 
 	/** Registers a graphics pipeline before execution is claimed. */
 	virtual bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+
+	/** Resets descriptor and pipeline tracking at a Vulkan command-buffer boundary. */
+	virtual void resetPrepareState() = 0;
+
+	/** Records the first command that failed after a successful Metal 4 preflight. */
+	virtual void recordMetal4EncodingFailure(const char*) {}
+
+	/** Records the first command whose Metal 4 resource preflight failed. */
+	virtual void recordMetal4PreparationFailure(const char*) {}
+
+	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
+	virtual bool useDescriptorSet(VkPipelineBindPoint bindPoint,
+								 MVKDescriptorSet* descriptorSet,
+								 uint32_t setIndex) = 0;
+
+	/** Retains only the descriptor bindings statically used by the pending draw. */
+	virtual bool prepareGraphicsDraw() = 0;
+
+	/** Retains only the descriptor bindings statically used by the pending dispatch. */
+	virtual bool prepareComputeDispatch() = 0;
 
 	virtual bool copyBuffer(MVKBuffer* srcBuffer,
 							VkDeviceSize srcOffset,
@@ -71,11 +132,37 @@ public:
 							VkDeviceSize size,
 							uint8_t value) = 0;
 
+	virtual bool resetQueryPool(MVKQueryPool* queryPool,
+							uint32_t firstQuery,
+							uint32_t queryCount) = 0;
+	virtual bool copyQueryPoolResults(MVKQueryPool* queryPool,
+									 uint32_t firstQuery,
+									 uint32_t queryCount,
+									 MVKBuffer* dstBuffer,
+									 VkDeviceSize dstOffset,
+									 VkDeviceSize dstStride,
+									 VkQueryResultFlags flags) = 0;
+
+	virtual bool beginVisibilityQuery(MVKQueryPool* queryPool,
+								 uint32_t query,
+								 VkQueryControlFlags flags) = 0;
+	virtual bool endVisibilityQuery(MVKQueryPool* queryPool, uint32_t query) = 0;
+
+	virtual bool updateBuffer(MVKBuffer* dstBuffer,
+						  VkDeviceSize dstOffset,
+						  const void* data,
+						  size_t size) = 0;
+
 	virtual bool copyImage(MVKImage* srcImage,
 						   uint8_t srcPlane,
 						   const VkImageCopy2& region,
 						   MVKImage* dstImage,
 						   uint8_t dstPlane) = 0;
+
+	virtual bool copyBufferImage(MVKBuffer* buffer,
+							 MVKImage* image,
+							 const VkBufferImageCopy2& region,
+							 bool toImage) = 0;
 
 	virtual bool bindComputePipeline(MVKComputePipeline* pipeline) = 0;
 
@@ -88,13 +175,58 @@ public:
 								 VkPipelineStageFlags2 dstStages,
 								 VkAccessFlags2 dstAccess) = 0;
 
+	/** Defers image layout metadata until the Metal 4 command buffer commits. */
+	virtual bool trackImageBarrier(const MVKPipelineBarrier& barrier) = 0;
+
 	virtual bool beginRendering(const VkRenderingInfo& renderingInfo) = 0;
+	virtual bool beginRenderPass(MVKRenderPass* renderPass,
+								 MVKFramebuffer* framebuffer,
+								 const VkRect2D& renderArea,
+								 const VkClearValue* clearValues,
+								 size_t clearValueCount,
+								 MVKImageView*const* attachments,
+								 size_t attachmentCount) = 0;
 	virtual bool endRendering() = 0;
 	virtual bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) = 0;
+	virtual bool setViewports(uint32_t firstViewport,
+						 uint32_t viewportCount,
+						 const VkViewport* viewports) = 0;
+	virtual bool setScissors(uint32_t firstScissor,
+						uint32_t scissorCount,
+						const VkRect2D* scissors) = 0;
+	virtual bool setStencilCompareMask(VkStencilFaceFlags faceMask,
+								   uint32_t stencilCompareMask) = 0;
+	virtual bool setStencilWriteMask(VkStencilFaceFlags faceMask,
+								 uint32_t stencilWriteMask) = 0;
+	virtual bool setStencilReference(VkStencilFaceFlags faceMask,
+								 uint32_t stencilReference) = 0;
+	virtual bool setDepthBias(float constantFactor,
+						  float clamp,
+						  float slopeFactor) = 0;
+	virtual bool setBlendConstants(const float* blendConstants) = 0;
+	virtual bool bindVertexBuffers(uint32_t firstBinding,
+							   uint32_t bindingCount,
+							   const MVKVertexMTLBufferBinding* bindings) = 0;
+	virtual bool bindIndexBuffer(MVKBuffer* buffer,
+						 VkDeviceSize offset,
+						 VkDeviceSize size,
+						 VkIndexType indexType) = 0;
+	virtual bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
+								MVKPipelineLayout* layout,
+								uint32_t firstSet,
+								uint32_t setCount,
+								MVKDescriptorSet*const* descriptorSets) = 0;
 	virtual bool draw(uint32_t firstVertex,
 					  uint32_t vertexCount,
 					  uint32_t firstInstance,
 					  uint32_t instanceCount) = 0;
+	virtual bool drawIndexed(uint32_t firstIndex,
+						 uint32_t indexCount,
+						 int32_t vertexOffset,
+						 uint32_t firstInstance,
+						 uint32_t instanceCount) = 0;
+	virtual bool useClearAttachments(const MVKMetal4ClearAttachmentsInfo& info) = 0;
+	virtual bool clearAttachments(const void* commandKey) = 0;
 };
 
 
@@ -110,10 +242,17 @@ public:
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return nullptr; }
 
-	MVKCommandTypePool(bool isPooling = true) : MVKObjectPool<T>(isPooling) {}
+	MVKCommandTypePool(bool isPooling = true, const char* typeName = "MVKCommand") :
+		MVKObjectPool<T>(isPooling), _typeName(typeName) {}
 
 protected:
-	T* newObject() override { return new T(); }
+	T* newObject() override {
+		T* command = new T();
+		command->setMetal4CommandTypeName(_typeName);
+		return command;
+	}
+
+	const char* _typeName;
 
 };
 
@@ -139,11 +278,28 @@ public:
 	/** Encodes this command on the specified command encoder. */
 	virtual void encode(MVKCommandEncoder* cmdEncoder) = 0;
 
+	/** Returns the stable pooled command type used by bounded Metal 4 diagnostics. */
+	const char* getMetal4CommandTypeName() const { return _metal4CommandTypeName; }
+
+	/** Assigns the macro-generated pooled command type once at object construction. */
+	void setMetal4CommandTypeName(const char* typeName) {
+		_metal4CommandTypeName = typeName ? typeName : "MVKCommand";
+	}
+
 	/**
 	 * Returns whether this command can be materialized by the current Metal 4
 	 * backend. Commands are unsupported unless they explicitly opt in.
 	 */
 	virtual bool supportsMetal4Encoding() const { return false; }
+
+	/**
+	 * Returns a stable, bounded diagnostic reason when Metal 4 encoding is not
+	 * supported. Subclasses may refine the pooled command type without allocating
+	 * or logging per command.
+	 */
+	virtual const char* getMetal4UnsupportedReason() const {
+		return getMetal4CommandTypeName();
+	}
 
 	/**
 	 * Resolves and registers all Metal resources this command will touch. This is
@@ -160,6 +316,7 @@ public:
 
 protected:
 	friend MVKCommandBuffer;
+	const char* _metal4CommandTypeName = "MVKCommand";
 
 	// Returns the command type pool used by this command, from the command pool.
 	// This function is overridden in each concrete subclass declaration, but the implementation of
@@ -184,4 +341,3 @@ public:
 protected:
 	Tv _value;
 };
-

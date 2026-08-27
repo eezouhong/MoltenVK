@@ -61,6 +61,27 @@ public:
 	/** Resets the results and availability status of the specified queries. */
 	virtual void resetResults(uint32_t firstQuery, uint32_t queryCount, MVKCommandEncoder* cmdEncoder);
 
+	/** Applies only the CPU-side availability part of a committed Metal 4 reset. */
+	void applyMetal4Reset(uint32_t firstQuery, uint32_t queryCount);
+	void applyMetal4End(uint32_t query);
+	void finishMetal4Query(uint32_t query);
+	bool canEndMetal4Query();
+	virtual bool supportsMetal4VisibilityQueries() const { return false; }
+
+	/** Returns storage and byte range that Metal 4 must clear for this reset, if any. */
+	virtual id<MTLBuffer> getMetal4ResetMTLBuffer() { return nil; }
+	virtual NSRange getMetal4ResetRange(uint32_t firstQuery, uint32_t queryCount) {
+		return NSMakeRange(0, 0);
+	}
+
+	/** Returns directly copyable result storage for the strict Metal 4 query slice. */
+	virtual id<MTLBuffer> getMetal4ResultMTLBuffer(uint32_t firstQuery,
+												 uint32_t queryCount,
+												 NSUInteger& offset) {
+		offset = 0;
+		return nil;
+	}
+
 	/** Copies the results of the specified queries into host memory. */
 	VkResult getResults(uint32_t firstQuery,
 						uint32_t queryCount,
@@ -104,6 +125,7 @@ public:
                     _queryElementCount(queryElementCount) {}
 
 protected:
+	void resetAvailability(uint32_t firstQuery, uint32_t queryCount);
 	bool areQueriesHostAvailable(uint32_t firstQuery, uint32_t endQuery);
 	virtual NSData* getQuerySourceData(uint32_t firstQuery, uint32_t queryCount) { return nil; }
     VkResult getResult(uint32_t query, NSData* srcData, uint32_t srcDataQueryOffset, void* pDstData, VkQueryResultFlags flags);
@@ -154,6 +176,24 @@ public:
     void beginQuery(uint32_t query, VkQueryControlFlags flags, MVKCommandEncoder* cmdEncoder) override;
     void endQuery(uint32_t query, MVKCommandEncoder* cmdEncoder) override;
     void resetResults(uint32_t firstQuery, uint32_t queryCount, MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4VisibilityQueries() const override { return true; }
+	id<MTLBuffer> getMetal4ResetMTLBuffer() override { return _visibilityResultMTLBuffer; }
+	NSRange getMetal4ResetRange(uint32_t firstQuery, uint32_t queryCount) override {
+		NSUInteger firstOffset = getVisibilityResultOffset(firstQuery);
+		NSUInteger lastOffset = getVisibilityResultOffset(firstQuery + queryCount);
+		return NSMakeRange(firstOffset, lastOffset - firstOffset);
+	}
+	id<MTLBuffer> getMetal4ResultMTLBuffer(uint32_t firstQuery,
+										 uint32_t queryCount,
+										 NSUInteger& offset) override {
+		if (!queryCount || firstQuery > _availability.size() ||
+			queryCount > _availability.size() - firstQuery) {
+			offset = 0;
+			return nil;
+		}
+		offset = getVisibilityResultOffset(firstQuery);
+		return _visibilityResultMTLBuffer;
+	}
     void beginQueryAddedTo(uint32_t query, MVKCommandBuffer* cmdBuffer) override;
 
 
@@ -255,4 +295,3 @@ public:
 protected:
 	void propagateDebugName() override {}
 };
-

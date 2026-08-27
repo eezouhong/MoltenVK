@@ -77,12 +77,14 @@ private:
 /** Tracks current render subpass information. */
 typedef struct MVKCurrentSubpassInfo {
 	MVKRenderPass* renderpass;
+	MVKFramebuffer* framebuffer;
+	const VkRenderingInfo* renderingInfo;
 	uint32_t subpassIndex;
 	uint32_t subpassViewMask;
 
-	void beginRenderpass(MVKRenderPass* rp);
+	void beginRenderpass(MVKRenderPass* rp, MVKFramebuffer* fb);
 	void nextSubpass();
-	void beginRendering(uint32_t viewMask);
+	void beginRendering(const VkRenderingInfo* info);
 
 private:
 	void updateViewMask();
@@ -123,9 +125,9 @@ public:
 	 * Returns whether the complete retained command stream can be materialized
 	 * by the current Metal 4 backend without producing partial Vulkan effects.
 	 */
-	bool supportsMetal4Encoding() const;
+	bool supportsMetal4Encoding(const char** firstUnsupportedCommand = nullptr) const;
 
-	/** Resolves every Metal resource used by the retained command stream. */
+	/** Resolves every Metal resource after whole-submission Metal 4 support preflight. */
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder);
 
 	/**
@@ -137,7 +139,7 @@ public:
 	/** Releases the host-side claim, preserving execution only after commit. */
 	void endMetal4Execution(bool previousWasExecuted, bool committed);
 
-	/** Materializes the previously preflighted command stream. */
+	/** Materializes the previously preflighted and prepared command stream. */
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder);
 
 	/** Returns the number of commands currently in this command buffer. */

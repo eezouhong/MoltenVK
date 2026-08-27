@@ -1165,6 +1165,91 @@ template class MVKCmdCopyBuffer<4>;
 #pragma mark -
 #pragma mark MVKCmdBufferImageCopy
 
+static bool mvkMetal4BufferImageLayoutSupported(VkImageLayout layout, bool toImage) {
+	return layout == VK_IMAGE_LAYOUT_GENERAL ||
+		(toImage && layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) ||
+		(!toImage && layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+}
+
+template <typename Regions>
+static const char* getMetal4BufferImageCopyUnsupportedReason(
+	MVKBuffer* buffer,
+	MVKImage* image,
+	VkImageLayout imageLayout,
+	bool toImage,
+	const Regions& regions) {
+	if (!buffer || !image) { return "buffer_image_missing_resource"; }
+	if (!mvkMetal4BufferImageLayoutSupported(imageLayout, toImage)) {
+		return "buffer_image_layout";
+	}
+	if (image->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		return "buffer_image_multisample";
+	}
+	if (image->getPlaneCount() != 1) { return "buffer_image_multiplane"; }
+	MTLTextureType textureType = image->getMTLTextureType();
+	bool is3D = textureType == MTLTextureType3D;
+	if (textureType != MTLTextureType1D &&
+		textureType != MTLTextureType1DArray &&
+		textureType != MTLTextureType2D &&
+		textureType != MTLTextureType2DArray && !is3D &&
+		textureType != MTLTextureTypeCube &&
+		textureType != MTLTextureTypeCubeArray) {
+		return "buffer_image_texture_type";
+	}
+	if (image->getIsCompressed()) { return "buffer_image_compressed"; }
+	if (image->needsSwizzle()) { return "buffer_image_swizzle"; }
+	if (!image->hasExpectedTexelSize()) { return "buffer_image_texel_size"; }
+
+	for (const auto& region : regions) {
+		VkImageAspectFlags aspect = region.imageSubresource.aspectMask;
+		bool validAspect = image->getIsDepthStencil()
+			? aspect == VK_IMAGE_ASPECT_DEPTH_BIT ||
+				aspect == VK_IMAGE_ASPECT_STENCIL_BIT
+			: aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+		if (!validAspect) {
+			return "buffer_image_aspect";
+		}
+		if (region.imageSubresource.baseArrayLayer >= image->getLayerCount()) {
+			return "buffer_image_base_layer";
+		}
+		uint32_t layerCount =
+			region.imageSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
+				? image->getLayerCount() - region.imageSubresource.baseArrayLayer
+				: region.imageSubresource.layerCount;
+		if (!layerCount || (is3D && layerCount != 1) ||
+			layerCount > image->getLayerCount() -
+				region.imageSubresource.baseArrayLayer) {
+			return "buffer_image_layer_count";
+		}
+		if (region.imageSubresource.mipLevel >= image->getMipLevelCount()) {
+			return "buffer_image_mip_level";
+		}
+		if (region.imageOffset.x < 0 || region.imageOffset.y < 0 ||
+			region.imageOffset.z < 0 || (!is3D && region.imageOffset.z != 0)) {
+			return "buffer_image_offset";
+		}
+		if (!region.imageExtent.width || !region.imageExtent.height ||
+			!region.imageExtent.depth || (!is3D && region.imageExtent.depth != 1)) {
+			return "buffer_image_extent";
+		}
+		if (region.bufferRowLength &&
+			region.bufferRowLength < region.imageExtent.width) {
+			return "buffer_image_row_length";
+		}
+		if (region.bufferImageHeight &&
+			region.bufferImageHeight < region.imageExtent.height) {
+			return "buffer_image_height";
+		}
+		VkExtent3D mipExtent = image->getExtent3D(0, region.imageSubresource.mipLevel);
+		if ((uint64_t)region.imageOffset.x + region.imageExtent.width > mipExtent.width ||
+			(uint64_t)region.imageOffset.y + region.imageExtent.height > mipExtent.height ||
+			(uint64_t)region.imageOffset.z + region.imageExtent.depth > mipExtent.depth) {
+			return "buffer_image_bounds";
+		}
+	}
+	return nullptr;
+}
+
 template <size_t N>
 VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
 											  VkBuffer buffer,
@@ -1176,6 +1261,7 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _buffer = (MVKBuffer*)buffer;
     _image = (MVKImage*)image;
     _toImage = toImage;
+	_imageLayout = imageLayout;
 
     // Add buffer regions
     _bufferImageCopyRegions.clear();     // Clear for reuse
@@ -1190,7 +1276,13 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
         _bufferImageCopyRegions.emplace_back(std::move(region2));
     }
 
-	return validate(cmdBuff);
+	VkResult result = validate(cmdBuff);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
+	return result;
 }
 
 template <size_t N>
@@ -1199,11 +1291,18 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _buffer = (MVKBuffer*)pCopyBufferToImageInfo->srcBuffer;
     _image = (MVKImage*)pCopyBufferToImageInfo->dstImage;
     _toImage = true;
+	_imageLayout = pCopyBufferToImageInfo->dstImageLayout;
     
     _bufferImageCopyRegions.clear();     // Clear for reuse
     _bufferImageCopyRegions.resize(pCopyBufferToImageInfo->regionCount);
     std::memcpy(_bufferImageCopyRegions.data(), pCopyBufferToImageInfo->pRegions, pCopyBufferToImageInfo->regionCount * sizeof(VkBufferImageCopy2));
-    return validate(cmdBuff);
+	VkResult result = validate(cmdBuff);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
+	return result;
 }
 
 template <size_t N>
@@ -1212,11 +1311,18 @@ VkResult MVKCmdBufferImageCopy<N>::setContent(MVKCommandBuffer* cmdBuff,
     _buffer = (MVKBuffer*)pCopyImageToBufferInfo->dstBuffer;
     _image = (MVKImage*)pCopyImageToBufferInfo->srcImage;
     _toImage = false;
+	_imageLayout = pCopyImageToBufferInfo->srcImageLayout;
     
     _bufferImageCopyRegions.clear();     // Clear for reuse
     _bufferImageCopyRegions.resize(pCopyImageToBufferInfo->regionCount);
     std::memcpy(_bufferImageCopyRegions.data(), pCopyImageToBufferInfo->pRegions, pCopyImageToBufferInfo->regionCount * sizeof(VkBufferImageCopy2));
-    return validate(cmdBuff);
+	VkResult result = validate(cmdBuff);
+	_metal4UnsupportedReason = result == VK_SUCCESS
+		? getMetal4BufferImageCopyUnsupportedReason(
+			_buffer, _image, _imageLayout, _toImage, _bufferImageCopyRegions)
+		: "buffer_image_validation";
+	_supportsMetal4Encoding = result == VK_SUCCESS && !_metal4UnsupportedReason;
+	return result;
 }
 
 template <size_t N>
@@ -1327,6 +1433,21 @@ void MVKCmdBufferImageCopy<N>::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 template <size_t N>
+bool MVKCmdBufferImageCopy<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useBuffer(_buffer) && cmdEncoder->useImage(_image);
+}
+
+template <size_t N>
+bool MVKCmdBufferImageCopy<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	for (const auto& region : _bufferImageCopyRegions) {
+		if (!cmdEncoder->copyBufferImage(_buffer, _image, region, _toImage)) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
 bool MVKCmdBufferImageCopy<N>::isArrayTexture() {
 	MTLTextureType mtlTexType = _image->getMTLTextureType();
 	return (mtlTexType == MTLTextureType3D ||
@@ -1354,6 +1475,13 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
 	_commandUse = cmdUse;
 	_clearDepthStencilValue = {};
 	mvkClear(_shouldClearAtt, kMVKClearAttachmentCount);
+	_metal4Info = {};
+	_supportsMetal4Encoding = false;
+	_metal4UnsupportedReason = "clear_attachments_unknown";
+	auto rejectMetal4 = [this](const char* reason) {
+		_metal4UnsupportedReason = reason;
+		return VK_SUCCESS;
+	};
 
     for (uint32_t i = 0; i < attachmentCount; i++) {
         auto& clrAtt = pAttachments[i];
@@ -1380,7 +1508,171 @@ VkResult MVKCmdClearAttachments<N>::setContent(MVKCommandBuffer* cmdBuff,
         _clearRects.push_back(pRects[i]);
     }
 
+	MVKRenderPass* renderPass = cmdBuff ? cmdBuff->_currentSubpassInfo.renderpass : nullptr;
+	MVKFramebuffer* framebuffer =
+		cmdBuff ? cmdBuff->_currentSubpassInfo.framebuffer : nullptr;
+	const VkRenderingInfo* renderingInfo =
+		cmdBuff ? cmdBuff->_currentSubpassInfo.renderingInfo : nullptr;
+	uint32_t subpassIndex = cmdBuff ? cmdBuff->_currentSubpassInfo.subpassIndex : 0;
+	if (_commandUse != kMVKCommandUseClearAttachments) {
+		return rejectMetal4("clear_non_attachment_use");
+	}
+	if (!renderPass && !renderingInfo) {
+		return rejectMetal4("clear_missing_render_scope");
+	}
+	if (subpassIndex != 0) { return rejectMetal4("clear_subpass_index"); }
+	if (!rectCount || !pRects) { return rejectMetal4("clear_missing_rect"); }
+
+	if (renderingInfo) {
+		if (renderingInfo->flags != 0) { return rejectMetal4("dynamic_clear_flags"); }
+		if (renderingInfo->viewMask != 0) { return rejectMetal4("dynamic_clear_multiview"); }
+		if (renderingInfo->layerCount != 1) {
+			return rejectMetal4("dynamic_clear_layer_count");
+		}
+		if (renderingInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+			return rejectMetal4("dynamic_clear_color_count");
+		}
+		if (renderingInfo->colorAttachmentCount && !renderingInfo->pColorAttachments) {
+			return rejectMetal4("dynamic_clear_color_attachments_missing");
+		}
+		for (const auto& rect : _clearRects) {
+			if (rect.baseArrayLayer != 0 || rect.layerCount != 1 ||
+				rect.rect.offset.x < 0 || rect.rect.offset.y < 0 ||
+				!rect.rect.extent.width || !rect.rect.extent.height) {
+				return rejectMetal4("dynamic_clear_rect");
+			}
+		}
+
+		_metal4Info.commandKey = this;
+		_metal4Info.encodingPool = cmdBuff->getCommandPool()->getCommandEncodingPool();
+		_metal4Info.colorAttachmentCount = renderingInfo->colorAttachmentCount;
+		for (uint32_t caIdx = 0; caIdx < _metal4Info.colorAttachmentCount; caIdx++) {
+			auto* imageView = (MVKImageView*)renderingInfo->pColorAttachments[caIdx].imageView;
+			if (!imageView) {
+				return rejectMetal4("dynamic_clear_color_attachment_missing");
+			}
+			if (imageView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+				return rejectMetal4("dynamic_clear_multisample");
+			}
+			_metal4Info.colorAttachmentFormats[caIdx] = imageView->getVkFormat();
+			if (_shouldClearAtt[caIdx]) {
+				_metal4Info.clearColors[caIdx] = true;
+				_metal4Info.colorValues[caIdx] = getClearColorValue(caIdx);
+			}
+		}
+		for (uint32_t caIdx = _metal4Info.colorAttachmentCount;
+			 caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
+			if (_shouldClearAtt[caIdx]) {
+				return rejectMetal4("dynamic_clear_color_attachment_unused");
+			}
+		}
+
+		auto* depthView = renderingInfo->pDepthAttachment
+			? (MVKImageView*)renderingInfo->pDepthAttachment->imageView : nullptr;
+		auto* stencilView = renderingInfo->pStencilAttachment
+			? (MVKImageView*)renderingInfo->pStencilAttachment->imageView : nullptr;
+		_metal4Info.clearDepth =
+			_shouldClearAtt[kMVKClearAttachmentDepthIndex] && depthView;
+		_metal4Info.clearStencil =
+			_shouldClearAtt[kMVKClearAttachmentStencilIndex] && stencilView;
+		if ((_shouldClearAtt[kMVKClearAttachmentDepthIndex] && !depthView) ||
+			(_shouldClearAtt[kMVKClearAttachmentStencilIndex] && !stencilView)) {
+			return rejectMetal4("dynamic_clear_depth_stencil_attachment_missing");
+		}
+		if ((depthView && depthView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) ||
+			(stencilView && stencilView->getSampleCount() != VK_SAMPLE_COUNT_1_BIT)) {
+			return rejectMetal4("dynamic_clear_depth_stencil_multisample");
+		}
+		_metal4Info.depthFormat = depthView ? depthView->getVkFormat() : VK_FORMAT_UNDEFINED;
+		_metal4Info.stencilFormat = stencilView ? stencilView->getVkFormat() : VK_FORMAT_UNDEFINED;
+		_metal4Info.depthStencilValue = _clearDepthStencilValue;
+		_metal4Info.rects = _clearRects.data();
+		_metal4Info.rectCount = _clearRects.size();
+		_metal4Info.framebufferLayerCount = renderingInfo->layerCount;
+		_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
+		_metal4UnsupportedReason = _supportsMetal4Encoding
+			? nullptr : "dynamic_clear_encoding_pool_missing";
+		return VK_SUCCESS;
+	}
+
+	if (renderPass->getSubpassCount() != 1) {
+		return rejectMetal4("classic_clear_subpass_count");
+	}
+	if (!framebuffer) { return rejectMetal4("classic_clear_framebuffer_missing"); }
+	MVKRenderSubpass* subpass = renderPass->getSubpass(subpassIndex);
+	if (!subpass) { return rejectMetal4("classic_clear_subpass_missing"); }
+	if (subpass->isMultiview()) { return rejectMetal4("classic_clear_multiview"); }
+	if (subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		return rejectMetal4("classic_clear_multisample");
+	}
+	if (subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
+		return rejectMetal4("classic_clear_color_count");
+	}
+	uint32_t framebufferLayerCount = framebuffer->getLayerCount();
+	if (!framebufferLayerCount) {
+		return rejectMetal4("classic_clear_framebuffer_layer_count");
+	}
+	for (const auto& rect : _clearRects) {
+		if (!rect.layerCount || rect.baseArrayLayer >= framebufferLayerCount ||
+			rect.layerCount > framebufferLayerCount - rect.baseArrayLayer) {
+			return rejectMetal4("classic_clear_layer_count");
+		}
+		if (rect.rect.offset.x < 0 || rect.rect.offset.y < 0) {
+			return rejectMetal4("classic_clear_negative_offset");
+		}
+		if (!rect.rect.extent.width || !rect.rect.extent.height) {
+			return rejectMetal4("classic_clear_zero_extent");
+		}
+	}
+
+	_metal4Info.commandKey = this;
+	_metal4Info.encodingPool = cmdBuff->getCommandPool()->getCommandEncodingPool();
+	_metal4Info.colorAttachmentCount = subpass->getColorAttachmentCount();
+	for (uint32_t caIdx = 0; caIdx < _metal4Info.colorAttachmentCount; caIdx++) {
+		_metal4Info.colorAttachmentFormats[caIdx] = subpass->getColorAttachmentFormat(caIdx);
+		uint32_t clearIdx = subpass->getClearColorAttachmentIndex(caIdx);
+		if (clearIdx != VK_ATTACHMENT_UNUSED && _shouldClearAtt[clearIdx]) {
+			if (!subpass->isColorAttachmentUsed(caIdx) ||
+				subpass->isColorAttachmentAlsoInputAttachment(caIdx)) {
+				return rejectMetal4("classic_clear_color_attachment_unsupported");
+			}
+			_metal4Info.clearColors[caIdx] = true;
+			_metal4Info.colorValues[caIdx] = getClearColorValue(clearIdx);
+		}
+	}
+	_metal4Info.depthFormat = subpass->isDepthAttachmentUsed()
+		? subpass->getDepthFormat() : VK_FORMAT_UNDEFINED;
+	_metal4Info.stencilFormat = subpass->isStencilAttachmentUsed()
+		? subpass->getStencilFormat() : VK_FORMAT_UNDEFINED;
+	_metal4Info.clearDepth = subpass->isDepthAttachmentUsed() &&
+		_shouldClearAtt[kMVKClearAttachmentDepthIndex];
+	_metal4Info.clearStencil = subpass->isStencilAttachmentUsed() &&
+		_shouldClearAtt[kMVKClearAttachmentStencilIndex];
+	if ((_metal4Info.clearDepth || _metal4Info.clearStencil) &&
+		subpass->isInputAttachmentDepthStencilAttachment()) {
+		return rejectMetal4("classic_clear_depth_stencil_input_attachment");
+	}
+	_metal4Info.depthStencilValue = _clearDepthStencilValue;
+	_metal4Info.rects = _clearRects.data();
+	_metal4Info.rectCount = _clearRects.size();
+	_metal4Info.framebufferLayerCount = framebufferLayerCount;
+	_supportsMetal4Encoding = _metal4Info.encodingPool != nullptr;
+	_metal4UnsupportedReason = _supportsMetal4Encoding
+		? nullptr : "classic_clear_encoding_pool_missing";
+
 	return VK_SUCCESS;
+}
+
+template <size_t N>
+bool MVKCmdClearAttachments<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useClearAttachments(_metal4Info);
+}
+
+template <size_t N>
+bool MVKCmdClearAttachments<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->clearAttachments(this);
 }
 
 // Returns the total number of vertices needed to clear all layers of all rectangles.
@@ -1884,6 +2176,11 @@ VkResult MVKCmdUpdateBuffer::setContent(MVKCommandBuffer* cmdBuff,
     _dstBuffer = (MVKBuffer*)dstBuffer;
     _dstOffset = dstOffset;
     _dataSize = dataSize;
+	VkDeviceSize alignment = std::max<VkDeviceSize>(
+		cmdBuff->getMetalFeatures().mtlCopyBufferAlignment,
+		1);
+	_supportsMetal4Encoding = _dstBuffer && _dataSize > 0 && _dataSize <= 65536 &&
+		(_dstOffset % alignment) == 0 && (_dataSize % alignment) == 0;
 
     _srcDataCache.reserve(_dataSize);
     memcpy(_srcDataCache.data(), pData, _dataSize);
@@ -1915,3 +2212,16 @@ void MVKCmdUpdateBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     }];
 }
 
+bool MVKCmdUpdateBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->useBuffer(_dstBuffer) &&
+		cmdEncoder->useUpdateBufferData(_srcDataCache.data(), static_cast<size_t>(_dataSize));
+}
+
+bool MVKCmdUpdateBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->updateBuffer(_dstBuffer,
+							 _dstOffset,
+							 _srcDataCache.data(),
+							 static_cast<size_t>(_dataSize));
+}

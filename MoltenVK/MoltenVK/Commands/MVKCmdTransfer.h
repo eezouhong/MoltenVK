@@ -238,6 +238,12 @@ public:
                         const VkCopyImageToBufferInfo2* pImageToBufferInfo);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	const char* getMetal4UnsupportedReason() const override {
+		return _metal4UnsupportedReason ? _metal4UnsupportedReason : getMetal4CommandTypeName();
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -248,6 +254,9 @@ protected:
     MVKBuffer* _buffer;
     MVKImage* _image;
     bool _toImage = false;
+	VkImageLayout _imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	bool _supportsMetal4Encoding = false;
+	const char* _metal4UnsupportedReason = nullptr;
 };
 
 // Concrete template class implementations.
@@ -276,6 +285,12 @@ public:
 						MVKCommandUse cmdUse = kMVKCommandUseClearAttachments);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	const char* getMetal4UnsupportedReason() const override {
+		return _metal4UnsupportedReason ? _metal4UnsupportedReason : getMetal4CommandTypeName();
+	}
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
     uint32_t getVertexCount(MVKCommandEncoder* cmdEncoder);
@@ -292,6 +307,9 @@ protected:
 	VkClearDepthStencilValue _clearDepthStencilValue;
 	MVKCommandUse _commandUse;
 	bool _shouldClearAtt[kMVKClearAttachmentCount];
+	MVKMetal4ClearAttachmentsInfo _metal4Info = {};
+	bool _supportsMetal4Encoding = false;
+	const char* _metal4UnsupportedReason = nullptr;
 };
 
 
@@ -451,6 +469,9 @@ public:
 						const void* pData);
 
     void encode(MVKCommandEncoder* cmdEncoder) override;
+	bool supportsMetal4Encoding() const override { return _supportsMetal4Encoding; }
+	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override;
+	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
@@ -459,4 +480,5 @@ protected:
 	MVKBuffer* _dstBuffer;
     VkDeviceSize _dstOffset;
     VkDeviceSize _dataSize;
+	bool _supportsMetal4Encoding = false;
 };

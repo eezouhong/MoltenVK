@@ -38,7 +38,7 @@ VkResult MVKCmdBeginRenderPassBase::setContent(MVKCommandBuffer* cmdBuff,
 	_framebuffer = (MVKFramebuffer*)pRenderPassBegin->framebuffer;
 	_renderArea = pRenderPassBegin->renderArea;
 
-	cmdBuff->_currentSubpassInfo.beginRenderpass(_renderPass);
+	cmdBuff->_currentSubpassInfo.beginRenderpass(_renderPass, _framebuffer);
 
 	return VK_SUCCESS;
 }
@@ -58,6 +58,102 @@ VkResult MVKCmdBeginRenderPass<N_CV, N_A>::setContent(MVKCommandBuffer* cmdBuff,
 	_clearValues.assign(pRenderPassBegin->pClearValues,
 						pRenderPassBegin->pClearValues + pRenderPassBegin->clearValueCount);
 
+	_supportsMetal4Encoding = false;
+	_metal4UnsupportedReason = nullptr;
+	if (!_renderPass) {
+		_metal4UnsupportedReason = "classic_render_pass_missing";
+		return VK_SUCCESS;
+	}
+	if (_renderPass->getSubpassCount() != 1) {
+		_metal4UnsupportedReason = "classic_render_pass_subpass_count";
+		return VK_SUCCESS;
+	}
+	if (_contents != VK_SUBPASS_CONTENTS_INLINE) {
+		_metal4UnsupportedReason = "classic_render_pass_secondary_contents";
+		return VK_SUCCESS;
+	}
+	if (!_framebuffer) {
+		_metal4UnsupportedReason = "classic_render_pass_missing_framebuffer";
+		return VK_SUCCESS;
+	}
+
+	MVKRenderSubpass* subpass = _renderPass->getSubpass(0);
+	VkExtent2D framebufferExtent = _framebuffer
+		? _framebuffer->getExtent2D()
+		: VkExtent2D{};
+	uint32_t framebufferLayerCount = _framebuffer->getLayerCount();
+	if (!framebufferLayerCount) {
+		_metal4UnsupportedReason = "classic_render_pass_layer_count";
+		return VK_SUCCESS;
+	}
+	if (_renderArea.offset.x != 0 || _renderArea.offset.y != 0 ||
+		_renderArea.extent.width != framebufferExtent.width ||
+		_renderArea.extent.height != framebufferExtent.height) {
+		_metal4UnsupportedReason = "classic_render_pass_partial_area";
+		return VK_SUCCESS;
+	}
+	if (subpass->isMultiview()) {
+		_metal4UnsupportedReason = "classic_render_pass_multiview";
+		return VK_SUCCESS;
+	}
+	if (subpass->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+		_metal4UnsupportedReason = "classic_render_pass_multisample";
+		return VK_SUCCESS;
+	}
+	uint32_t colorAttachmentCount = subpass->getColorAttachmentCount();
+	if (colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+		_metal4UnsupportedReason = "classic_render_pass_color_count";
+		return VK_SUCCESS;
+	}
+	bool hasUsedColorAttachment = false;
+	for (uint32_t colorIndex = 0; colorIndex < colorAttachmentCount; colorIndex++) {
+		hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
+	}
+	if (!hasUsedColorAttachment && !subpass->isDepthAttachmentUsed() &&
+		!subpass->isStencilAttachmentUsed()) {
+		_metal4UnsupportedReason = colorAttachmentCount == 0
+			? "classic_render_pass_no_color"
+			: "classic_render_pass_unused_color";
+		return VK_SUCCESS;
+	}
+	for (MVKImageView* attachment : _attachments) {
+		id<MTLTexture> texture = attachment ? attachment->getMTLTexture() : nil;
+		if (!attachment || !texture) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_missing";
+			return VK_SUCCESS;
+		}
+		if (attachment->getPlaneCount() != 1) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_plane_count";
+			return VK_SUCCESS;
+		}
+		if (attachment->getSampleCount() != VK_SAMPLE_COUNT_1_BIT) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_multisample";
+			return VK_SUCCESS;
+		}
+		MTLTextureType textureType = attachment->getMTLTextureType();
+		bool hasSupportedTextureType = framebufferLayerCount == 1
+			? textureType == MTLTextureType2D || textureType == MTLTextureType2DArray
+			: textureType == MTLTextureType2DArray;
+		if (!hasSupportedTextureType) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_texture_type";
+			return VK_SUCCESS;
+		}
+		if (framebufferLayerCount > texture.arrayLength) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_layer_count";
+			return VK_SUCCESS;
+		}
+		if (attachment->getPackedSwizzle() != 0) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_swizzle";
+			return VK_SUCCESS;
+		}
+		if (texture.width != framebufferExtent.width ||
+			texture.height != framebufferExtent.height) {
+			_metal4UnsupportedReason = "classic_render_pass_attachment_extent";
+			return VK_SUCCESS;
+		}
+	}
+	_supportsMetal4Encoding = true;
+
 	return VK_SUCCESS;
 }
 
@@ -71,6 +167,29 @@ void MVKCmdBeginRenderPass<N_CV, N_A>::encode(MVKCommandEncoder* cmdEncoder) {
 								_clearValues.contents(),
 								_attachments.contents(),
 								kMVKCommandUseBeginRenderPass);
+}
+
+template <size_t N_CV, size_t N_A>
+bool MVKCmdBeginRenderPass<N_CV, N_A>::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
+	for (MVKImageView* attachment : _attachments) {
+		if (!cmdEncoder->useImageView(attachment)) { return false; }
+	}
+	return cmdEncoder->beginVisibilityQueryScopePreparation();
+}
+
+template <size_t N_CV, size_t N_A>
+bool MVKCmdBeginRenderPass<N_CV, N_A>::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && _supportsMetal4Encoding &&
+		cmdEncoder->beginRenderPass(_renderPass,
+									_framebuffer,
+									_renderArea,
+									_clearValues.data(),
+									_clearValues.size(),
+									_attachments.data(),
+									_attachments.size());
 }
 
 template class MVKCmdBeginRenderPass<1, 0>;
@@ -129,43 +248,40 @@ void MVKCmdEndRenderPass::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->endRenderpass();
 }
 
+bool MVKCmdEndRenderPass::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->endRendering();
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdBeginRendering
 
-static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo) {
-	if (renderingInfo.pNext ||
-		renderingInfo.flags != 0 ||
-		renderingInfo.viewMask != 0 ||
-		renderingInfo.layerCount != 1 ||
-		renderingInfo.colorAttachmentCount != 1 ||
-		!renderingInfo.pColorAttachments ||
-		renderingInfo.renderArea.offset.x != 0 ||
-		renderingInfo.renderArea.offset.y != 0) {
+static bool mvkSupportsMetal4RenderingAttachment(const VkRenderingAttachmentInfo& attachment,
+											 const VkRect2D& renderArea,
+											 bool depthAttachment) {
+	bool supportedLayout = depthAttachment
+		? (attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_GENERAL)
+		: (attachment.imageLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL ||
+		   attachment.imageLayout == VK_IMAGE_LAYOUT_GENERAL);
+	if (attachment.pNext ||
+		!attachment.imageView ||
+		attachment.resolveMode != VK_RESOLVE_MODE_NONE ||
+		attachment.resolveImageView ||
+		(attachment.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD &&
+		 attachment.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
+		 attachment.loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+		(attachment.storeOp != VK_ATTACHMENT_STORE_OP_STORE &&
+		 attachment.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
+		!supportedLayout) {
 		return false;
 	}
 
-	if (renderingInfo.pDepthAttachment || renderingInfo.pStencilAttachment) {
-		return false;
-	}
-
-	const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
-	if (color.pNext ||
-		!color.imageView ||
-		color.resolveMode != VK_RESOLVE_MODE_NONE ||
-		color.resolveImageView ||
-		(color.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD &&
-		 color.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR &&
-		 color.loadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
-		(color.storeOp != VK_ATTACHMENT_STORE_OP_STORE &&
-		 color.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE) ||
-		(color.imageLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
-		 color.imageLayout != VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL &&
-		 color.imageLayout != VK_IMAGE_LAYOUT_GENERAL)) {
-		return false;
-	}
-
-	auto* imageView = (MVKImageView*)color.imageView;
+	auto* imageView = (MVKImageView*)attachment.imageView;
 	id<MTLTexture> texture = imageView ? imageView->getMTLTexture() : nil;
 	if (!imageView || !texture ||
 		imageView->getPlaneCount() != 1 ||
@@ -175,8 +291,42 @@ static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo)
 		return false;
 	}
 
-	return renderingInfo.renderArea.extent.width == texture.width &&
-		renderingInfo.renderArea.extent.height == texture.height;
+	return renderArea.extent.width == texture.width &&
+		renderArea.extent.height == texture.height;
+}
+
+static bool mvkSupportsMetal4RenderingInfo(const VkRenderingInfo& renderingInfo) {
+	if (renderingInfo.pNext ||
+		renderingInfo.flags != 0 ||
+		renderingInfo.viewMask != 0 ||
+		renderingInfo.layerCount != 1 ||
+		renderingInfo.colorAttachmentCount == 0 ||
+		renderingInfo.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
+		!renderingInfo.pColorAttachments ||
+		renderingInfo.renderArea.offset.x != 0 ||
+		renderingInfo.renderArea.offset.y != 0) {
+		return false;
+	}
+
+	for (uint32_t colorIndex = 0;
+		 colorIndex < renderingInfo.colorAttachmentCount;
+		 colorIndex++) {
+		if (!mvkSupportsMetal4RenderingAttachment(
+				renderingInfo.pColorAttachments[colorIndex],
+				renderingInfo.renderArea,
+				false)) {
+			return false;
+		}
+	}
+
+	if (renderingInfo.pDepthAttachment &&
+		!mvkSupportsMetal4RenderingAttachment(
+			*renderingInfo.pDepthAttachment, renderingInfo.renderArea, true)) {
+		return false;
+	}
+	return !renderingInfo.pStencilAttachment ||
+		mvkSupportsMetal4RenderingAttachment(
+			*renderingInfo.pStencilAttachment, renderingInfo.renderArea, true);
 }
 
 template <size_t N>
@@ -198,7 +348,7 @@ VkResult MVKCmdBeginRendering<N>::setContent(MVKCommandBuffer* cmdBuff,
 		_renderingInfo.pStencilAttachment = &_stencilAttachment;
 	}
 
-	cmdBuff->_currentSubpassInfo.beginRendering(pRenderingInfo->viewMask);
+	cmdBuff->_currentSubpassInfo.beginRendering(&_renderingInfo);
 
 	return VK_SUCCESS;
 }
@@ -211,8 +361,24 @@ void MVKCmdBeginRendering<N>::encode(MVKCommandEncoder* cmdEncoder) {
 template <size_t N>
 bool MVKCmdBeginRendering<N>::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder || !_supportsMetal4Encoding) { return false; }
-	auto* imageView = (MVKImageView*)_renderingInfo.pColorAttachments[0].imageView;
-	return cmdEncoder->useImageView(imageView);
+	for (uint32_t colorIndex = 0;
+		 colorIndex < _renderingInfo.colorAttachmentCount;
+		 colorIndex++) {
+		auto* imageView =
+			(MVKImageView*)_renderingInfo.pColorAttachments[colorIndex].imageView;
+		if (!cmdEncoder->useImageView(imageView)) { return false; }
+	}
+	if (_renderingInfo.pDepthAttachment &&
+		!cmdEncoder->useImageView(
+			(MVKImageView*)_renderingInfo.pDepthAttachment->imageView)) {
+		return false;
+	}
+	if (_renderingInfo.pStencilAttachment &&
+		!cmdEncoder->useImageView(
+			(MVKImageView*)_renderingInfo.pStencilAttachment->imageView)) {
+		return false;
+	}
+	return cmdEncoder->beginVisibilityQueryScopePreparation();
 }
 
 template <size_t N>
@@ -352,6 +518,13 @@ void MVKCmdSetViewport<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		state._viewports[i] = _viewports[i - _firstViewport];
 }
 
+template <size_t N>
+bool MVKCmdSetViewport<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->setViewports(
+			_firstViewport, static_cast<uint32_t>(_viewports.size()), _viewports.data());
+}
+
 template class MVKCmdSetViewport<1>;
 template class MVKCmdSetViewport<kMVKMaxViewportScissorCount>;
 
@@ -383,6 +556,13 @@ void MVKCmdSetScissor<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		state._scissors[i] = _scissors[i - _firstScissor];
 }
 
+template <size_t N>
+bool MVKCmdSetScissor<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->setScissors(
+			_firstScissor, static_cast<uint32_t>(_scissors.size()), _scissors.data());
+}
+
 template class MVKCmdSetScissor<1>;
 template class MVKCmdSetScissor<kMVKMaxViewportScissorCount>;
 
@@ -392,6 +572,13 @@ template class MVKCmdSetScissor<kMVKMaxViewportScissorCount>;
 
 void MVKCmdSetDepthBias::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::DepthBias)._renderState.depthBias = _value;
+}
+
+bool MVKCmdSetDepthBias::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setDepthBias(
+		_value.depthBiasConstantFactor,
+		_value.depthBiasClamp,
+		_value.depthBiasSlopeFactor);
 }
 
 
@@ -408,6 +595,10 @@ void MVKCmdSetDepthBiasEnable::encode(MVKCommandEncoder* cmdEncoder) {
 
 void MVKCmdSetBlendConstants::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::BlendConstants)._renderState.blendConstants = _value;
+}
+
+bool MVKCmdSetBlendConstants::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setBlendConstants(_value.float32);
 }
 
 
@@ -518,6 +709,10 @@ void MVKCmdSetStencilCompareMask::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.depthStencil.backFaceStencilData.readMask = _stencilCompareMask;
 }
 
+bool MVKCmdSetStencilCompareMask::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilCompareMask(_faceMask, _stencilCompareMask);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdSetStencilWriteMask
@@ -539,6 +734,10 @@ void MVKCmdSetStencilWriteMask::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.depthStencil.backFaceStencilData.writeMask = _stencilWriteMask;
 }
 
+bool MVKCmdSetStencilWriteMask::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilWriteMask(_faceMask, _stencilWriteMask);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdSetStencilReference
@@ -558,6 +757,10 @@ void MVKCmdSetStencilReference::encode(MVKCommandEncoder* cmdEncoder) {
 		state._renderState.stencilReference.frontFaceValue = _stencilReference;
 	if (_faceMask & VK_STENCIL_FACE_BACK_BIT)
 		state._renderState.stencilReference.backFaceValue = _stencilReference;
+}
+
+bool MVKCmdSetStencilReference::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && cmdEncoder->setStencilReference(_faceMask, _stencilReference);
 }
 
 

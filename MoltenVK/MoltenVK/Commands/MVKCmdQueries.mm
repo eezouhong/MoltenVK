@@ -61,6 +61,20 @@ void MVKCmdBeginQuery::encode(MVKCommandEncoder* cmdEncoder) {
     _queryPool->beginQuery(query, _flags, cmdEncoder);
 }
 
+bool MVKCmdBeginQuery::supportsMetal4Encoding() const {
+	return _queryPool && _queryPool->supportsMetal4VisibilityQueries();
+}
+
+bool MVKCmdBeginQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->beginVisibilityQueryPreparation(_queryPool);
+}
+
+bool MVKCmdBeginQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->beginVisibilityQuery(_queryPool, _query, _flags);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdEndQuery
@@ -70,6 +84,21 @@ void MVKCmdEndQuery::encode(MVKCommandEncoder* cmdEncoder) {
     if (cmdEncoder->getMultiviewPassIndex() > 0)
         query += cmdEncoder->getSubpass()->getViewCountUpToMetalPass(cmdEncoder->getMultiviewPassIndex() - 1);
     _queryPool->endQuery(query, cmdEncoder);
+}
+
+bool MVKCmdEndQuery::supportsMetal4Encoding() const {
+	return _queryPool && _queryPool->supportsMetal4VisibilityQueries() &&
+		_queryPool->canEndMetal4Query();
+}
+
+bool MVKCmdEndQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->endVisibilityQueryPreparation(_queryPool);
+}
+
+bool MVKCmdEndQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->endVisibilityQuery(_queryPool, _query);
 }
 
 
@@ -118,6 +147,15 @@ void MVKCmdResetQueryPool::encode(MVKCommandEncoder* cmdEncoder) {
     _queryPool->resetResults(_query, _queryCount, cmdEncoder);
 }
 
+bool MVKCmdResetQueryPool::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useQueryPool(_queryPool);
+}
+
+bool MVKCmdResetQueryPool::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->resetQueryPool(_queryPool, _query, _queryCount);
+}
+
 
 #pragma mark -
 #pragma mark MVKCmdCopyQueryPoolResults
@@ -152,3 +190,22 @@ void MVKCmdCopyQueryPoolResults::encode(MVKCommandEncoder* cmdEncoder) {
     }
 }
 
+bool MVKCmdCopyQueryPoolResults::supportsMetal4Encoding() const {
+	VkQueryResultFlags unsupportedFlags = VK_QUERY_RESULT_WITH_AVAILABILITY_BIT |
+		VK_QUERY_RESULT_PARTIAL_BIT;
+	VkDeviceSize elementSize = mvkIsAnyFlagEnabled(_flags, VK_QUERY_RESULT_64_BIT) ?
+		sizeof(uint64_t) : sizeof(uint32_t);
+	return _queryPool && _destBuffer && _queryCount > 0 &&
+		!mvkIsAnyFlagEnabled(_flags, unsupportedFlags) && _destStride >= elementSize;
+}
+
+bool MVKCmdCopyQueryPoolResults::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->useQueryResultPool(_queryPool) && cmdEncoder->useBuffer(_destBuffer);
+}
+
+bool MVKCmdCopyQueryPoolResults::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->copyQueryPoolResults(_queryPool, _query, _queryCount,
+			_destBuffer, _destOffset, _destStride, _flags);
+}

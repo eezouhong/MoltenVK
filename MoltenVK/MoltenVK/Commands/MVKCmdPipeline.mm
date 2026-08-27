@@ -56,19 +56,89 @@ template class MVKCmdExecuteCommands<16>;
 #pragma mark -
 #pragma mark MVKCmdPipelineBarrier
 
+static const char* getMetal4ImageLayoutUnsupportedReason(VkImageLayout layout) {
+	switch (layout) {
+		case VK_IMAGE_LAYOUT_GENERAL:
+			return "barrier_image_layout_general";
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:
+			return "barrier_image_layout_shader_read";
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+		case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
+			return "barrier_image_layout_depth_stencil_read";
+		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+		case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+			return "barrier_image_layout_present";
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+		case VK_IMAGE_LAYOUT_PREINITIALIZED:
+			return "barrier_image_layout_undefined";
+		default:
+			return "barrier_image_layout_other";
+	}
+}
+
 template <typename Barriers>
-static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
-	if (barriers.empty()) { return true; }
+static const char* getMetal4PipelineBarrierUnsupportedReason(
+	VkDependencyFlags dependencyFlags,
+	const Barriers& barriers) {
+	if (dependencyFlags != 0) { return "barrier_dependency_flags"; }
+	if (barriers.empty()) { return nullptr; }
 	for (const auto& barrier : barriers) {
-		if (barrier.type == MVKPipelineBarrier::None) { return false; }
-		// The legacy path applies image-layout state transitions and host-read
-		// synchronization in addition to encoding a GPU barrier. Until the MTL4
-		// materializer preserves those side effects, fail closed for every image
-		// barrier and for memory/buffer barriers visible to the host.
-		if (barrier.type == MVKPipelineBarrier::Image) { return false; }
+		if (barrier.type == MVKPipelineBarrier::None) { return "barrier_missing_type"; }
+		// Host synchronization remains on the legacy path. Ordinary image layout
+		// metadata is staged by the MTL4 materializer and published only after commit.
 		if (mvkIsAnyFlagEnabled(barrier.dstStageMask, VK_PIPELINE_STAGE_2_HOST_BIT) ||
 			mvkIsAnyFlagEnabled(barrier.dstAccessMask, VK_ACCESS_2_HOST_READ_BIT)) {
-			return false;
+			return "barrier_host_access";
+		}
+		if (barrier.type == MVKPipelineBarrier::Image) {
+			bool colorLayout = barrier.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+			bool presentLayout = barrier.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR);
+			constexpr VkImageAspectFlags depthStencilAspects =
+				VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+			bool depthStencilAspect = barrier.aspectMask != 0 &&
+				(barrier.aspectMask & ~depthStencilAspects) == 0;
+			bool depthStencilLayout = depthStencilAspect &&
+				(barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ||
+				 barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+				 (barrier.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
+				  barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ||
+				 (barrier.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT &&
+				  barrier.newLayout == VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL));
+			constexpr VkImageAspectFlags generalAspects =
+				VK_IMAGE_ASPECT_COLOR_BIT |
+				VK_IMAGE_ASPECT_DEPTH_BIT |
+				VK_IMAGE_ASPECT_STENCIL_BIT;
+			bool generalLayout = barrier.newLayout == VK_IMAGE_LAYOUT_GENERAL &&
+				barrier.aspectMask != 0 &&
+				(barrier.aspectMask & ~generalAspects) == 0;
+			uint32_t mipLevelCount = barrier.levelCount == (uint8_t)VK_REMAINING_MIP_LEVELS
+				? barrier.mvkImage ? barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel : 0
+				: barrier.levelCount;
+			uint32_t layerCount = barrier.layerCount == (uint16_t)VK_REMAINING_ARRAY_LAYERS
+				? barrier.mvkImage ? barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer : 0
+				: barrier.layerCount;
+			if (!colorLayout && !presentLayout &&
+				!depthStencilLayout && !generalLayout) {
+				return getMetal4ImageLayoutUnsupportedReason(barrier.newLayout);
+			}
+			if (!barrier.mvkImage ||
+				barrier.baseMipLevel >= barrier.mvkImage->getMipLevelCount() ||
+				barrier.baseArrayLayer >= barrier.mvkImage->getLayerCount() ||
+				!mipLevelCount || !layerCount ||
+				mipLevelCount > barrier.mvkImage->getMipLevelCount() - barrier.baseMipLevel ||
+				layerCount > barrier.mvkImage->getLayerCount() - barrier.baseArrayLayer) {
+				return "barrier_image_range";
+			}
 		}
 		if (barrier.type == MVKPipelineBarrier::Buffer ||
 			barrier.type == MVKPipelineBarrier::Image) {
@@ -76,11 +146,11 @@ static bool supportsMetal4PipelineBarriers(const Barriers& barriers) {
 			bool dstIgnored = barrier.dstQueueFamilyIndex == UINT8_MAX;
 			if (!((srcIgnored && dstIgnored) ||
 				  barrier.srcQueueFamilyIndex == barrier.dstQueueFamilyIndex)) {
-				return false;
+				return "barrier_queue_family";
 			}
 		}
 	}
-	return true;
+	return nullptr;
 }
 
 template <size_t N>
@@ -102,7 +172,9 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pDependencyInfo->pImageMemoryBarriers[i]);
 	}
-	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
+	_metal4UnsupportedReason =
+		getMetal4PipelineBarrierUnsupportedReason(_dependencyFlags, _barriers);
+	_supportsMetal4Encoding = !_metal4UnsupportedReason;
 
 	return VK_SUCCESS;
 }
@@ -132,7 +204,9 @@ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
 	for (uint32_t i = 0; i < imageMemoryBarrierCount; i++) {
 		_barriers.emplace_back(pImageMemoryBarriers[i], srcStageMask, dstStageMask);
 	}
-	_supportsMetal4Encoding = _dependencyFlags == 0 && supportsMetal4PipelineBarriers(_barriers);
+	_metal4UnsupportedReason =
+		getMetal4PipelineBarrierUnsupportedReason(_dependencyFlags, _barriers);
+	_supportsMetal4Encoding = !_metal4UnsupportedReason;
 
 	return VK_SUCCESS;
 }
@@ -161,6 +235,10 @@ bool MVKCmdPipelineBarrier<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder)
 										 barrier.srcAccessMask,
 										 barrier.dstStageMask,
 										 barrier.dstAccessMask)) {
+			return false;
+		}
+		if (barrier.type == MVKPipelineBarrier::Image &&
+			!cmdEncoder->trackImageBarrier(barrier)) {
 			return false;
 		}
 	}
@@ -314,7 +392,13 @@ void MVKCmdBindGraphicsPipeline::encode(MVKCommandEncoder* cmdEncoder) {
 
 bool MVKCmdBindGraphicsPipeline::supportsMetal4Encoding() const {
 	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
-	return pipeline && pipeline->supportsMetal4DescriptorlessRenderExecution();
+	return pipeline && pipeline->supportsMetal4RenderExecution();
+}
+
+const char* MVKCmdBindGraphicsPipeline::getMetal4UnsupportedReason() const {
+	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
+	return pipeline ? pipeline->metal4RenderExecutionUnsupportedReason()
+					: "MVKCmdBindGraphicsPipeline:null_pipeline";
 }
 
 bool MVKCmdBindGraphicsPipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -341,7 +425,7 @@ void MVKCmdBindComputePipeline::encode(MVKCommandEncoder* cmdEncoder) {
 
 bool MVKCmdBindComputePipeline::supportsMetal4Encoding() const {
 	auto* pipeline = static_cast<MVKComputePipeline*>(_pipeline);
-	return pipeline && pipeline->supportsMetal4DescriptorlessExecution();
+	return pipeline && pipeline->supportsMetal4Execution();
 }
 
 bool MVKCmdBindComputePipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -386,6 +470,51 @@ VkResult MVKCmdBindDescriptorSetsStatic<N>::setContent(MVKCommandBuffer* cmdBuff
 template <size_t N>
 void MVKCmdBindDescriptorSetsStatic<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	encode(cmdEncoder, MVKArrayRef<uint32_t>());
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::supportsMetal4Encoding() const {
+	if ((_pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS &&
+		 _pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) || !_pipelineLayout ||
+		_descriptorSets.empty() ||
+		_firstSet + _descriptorSets.size() > _pipelineLayout->getDescriptorSetCount()) {
+		return false;
+	}
+	for (size_t setIndex = 0; setIndex < _descriptorSets.size(); setIndex++) {
+		const MVKDescriptorSet* descriptorSet = _descriptorSets[setIndex];
+		if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+			descriptorSet->layout !=
+				_pipelineLayout->getDescriptorSetLayout(_firstSet + setIndex)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	for (size_t setOffset = 0; setOffset < _descriptorSets.size(); setOffset++) {
+		if (!cmdEncoder->useDescriptorSet(
+				_pipelineBindPoint,
+				_descriptorSets[setOffset],
+				_firstSet + static_cast<uint32_t>(setOffset))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindDescriptorSetsStatic<N>::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->bindDescriptorSets(_pipelineBindPoint,
+									  _pipelineLayout,
+									  _firstSet,
+									  static_cast<uint32_t>(_descriptorSets.size()),
+									  _descriptorSets.data());
 }
 
 template <size_t N>

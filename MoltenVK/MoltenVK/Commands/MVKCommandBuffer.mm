@@ -75,8 +75,10 @@ MVKCommandEncodingContext::~MVKCommandEncodingContext() {
 #pragma mark -
 #pragma mark MVKCurrentSubpassInfo
 
-void MVKCurrentSubpassInfo::beginRenderpass(MVKRenderPass* rp) {
+void MVKCurrentSubpassInfo::beginRenderpass(MVKRenderPass* rp, MVKFramebuffer* fb) {
 	renderpass = rp;
+	framebuffer = fb;
+	renderingInfo = nullptr;
 	subpassIndex = 0;
 	updateViewMask();
 }
@@ -84,10 +86,12 @@ void MVKCurrentSubpassInfo::nextSubpass() {
 	subpassIndex++;
 	updateViewMask();
 }
-void MVKCurrentSubpassInfo::beginRendering(uint32_t viewMask) {
+void MVKCurrentSubpassInfo::beginRendering(const VkRenderingInfo* info) {
 	renderpass = nullptr;
+	framebuffer = nullptr;
+	renderingInfo = info;
 	subpassIndex = 0;
-	subpassViewMask = viewMask;
+	subpassViewMask = info ? info->viewMask : 0;
 }
 void MVKCurrentSubpassInfo::updateViewMask() {
 	subpassViewMask = renderpass ? renderpass->getSubpass(subpassIndex)->getViewMask() : 0;
@@ -301,7 +305,8 @@ void MVKCommandBuffer::addCommand(MVKCommand* command) {
     if ( !_head ) { _head = command; }
 }
 
-bool MVKCommandBuffer::supportsMetal4Encoding() const {
+bool MVKCommandBuffer::supportsMetal4Encoding(const char** firstUnsupportedCommand) const {
+	if (firstUnsupportedCommand) { *firstUnsupportedCommand = nullptr; }
 	// Secondary command inheritance, prefilling, and simultaneous-use require
 	// additional materialization ownership that is outside the first usable
 	// transfer slice. A command count without a retained list means immediate or
@@ -310,19 +315,33 @@ bool MVKCommandBuffer::supportsMetal4Encoding() const {
 		_supportsConcurrentExecution ||
 		_prefilledMTLCmdBuffer ||
 		(_commandCount > 0 && !_head)) {
+		if (firstUnsupportedCommand) {
+			*firstUnsupportedCommand = _isSecondary ? "secondary_command_buffer" :
+				_supportsConcurrentExecution ? "simultaneous_use_command_buffer" :
+				_prefilledMTLCmdBuffer ? "prefilled_command_buffer" :
+				"unretained_command_stream";
+		}
 		return false;
 	}
 
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->supportsMetal4Encoding()) { return false; }
+		if (!command->supportsMetal4Encoding()) {
+			if (firstUnsupportedCommand) {
+				*firstUnsupportedCommand = command->getMetal4UnsupportedReason();
+			}
+			return false;
+		}
 	}
 	return true;
 }
 
 bool MVKCommandBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	if (!cmdEncoder) { return false; }
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->prepareMetal4Encoding(cmdEncoder)) { return false; }
+		if (!command->prepareMetal4Encoding(cmdEncoder)) {
+			cmdEncoder->recordMetal4PreparationFailure(command->getMetal4CommandTypeName());
+			return false;
+		}
 	}
 	return true;
 }
@@ -353,9 +372,12 @@ void MVKCommandBuffer::endMetal4Execution(bool previousWasExecuted, bool committ
 }
 
 bool MVKCommandBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	if (!cmdEncoder) { return false; }
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->encodeMetal4(cmdEncoder)) { return false; }
+		if (!command->encodeMetal4(cmdEncoder)) {
+			cmdEncoder->recordMetal4EncodingFailure(command->getMetal4CommandTypeName());
+			return false;
+		}
 	}
 	return true;
 }

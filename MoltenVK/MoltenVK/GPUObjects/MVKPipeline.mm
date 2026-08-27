@@ -1115,14 +1115,16 @@ MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
 		uint32_t cachePolicy = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_CACHE_POLICY", 0.0) == 0.0
 			? 0u : 1u;
 		bool useAsyncTasks = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC", 0.0) != 0.0;
-		// shouldMaximizeConcurrentCompilation controls the device-selected CPU
-		// compilation width. Do not impose a second MoltenVK-local cap here.
+		double configuredAsyncMax = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX",
+			3.0);
+		size_t configuredAsyncTaskMax = static_cast<size_t>(
+			mvkClamp(configuredAsyncMax, 1.0, 3.0));
 		size_t deviceAsyncTaskMax = max<size_t>(
 			1,
 			static_cast<size_t>(mtlDevice.maximumConcurrentCompilationTaskCount));
-		size_t configuredAsyncTaskMax = deviceAsyncTaskMax;
 		size_t effectiveAsyncTaskMax = useAsyncTasks
-			? deviceAsyncTaskMax
+			? min(configuredAsyncTaskMax, deviceAsyncTaskMax)
 			: 1;
 			uint64_t configuredTimeoutNs = device->getMVKConfig().metalCompileTimeout;
 			uint64_t compilerTimeoutNs = configuredTimeoutNs >=
@@ -2199,6 +2201,9 @@ void MVKPipelineLayout::populateBindOperations(MVKPipelineBindScript& script, co
 		uint32_t descIdx = layout->getBindingIndex(binding);
 		if (descIdx >= layout->bindings().size()) { assert(!"Binding missing from layout"); continue; }
 		const MVKDescriptorBinding& desc = layout->bindings()[descIdx];
+		if (layout->argBufMode() == MVKArgumentBufferMode::Metal3) {
+			script.descriptorBindings.push_back({static_cast<uint8_t>(set), descIdx});
+		}
 		auto counts = desc.perDescriptorResourceCount;
 		uint32_t nonTexOffset = counts.texture * sizeof(id);
 		if (!desc.descriptorCount) { continue; }
@@ -2721,6 +2726,149 @@ static MVKRenderStateFlags getRenderStateFlags(VkDynamicState vk) {
 	}
 }
 
+static constexpr MVKRenderStateFlags kMetal4SupportedDynamicState {
+	MVKRenderStateFlag::VertexStride,
+	MVKRenderStateFlag::Viewports,
+	MVKRenderStateFlag::Scissors,
+	MVKRenderStateFlag::DepthBias,
+	MVKRenderStateFlag::BlendConstants,
+	MVKRenderStateFlag::StencilCompareMask,
+	MVKRenderStateFlag::StencilWriteMask,
+	MVKRenderStateFlag::StencilReference,
+};
+
+static const char* getMetal4UnsupportedDynamicStateReason(MVKRenderStateFlags dynamicStateFlags) {
+	MVKRenderStateFlags unsupported =
+		dynamicStateFlags.removingAll(kMetal4SupportedDynamicState);
+	static constexpr MVKRenderStateFlags viewportScissor {
+		MVKRenderStateFlag::Viewports,
+		MVKRenderStateFlag::Scissors,
+	};
+	static constexpr MVKRenderStateFlags depthStencil {
+		MVKRenderStateFlag::DepthBounds,
+		MVKRenderStateFlag::DepthBoundsTestEnable,
+		MVKRenderStateFlag::DepthCompareOp,
+		MVKRenderStateFlag::DepthTestEnable,
+		MVKRenderStateFlag::DepthWriteEnable,
+		MVKRenderStateFlag::StencilCompareMask,
+		MVKRenderStateFlag::StencilOp,
+		MVKRenderStateFlag::StencilReference,
+		MVKRenderStateFlag::StencilTestEnable,
+		MVKRenderStateFlag::StencilWriteMask,
+	};
+	static constexpr MVKRenderStateFlags rasterization {
+		MVKRenderStateFlag::CullMode,
+		MVKRenderStateFlag::DepthBias,
+		MVKRenderStateFlag::DepthBiasEnable,
+		MVKRenderStateFlag::DepthClipEnable,
+		MVKRenderStateFlag::FrontFace,
+		MVKRenderStateFlag::LineRasterizationMode,
+		MVKRenderStateFlag::LineWidth,
+		MVKRenderStateFlag::PolygonMode,
+		MVKRenderStateFlag::RasterizerDiscardEnable,
+	};
+	static constexpr MVKRenderStateFlags topology {
+		MVKRenderStateFlag::PrimitiveRestartEnable,
+		MVKRenderStateFlag::PrimitiveTopology,
+		MVKRenderStateFlag::ProvokingVertexMode,
+	};
+	static constexpr MVKRenderStateFlags colorBlend {
+		MVKRenderStateFlag::BlendConstants,
+		MVKRenderStateFlag::ColorBlend,
+		MVKRenderStateFlag::ColorBlendEnable,
+		MVKRenderStateFlag::LogicOp,
+		MVKRenderStateFlag::LogicOpEnable,
+	};
+	static constexpr MVKRenderStateFlags sampling {
+		MVKRenderStateFlag::SampleLocations,
+		MVKRenderStateFlag::SampleLocationsEnable,
+	};
+	static constexpr MVKRenderStateFlags tessellation {
+		MVKRenderStateFlag::PatchControlPoints,
+	};
+
+	if (unsupported.hasAny(viewportScissor)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_viewport_scissor";
+	}
+	if (unsupported.hasAny(depthStencil)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_depth_stencil";
+	}
+	if (unsupported.hasAny(rasterization)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_rasterization";
+	}
+	if (unsupported.hasAny(topology)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_topology";
+	}
+	if (unsupported.hasAny(colorBlend)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_color_blend";
+	}
+	if (unsupported.hasAny(sampling)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_sampling";
+	}
+	if (unsupported.hasAny(tessellation)) {
+		return "MVKCmdBindGraphicsPipeline:dynamic_tessellation";
+	}
+	return "MVKCmdBindGraphicsPipeline:dynamic_other";
+}
+
+static bool isMetal4SupportedStaticPrimitiveTopology(
+	const VkPipelineInputAssemblyStateCreateInfo* pIA) {
+	if (!pIA) { return false; }
+	switch (pIA->topology) {
+		case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static const char* getMetal4UnsupportedFixedFunctionReason(
+	const VkPipelineInputAssemblyStateCreateInfo* pIA,
+	const VkPipelineRasterizationStateCreateInfo* pRS,
+	bool isRasterizing,
+	const VkPipelineMultisampleStateCreateInfo* pMS,
+	const VkPipelineViewportStateCreateInfo* pVP,
+	bool hasDynamicViewport,
+	bool hasDynamicScissor,
+	uint8_t numStaticViewports,
+	uint8_t numStaticScissors,
+	bool hasCullBothFaces,
+	bool hasDepthBoundsTest,
+	bool hasDepthClamp) {
+	if (!isMetal4SupportedStaticPrimitiveTopology(pIA)) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_topology";
+	}
+	if (!pRS || (isRasterizing &&
+		(pRS->rasterizerDiscardEnable ||
+		 pRS->polygonMode != VK_POLYGON_MODE_FILL ||
+		 pRS->cullMode == VK_CULL_MODE_FRONT_AND_BACK || hasCullBothFaces))) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_rasterization";
+	}
+	if (!pMS || pMS->rasterizationSamples != VK_SAMPLE_COUNT_1_BIT ||
+		pMS->sampleShadingEnable || pMS->alphaToCoverageEnable ||
+		pMS->alphaToOneEnable) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_multisample";
+	}
+	if (isRasterizing && (!pVP || pVP->viewportCount == 0 ||
+		pVP->viewportCount > kMVKMaxViewportScissorCount ||
+		pVP->scissorCount == 0 ||
+		pVP->scissorCount > kMVKMaxViewportScissorCount ||
+		(!hasDynamicViewport && (pVP->viewportCount != 1 ||
+			!pVP->pViewports || numStaticViewports != 1)) ||
+		(!hasDynamicScissor && (pVP->scissorCount != 1 ||
+			!pVP->pScissors || numStaticScissors != 1)))) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_viewport";
+	}
+	if (isRasterizing && (hasDepthBoundsTest || hasDepthClamp)) {
+		return "MVKCmdBindGraphicsPipeline:fixed_function_depth_stencil";
+	}
+	return "MVKCmdBindGraphicsPipeline:fixed_function_unknown";
+}
+
 static void loadStencil(MVKMTLStencilDescriptorData& mtl, const VkStencilOpState& vk) {
 	mtl.readMask = vk.compareMask;
 	mtl.writeMask = vk.writeMask;
@@ -2992,8 +3140,21 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	// Remove unneeded state
 	MVKRenderStateFlags needed = MVKRenderStateFlags::all();
-	if (!_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) && !_staticStateData.depthStencil.stencilTestEnabled)
-		needed.remove(MVKRenderStateFlag::StencilReference);
+	if (!_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) &&
+		!_staticStateData.depthStencil.stencilTestEnabled) {
+		needed.removeAll({
+			MVKRenderStateFlag::StencilCompareMask,
+			MVKRenderStateFlag::StencilWriteMask,
+			MVKRenderStateFlag::StencilReference,
+		});
+	}
+	// A dynamic depth-bias value cannot affect rasterization while depth bias is
+	// statically disabled. Keep the value command out of pipeline eligibility,
+	// but retain DepthBias when its enable state can change dynamically.
+	if (!_dynamicStateFlags.has(MVKRenderStateFlag::DepthBiasEnable) &&
+		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBias)) {
+		needed.remove(MVKRenderStateFlag::DepthBias);
+	}
 	if (!_isRasterizingColor || !usesConstantColor(_dynamicStateFlags, pCreateInfo->pColorBlendState))
 		needed.remove(MVKRenderStateFlag::BlendConstants);
 	if (_primitiveTopologyClass == MTLPrimitiveTopologyClassPoint || _primitiveTopologyClass == MTLPrimitiveTopologyClassLine)
@@ -3022,51 +3183,202 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 			resources.implicitBuffers.needed.empty() &&
 			!resources.usesPhysicalStorageBufferAddresses;
 	};
+	auto stageSupportsArgumentTable = [this](MVKShaderStage stage) {
+		const auto& resources = _stageResources[stage];
+		if (resources.usesPhysicalStorageBufferAddresses ||
+			resources.resources.textures.any() ||
+			resources.resources.samplers.areAnyBitsSet() ||
+			!resources.implicitBuffers.needed.empty()) {
+			return false;
+		}
+		for (size_t bufferIndex : resources.resources.buffers) {
+			if (bufferIndex >= kMVKMaxDescriptorSetCount ||
+				!resources.resources.descriptorSetData.get(bufferIndex)) {
+				return false;
+			}
+		}
+		for (size_t setIndex : resources.resources.descriptorSetData) {
+			if (setIndex >= _layout->getDescriptorSetCount() ||
+				_layout->getDescriptorSetLayout(setIndex)->argBufMode() !=
+					MVKArgumentBufferMode::Metal3) {
+				return false;
+			}
+		}
+		return true;
+	};
 	const auto* pVI = pCreateInfo->pVertexInputState;
 	const auto* pIA = pCreateInfo->pInputAssemblyState;
 	const auto* pRS = pCreateInfo->pRasterizationState;
 	const auto* pMS = pCreateInfo->pMultisampleState;
 	const auto* pVP = pCreateInfo->pViewportState;
-	bool hasOneDynamicColorAttachment =
-		pCreateInfo->renderPass == VK_NULL_HANDLE &&
+	bool hasActiveStencilState =
+		_dynamicStateFlags.has(MVKRenderStateFlag::StencilTestEnable) ||
+		_staticStateData.depthStencil.stencilTestEnabled;
+	bool hasSupportedStencilAttachment = pRendInfo &&
+		(pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED ||
+		 getPixelFormats()->isStencilFormat(
+			 getPixelFormats()->getMTLPixelFormat(pRendInfo->stencilAttachmentFormat)));
+	bool hasSupportedClassicStencilAttachment =
+		pCreateInfo->renderPass != VK_NULL_HANDLE &&
+		pRendInfo && pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+		hasSupportedStencilAttachment;
+	bool hasSupportedRenderAttachments =
 		pRendInfo && pRendInfo->viewMask == 0 &&
-		pRendInfo->colorAttachmentCount == 1 &&
-		pRendInfo->pColorAttachmentFormats &&
-		pRendInfo->pColorAttachmentFormats[0] != VK_FORMAT_UNDEFINED &&
-		pRendInfo->depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
-		pRendInfo->stencilAttachmentFormat == VK_FORMAT_UNDEFINED;
-	bool hasStrictShaderStages =
+		pRendInfo->colorAttachmentCount <= kMVKMaxColorAttachmentCount &&
+		(pRendInfo->colorAttachmentCount == 0 || pRendInfo->pColorAttachmentFormats) &&
+		hasSupportedStencilAttachment;
+	bool hasAnyColorAttachment = false;
+	if (hasSupportedRenderAttachments) {
+		for (uint32_t colorIndex = 0;
+			 colorIndex < pRendInfo->colorAttachmentCount;
+			 colorIndex++) {
+			hasAnyColorAttachment |=
+				pRendInfo->pColorAttachmentFormats[colorIndex] != VK_FORMAT_UNDEFINED;
+		}
+		hasSupportedRenderAttachments &= hasAnyColorAttachment ||
+			pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED ||
+			pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED;
+	}
+	bool hasVertexFragmentStages =
 		pCreateInfo->stageCount == 2 && pVertexSS && pFragmentSS &&
-		!pTessCtlSS && !pTessEvalSS &&
+		!pTessCtlSS && !pTessEvalSS;
+	bool hasVertexOnlyDiscardStage =
+		!_isRasterizing && pCreateInfo->stageCount == 1 && pVertexSS &&
+		!pFragmentSS && !pTessCtlSS && !pTessEvalSS;
+	bool hasSupportedShaderStageShape =
+		hasVertexFragmentStages || hasVertexOnlyDiscardStage;
+	bool hasDescriptorlessShaderStages = hasSupportedShaderStageShape &&
 		stageIsDescriptorless(kMVKShaderStageVertex) &&
-		stageIsDescriptorless(kMVKShaderStageFragment);
-	bool hasNoVertexInput = pVI &&
-		pVI->vertexBindingDescriptionCount == 0 &&
-		pVI->vertexAttributeDescriptionCount == 0 &&
-		_vkVertexBuffers.areAllBitsClear() && _mtlVertexBuffers.areAllBitsClear();
+		(!pFragmentSS || stageIsDescriptorless(kMVKShaderStageFragment));
+	bool hasArgumentTableShaderStages = hasSupportedShaderStageShape &&
+		stageSupportsArgumentTable(kMVKShaderStageVertex) &&
+		(!pFragmentSS || stageSupportsArgumentTable(kMVKShaderStageFragment)) &&
+		(_stageResources[kMVKShaderStageVertex].resources.descriptorSetData.areAnyBitsSet() ||
+		 _stageResources[kMVKShaderStageFragment].resources.descriptorSetData.areAnyBitsSet());
+	bool hasSupportedVertexInput = pVI &&
+		_translatedVertexBindings.empty() && _zeroDivisorVertexBindings.empty();
+	bool hasSupportedDepthFormat = pRendInfo &&
+		(pRendInfo->depthAttachmentFormat == VK_FORMAT_UNDEFINED ||
+		 getPixelFormats()->isDepthFormat(
+			 getPixelFormats()->getMTLPixelFormat(pRendInfo->depthAttachmentFormat)));
+	bool needsDepthAttachment =
+		_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthTest) ||
+		_staticStateData.depthStencil.depthWriteEnabled;
+	bool hasSupportedDepthState = hasSupportedDepthFormat &&
+		(!needsDepthAttachment ||
+		 pRendInfo->depthAttachmentFormat != VK_FORMAT_UNDEFINED);
+	bool hasUnsupportedDynamicState =
+		!_dynamicStateFlags.removingAll(kMetal4SupportedDynamicState).empty();
+	bool hasDynamicViewport =
+		_dynamicStateFlags.has(MVKRenderStateFlag::Viewports);
+	bool hasDynamicScissor =
+		_dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
 	bool hasStrictFixedFunction =
-		pIA && pIA->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
-		!pIA->primitiveRestartEnable &&
-		pRS && !pRS->rasterizerDiscardEnable &&
-		pRS->polygonMode == VK_POLYGON_MODE_FILL &&
-		pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK &&
+		isMetal4SupportedStaticPrimitiveTopology(pIA) &&
+		pRS && (!_isRasterizing ||
+			(!pRS->rasterizerDiscardEnable &&
+			 pRS->polygonMode == VK_POLYGON_MODE_FILL &&
+			 pRS->cullMode != VK_CULL_MODE_FRONT_AND_BACK)) &&
 		pMS && pMS->rasterizationSamples == VK_SAMPLE_COUNT_1_BIT &&
 		!pMS->sampleShadingEnable && !pMS->alphaToCoverageEnable && !pMS->alphaToOneEnable &&
-		pVP && pVP->viewportCount == 1 && pVP->scissorCount == 1 &&
-		pVP->pViewports && pVP->pScissors &&
-		_dynamicStateFlags.empty() &&
-		_staticStateData.numViewports == 1 && _staticStateData.numScissors == 1 &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
-		!_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthTest) &&
-		!_staticStateData.depthStencil.depthWriteEnabled &&
-		!_staticStateData.depthStencil.stencilTestEnabled;
+		!hasUnsupportedDynamicState &&
+		(!_isRasterizing ||
+			(pVP && pVP->viewportCount > 0 &&
+			 pVP->viewportCount <= kMVKMaxViewportScissorCount &&
+			 pVP->scissorCount > 0 &&
+			 pVP->scissorCount <= kMVKMaxViewportScissorCount &&
+			 (hasDynamicViewport || pVP->pViewports) &&
+			 (hasDynamicScissor || pVP->pScissors) &&
+			 (hasDynamicViewport || _staticStateData.numViewports == 1) &&
+			 (hasDynamicScissor || _staticStateData.numScissors == 1) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest) &&
+			 !_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp))) &&
+		hasSupportedDepthState;
 
 	_supportsMetal4DescriptorlessRenderExecution =
-		_mtlPipelineState && _isRasterizing && !_isTessellationPipeline &&
-		hasOneDynamicColorAttachment && hasStrictShaderStages &&
-		hasNoVertexInput && hasStrictFixedFunction;
-	if (_supportsMetal4DescriptorlessRenderExecution) {
-		_metal4ColorAttachmentFormat = pRendInfo->pColorAttachmentFormats[0];
+		_mtlPipelineState && !_isTessellationPipeline &&
+		hasSupportedRenderAttachments && hasDescriptorlessShaderStages &&
+		hasSupportedVertexInput && hasStrictFixedFunction;
+	_supportsMetal4ArgumentTableRenderExecution =
+		_mtlPipelineState && !_isTessellationPipeline &&
+		hasSupportedRenderAttachments && hasArgumentTableShaderStages &&
+		hasSupportedVertexInput && hasStrictFixedFunction;
+	if (supportsMetal4RenderExecution()) {
+		_metal4ColorAttachmentCount = pRendInfo->colorAttachmentCount;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _metal4ColorAttachmentCount;
+			 colorIndex++) {
+			_metal4ColorAttachmentFormats[colorIndex] =
+				pRendInfo->pColorAttachmentFormats[colorIndex];
+		}
+		_metal4DepthAttachmentFormat = pRendInfo->depthAttachmentFormat;
+		_metal4StencilAttachmentFormat = pRendInfo->stencilAttachmentFormat;
+		_metal4RenderExecutionUnsupportedReason = nullptr;
+	} else if (hasSupportedShaderStageShape &&
+			   !hasDescriptorlessShaderStages && !hasArgumentTableShaderStages) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:descriptor_resources";
+	} else if (!hasSupportedVertexInput) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:vertex_input";
+	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
+			   pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_render_pass_mrt";
+	} else if (pCreateInfo->renderPass != VK_NULL_HANDLE && pRendInfo &&
+			   pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+			   !hasSupportedClassicStencilAttachment) {
+		_metal4RenderExecutionUnsupportedReason =
+			hasActiveStencilState
+				? "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_active"
+				: "MVKCmdBindGraphicsPipeline:attachment_render_pass_stencil_inactive";
+	} else if (!pRendInfo) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_rendering_info";
+	} else if (pRendInfo->viewMask != 0) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_multiview";
+	} else if (pRendInfo->colorAttachmentCount > kMVKMaxColorAttachmentCount) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_color_count";
+	} else if (pRendInfo->colorAttachmentCount > 0 &&
+			   (!pRendInfo->pColorAttachmentFormats || !hasAnyColorAttachment)) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_color_format";
+	} else if (pRendInfo->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
+			   !hasSupportedStencilAttachment) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_stencil";
+	} else if (!hasSupportedDepthFormat) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_depth_format";
+	} else if (!hasSupportedDepthState) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_depth_state";
+	} else if (!hasSupportedRenderAttachments) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:attachment_no_render_target";
+	} else if (hasUnsupportedDynamicState) {
+		_metal4RenderExecutionUnsupportedReason =
+			getMetal4UnsupportedDynamicStateReason(_dynamicStateFlags);
+	} else if (!_mtlPipelineState) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:missing_pipeline_state";
+	} else if (_isTessellationPipeline) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:tessellation";
+	} else if (!hasSupportedShaderStageShape) {
+		_metal4RenderExecutionUnsupportedReason =
+			"MVKCmdBindGraphicsPipeline:shader_stage_shape";
+	} else {
+		_metal4RenderExecutionUnsupportedReason =
+			getMetal4UnsupportedFixedFunctionReason(
+				pIA, pRS, _isRasterizing, pMS, pVP, hasDynamicViewport, hasDynamicScissor,
+				_staticStateData.numViewports, _staticStateData.numScissors,
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::CullBothFaces),
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthBoundsTest),
+				_staticStateData.enable.has(MVKRenderStateEnableFlag::DepthClamp));
 	}
 }
 
@@ -4778,6 +5090,31 @@ uint32_t MVKComputePipeline::getImplicitBufferIndex(uint32_t bufferIndexOffset) 
 	return getMetalFeatures().maxPerStageBufferCount - (bufferIndexOffset + 1);
 }
 
+bool MVKComputePipeline::supportsMetal4ArgumentTableExecution() const {
+	if (!_mtlPipelineState || !_layout ||
+		_stageResources.usesPhysicalStorageBufferAddresses ||
+		_stageResources.resources.textures.any() ||
+		_stageResources.resources.samplers.areAnyBitsSet() ||
+		!_stageResources.implicitBuffers.needed.empty() ||
+		!_stageResources.resources.descriptorSetData.areAnyBitsSet()) {
+		return false;
+	}
+	for (size_t bufferIndex : _stageResources.resources.buffers) {
+		if (bufferIndex >= kMVKMaxDescriptorSetCount ||
+			!_stageResources.resources.descriptorSetData.get(bufferIndex)) {
+			return false;
+		}
+	}
+	for (size_t setIndex : _stageResources.resources.descriptorSetData) {
+		if (setIndex >= _layout->getDescriptorSetCount() ||
+			_layout->getDescriptorSetLayout(setIndex)->argBufMode() !=
+				MVKArgumentBufferMode::Metal3) {
+			return false;
+		}
+	}
+	return true;
+}
+
 MVKComputePipeline::~MVKComputePipeline() {
 	@synchronized (getMTLDevice()) {
 		[_mtlPipelineState release];
@@ -4830,14 +5167,26 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 														 MVKPipeline* pipeline,
 														 VkPipelineCreationFeedback* pShaderFeedback,
 														 uint64_t startTime) {
-	bool wasAdded = false;
+	bool cacheRepresentationChanged = false;
+	bool wasCacheHit = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	MVKShaderLibrary* shLib = slCache->getShaderLibrary(
+		pContext,
+		shaderModule,
+		pipeline,
+		&cacheRepresentationChanged,
+		&wasCacheHit,
+		pShaderFeedback,
+		startTime);
 	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
 		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
 	}
-	if (wasAdded) { markDirty(); }
-	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
+	if (cacheRepresentationChanged) { markDirty(); }
+	if (wasCacheHit && pShaderFeedback) {
+		mvkEnableFlags(
+			pShaderFeedback->flags,
+			VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+	}
 	return shLib;
 }
 
@@ -4886,11 +5235,40 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
-	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
-	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
-	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
+	bool next() { return (++_index < getEntryCount()); }
+	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() {
+		return isDeferred()
+			? getDeferredShaderConversionConfig()
+			: _pSLCache->_shaderLibraries[_index].first;
+	}
+	MVKCompressor<std::string>& getCompressedMSL() {
+		return isDeferred()
+			? getDeferredCompressedMSL()
+			: _pSLCache->_shaderLibraries[_index].second->getCompressedMSL();
+	}
+	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() {
+		return isDeferred()
+			? getDeferredShaderConversionResultInfo()
+			: _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo;
+	}
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
+
+	size_t getEntryCount() const {
+		return _pSLCache
+			? _pSLCache->_shaderLibraries.size() + _pSLCache->_deferredShaderLibraries.size()
+			: 0;
+	}
+	bool isDeferred() const { return _index >= _pSLCache->_shaderLibraries.size(); }
+	size_t getDeferredIndex() const { return _index - _pSLCache->_shaderLibraries.size(); }
+	SPIRVToMSLConversionConfiguration& getDeferredShaderConversionConfig() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].shaderConfig;
+	}
+	SPIRVToMSLConversionResultInfo& getDeferredShaderConversionResultInfo() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].resultInfo;
+	}
+	MVKCompressor<std::string>& getDeferredCompressedMSL() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].compressedMSL;
+	}
 
 	MVKShaderLibraryCache* _pSLCache;
 	size_t _count = 0;
@@ -5046,10 +5424,22 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					MVKCompressor<std::string> compressedMSL;
 					reader(compressedMSL);
 
-					// Add the shader library to the staging cache.
+					// Keep imported entries compressed until an exact Pipeline request
+					// needs the matching shader-module/config key. Generic MoltenVK use
+					// without the shared repository retains the legacy eager path.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
+					if (slCache->supportsDeferredShaderLibraryImport()) {
+						slCache->addDeferredShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					} else {
+						slCache->addShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					}
 
 					break;
 				}

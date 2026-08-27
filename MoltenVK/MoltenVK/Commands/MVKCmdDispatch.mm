@@ -57,7 +57,7 @@ void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 bool MVKCmdDispatch::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareComputeDispatch();
 }
 
 bool MVKCmdDispatch::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -83,4 +83,3 @@ void MVKCmdDispatchIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 																				indirectBufferOffset: _mtlIndirectBufferOffset
 																			   threadsPerThreadgroup: cmdEncoder->getComputePipeline()->getThreadgroupSize()];
 }
-

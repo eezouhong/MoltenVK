@@ -91,6 +91,11 @@ struct MVKDescriptorBindOperation {
 
 struct MVKPipelineBindScript {
 	MVKSmallVector<MVKDescriptorBindOperation> ops;
+	struct DescriptorBindingUse {
+		uint8_t set;
+		uint32_t bindingIdx;
+	};
+	MVKSmallVector<DescriptorBindingUse> descriptorBindings;
 };
 
 #pragma mark - MVKPipelineLayout
@@ -402,8 +407,73 @@ public:
 	/** Returns whether the strict descriptorless Metal 4 render slice can execute this pipeline. */
 	bool supportsMetal4DescriptorlessRenderExecution() const { return _supportsMetal4DescriptorlessRenderExecution; }
 
-	/** Returns the one color format accepted by the strict Metal 4 render slice. */
-	VkFormat getMetal4ColorAttachmentFormat() const { return _metal4ColorAttachmentFormat; }
+	/** Returns whether the common Metal 3 descriptor-set path fits an MTL4 argument table. */
+	bool supportsMetal4ArgumentTableRenderExecution() const {
+		return _supportsMetal4ArgumentTableRenderExecution;
+	}
+
+	/** Returns whether either validated Metal 4 render resource path can execute this pipeline. */
+	bool supportsMetal4RenderExecution() const {
+		return _supportsMetal4DescriptorlessRenderExecution ||
+			_supportsMetal4ArgumentTableRenderExecution;
+	}
+
+	/** Returns whether the strict Metal 4 slice consumes static vertex buffers. */
+	bool usesMetal4VertexInput() const { return _vkVertexBuffers.areAnyBitsSet(); }
+	bool usesMetal4DynamicVertexStride() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::VertexStride);
+	}
+	bool usesMetal4DynamicViewport() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::Viewports);
+	}
+	bool usesMetal4DynamicScissor() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::Scissors);
+	}
+	bool usesMetal4DynamicDepthBias() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::DepthBias);
+	}
+	bool usesMetal4DynamicBlendConstants() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::BlendConstants);
+	}
+	bool usesMetal4DynamicStencilCompareMask() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilCompareMask);
+	}
+	bool usesMetal4DynamicStencilWriteMask() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilWriteMask);
+	}
+	bool usesMetal4DynamicStencilReference() const {
+		return _dynamicStateFlags.has(MVKRenderStateFlag::StencilReference);
+	}
+	bool usesMetal4BlendConstants() const {
+		return usesMetal4DynamicBlendConstants() ||
+			_staticStateFlags.has(MVKRenderStateFlag::BlendConstants);
+	}
+
+	/** Returns whether this pipeline needs the shared MTL4 argument table. */
+	bool requiresMetal4ArgumentTable() const {
+		return _supportsMetal4ArgumentTableRenderExecution || usesMetal4VertexInput();
+	}
+
+	/** Returns the first stable eligibility blocker for bounded command-backend telemetry. */
+	const char* metal4RenderExecutionUnsupportedReason() const {
+		return _metal4RenderExecutionUnsupportedReason;
+	}
+
+	/** Returns the color attachment count accepted by the Metal 4 render slice. */
+	uint32_t getMetal4ColorAttachmentCount() const { return _metal4ColorAttachmentCount; }
+
+	/** Returns one color format accepted by the Metal 4 render slice. */
+	VkFormat getMetal4ColorAttachmentFormat(uint32_t colorIndex) const {
+		return colorIndex < _metal4ColorAttachmentCount
+			? _metal4ColorAttachmentFormats[colorIndex]
+			: VK_FORMAT_UNDEFINED;
+	}
+
+	/** Returns the optional depth format accepted by the strict Metal 4 render slice. */
+	VkFormat getMetal4DepthAttachmentFormat() const { return _metal4DepthAttachmentFormat; }
+
+	/** Returns the optional stencil format accepted by the strict Metal 4 render slice. */
+	VkFormat getMetal4StencilAttachmentFormat() const { return _metal4StencilAttachmentFormat; }
 
 	/** Returns the Metal vertex buffer index to use for the specified vertex attribute binding number.  */
 	uint32_t getMetalBufferIndexForVertexAttributeBinding(uint32_t binding) { return _device->getMetalBufferIndexForVertexAttributeBinding(binding); }
@@ -544,7 +614,12 @@ protected:
 	bool _inputAttachmentIsDSAttachment = false;
 	bool _hasRemappedAttachmentLocations = false;
 	bool _supportsMetal4DescriptorlessRenderExecution = false;
-	VkFormat _metal4ColorAttachmentFormat = VK_FORMAT_UNDEFINED;
+	bool _supportsMetal4ArgumentTableRenderExecution = false;
+	const char* _metal4RenderExecutionUnsupportedReason = "MVKCmdBindGraphicsPipeline:unclassified";
+	VkFormat _metal4ColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
+	uint32_t _metal4ColorAttachmentCount = 0;
+	VkFormat _metal4DepthAttachmentFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _metal4StencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 };
 
 
@@ -580,7 +655,22 @@ public:
 	bool supportsMetal4DescriptorlessExecution() const {
 		return _mtlPipelineState &&
 			_stageResources.resources.allBits.empty() &&
-			_stageResources.implicitBuffers.needed.empty();
+			_stageResources.implicitBuffers.needed.empty() &&
+			!_stageResources.usesPhysicalStorageBufferAddresses;
+	}
+
+	/** Returns whether Metal 4 can bind this pipeline through a Metal 3 descriptor argument buffer. */
+	bool supportsMetal4ArgumentTableExecution() const;
+
+	/** Returns whether this pipeline can execute on the Metal 4 command backend. */
+	bool supportsMetal4Execution() const {
+		return supportsMetal4DescriptorlessExecution() ||
+			supportsMetal4ArgumentTableExecution();
+	}
+
+	/** Returns whether this pipeline requires an MTL4 argument table. */
+	bool requiresMetal4ArgumentTable() const {
+		return supportsMetal4ArgumentTableExecution();
 	}
 
 	/** Constructs an instance for the device and parent (which may be NULL). */

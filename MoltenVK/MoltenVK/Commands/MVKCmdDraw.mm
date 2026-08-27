@@ -38,15 +38,18 @@ VkResult MVKCmdBindVertexBuffers<N>::setContent(MVKCommandBuffer* cmdBuff,
 												const VkDeviceSize* pStrides) {
 	_firstBinding = firstBinding;
 	_bindings.clear();	// Clear for reuse
+	_buffers.clear();
     _bindings.reserve(bindingCount);
+	_buffers.reserve(bindingCount);
     MVKVertexMTLBufferBinding b;
     for (uint32_t bindIdx = 0; bindIdx < bindingCount; bindIdx++) {
         MVKBuffer* mvkBuffer = (MVKBuffer*)pBuffers[bindIdx];
         b.mtlBuffer = mvkBuffer->getMTLBuffer();
         b.offset = mvkBuffer->getMTLBufferOffset() + pOffsets[bindIdx];
 		b.size = pSizes ? uint32_t(pSizes[bindIdx] == VK_WHOLE_SIZE ? mvkBuffer->getByteCount() - pOffsets[bindIdx] : pSizes[bindIdx]) : 0;
-		b.stride = pStrides ? (uint32_t)pStrides[bindIdx] : 0;
+        b.stride = pStrides ? (uint32_t)pStrides[bindIdx] : 0;
         _bindings.push_back(b);
+		_buffers.push_back(mvkBuffer);
     }
 
 	return VK_SUCCESS;
@@ -55,6 +58,34 @@ VkResult MVKCmdBindVertexBuffers<N>::setContent(MVKCommandBuffer* cmdBuff,
 template <size_t N>
 void MVKCmdBindVertexBuffers<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->getState().bindVertexBuffers(_firstBinding, _bindings.contents());
+}
+
+template <size_t N>
+bool MVKCmdBindVertexBuffers<N>::supportsMetal4Encoding() const {
+	if (_bindings.empty() || _bindings.size() != _buffers.size()) { return false; }
+	for (size_t bindingIndex = 0; bindingIndex < _bindings.size(); bindingIndex++) {
+		if (!_buffers[bindingIndex] || !_bindings[bindingIndex].mtlBuffer) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindVertexBuffers<N>::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	for (MVKBuffer* buffer : _buffers) {
+		if (!cmdEncoder->useBuffer(buffer)) { return false; }
+	}
+	return true;
+}
+
+template <size_t N>
+bool MVKCmdBindVertexBuffers<N>::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->bindVertexBuffers(_firstBinding,
+									  static_cast<uint32_t>(_bindings.size()),
+									  _bindings.data());
 }
 
 template class MVKCmdBindVertexBuffers<1>;
@@ -79,17 +110,22 @@ VkResult MVKCmdBindIndexBuffer::setContent(MVKCommandBuffer* cmdBuff,
 										   VkIndexType indexType) {
 	_binding.vkIndexType = indexType;
 	_binding.mtlIndexType = mvkMTLIndexTypeFromVkIndexType(indexType);
+	_buffer = (MVKBuffer*)buffer;
+	_bufferOffset = offset;
+	_indexType = indexType;
 
-	MVKBuffer* mvkBuffer = (MVKBuffer*)buffer;
+	MVKBuffer* mvkBuffer = _buffer;
 	if (mvkBuffer) {
 		_binding.mtlBuffer = mvkBuffer->getMTLBuffer();
 		_binding.offset = mvkBuffer->getMTLBufferOffset() + offset;
 		_binding.size = size == VK_WHOLE_SIZE ? mvkBuffer->getByteCount() - offset : size;
+		_bufferSize = _binding.size;
 	} else {
 		_binding.mtlBuffer = nullptr;
 		// Must be 0 for null buffer.
 		_binding.offset = 0;
 		_binding.size = size == VK_WHOLE_SIZE ? mvkMTLIndexTypeSizeInBytes((MTLIndexType)_binding.mtlIndexType) : size;
+		_bufferSize = _binding.size;
 	}
 
 	return VK_SUCCESS;
@@ -105,6 +141,29 @@ void MVKCmdBindIndexBuffer::encode(MVKCommandEncoder* cmdEncoder) {
     }
 
     cmdEncoder->getState().bindIndexBuffer(_binding);
+}
+
+bool MVKCmdBindIndexBuffer::supportsMetal4Encoding() const {
+	if (!_buffer || !_binding.mtlBuffer ||
+		(_indexType != VK_INDEX_TYPE_UINT16 && _indexType != VK_INDEX_TYPE_UINT32)) {
+		return false;
+	}
+	VkDeviceSize byteCount = _buffer->getByteCount();
+	VkDeviceSize indexSize = _indexType == VK_INDEX_TYPE_UINT16 ? 2 : 4;
+	return _bufferOffset <= byteCount &&
+		_bufferSize <= byteCount - _bufferOffset &&
+		_binding.offset % indexSize == 0;
+}
+
+bool MVKCmdBindIndexBuffer::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useBuffer(_buffer);
+}
+
+bool MVKCmdBindIndexBuffer::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->bindIndexBuffer(_buffer, _bufferOffset, _bufferSize, _indexType);
 }
 
 
@@ -348,7 +407,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
 
 bool MVKCmdDraw::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
 }
 
 bool MVKCmdDraw::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
@@ -382,6 +441,21 @@ VkResult MVKCmdDrawIndexed::setContent(MVKCommandBuffer* cmdBuff,
     }
 
 	return VK_SUCCESS;
+}
+
+bool MVKCmdDrawIndexed::prepareMetal4Encoding(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
+}
+
+bool MVKCmdDrawIndexed::encodeMetal4(
+	MVKMetal4CommandEncoder* cmdEncoder) {
+	return cmdEncoder && supportsMetal4Encoding() &&
+		cmdEncoder->drawIndexed(_firstIndex,
+							_indexCount,
+							_vertexOffset,
+							_firstInstance,
+							_instanceCount);
 }
 
 // Populates and encodes a MVKCmdDrawIndexedIndirect command, after populating an indexed indirect buffer.
@@ -1332,4 +1406,3 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
         }
     }
 }
-

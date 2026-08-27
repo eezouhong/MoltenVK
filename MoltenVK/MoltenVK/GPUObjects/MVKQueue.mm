@@ -25,9 +25,15 @@
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
 #include "MVKBuffer.h"
+#include "MVKDescriptorSet.h"
 #include "MVKImage.h"
 #include "MVKPipeline.h"
+#include "MVKQueryPool.h"
+#include "MVKFramebuffer.h"
+#include "MVKRenderPass.h"
+#include "MVKCommandEncodingPool.h"
 #include "mvk_datatypes.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -38,6 +44,8 @@
 #include <condition_variable>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 
 using namespace std;
 
@@ -49,6 +57,10 @@ static constexpr NSUInteger kMetal4CommandResidencyInitialCapacity = 256;
 static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
 static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
 static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
+static constexpr size_t kMetal4UnsupportedCommandCapacity = 64;
+static constexpr uint64_t kMetal4CommandTelemetryInterval = 4096;
+static_assert(kMVKMetal4MaxColorAttachmentCount == kMVKMaxColorAttachmentCount,
+			  "Metal 4 clear attachment transport must match MoltenVK render limits");
 
 enum class MVKMetal4FallbackReason : uint8_t {
 	UnsupportedSemaphore = 0,
@@ -82,6 +94,13 @@ static const char* mvkMetal4FallbackReasonName(MVKMetal4FallbackReason reason) {
 struct MVKMetal4FallbackTelemetry {
 	uint64_t totalCount = 0;
 	uint64_t reasonCount = 0;
+	const char* unsupportedCommand = "none";
+	uint64_t unsupportedCommandCount = 0;
+};
+
+struct MVKMetal4CompletedQuery {
+	MVKQueryPool* queryPool = nullptr;
+	uint32_t query = 0;
 };
 
 /**
@@ -91,6 +110,24 @@ struct MVKMetal4FallbackTelemetry {
  * callback.
  */
 struct MVKMetal4CommandQueueState {
+	struct TimingCounter {
+		atomic<uint64_t> totalNs = 0;
+		atomic<uint64_t> maxNs = 0;
+
+		void record(uint64_t durationNs) {
+			totalNs.fetch_add(durationNs, memory_order_relaxed);
+			uint64_t previousMax = maxNs.load(memory_order_relaxed);
+			while (durationNs > previousMax &&
+				   !maxNs.compare_exchange_weak(
+					   previousMax, durationNs, memory_order_relaxed, memory_order_relaxed)) {}
+		}
+	};
+
+	struct UnsupportedCommandEntry {
+		const char* name = nullptr;
+		uint64_t count = 0;
+	};
+
 	struct AllocatorSlot {
 		id<MTL4CommandAllocator> allocator = nil;
 		uint32_t inFlightCount = 0;
@@ -105,6 +142,7 @@ struct MVKMetal4CommandQueueState {
 	};
 
 	mutex lock;
+	mutex unsupportedCommandLock;
 	condition_variable probeReady;
 	vector<AllocatorSlot> allocators;
 	size_t nextAllocatorIndex = 0;
@@ -125,16 +163,34 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> realSubmissionCount = 0;
 	atomic<uint64_t> fallbackCount = 0;
 	array<atomic<uint64_t>, static_cast<size_t>(MVKMetal4FallbackReason::Count)> fallbackReasonCounts;
+	array<UnsupportedCommandEntry, kMetal4UnsupportedCommandCapacity> unsupportedCommands;
+	size_t unsupportedCommandTypeCount = 0;
+	uint64_t unsupportedCommandOverflowCount = 0;
 	atomic<uint64_t> failureCount = 0;
 	atomic<uint64_t> bufferCopyCount = 0;
 	atomic<uint64_t> bufferFillCount = 0;
+	atomic<uint64_t> bufferUpdateCount = 0;
 	atomic<uint64_t> imageCopyCount = 0;
 	atomic<uint64_t> computeDispatchCount = 0;
 	atomic<uint64_t> renderSubmissionCount = 0;
 	atomic<uint64_t> renderPassCount = 0;
 	atomic<uint64_t> drawCount = 0;
 	atomic<uint64_t> barrierCount = 0;
+	atomic<uint64_t> queryResetCount = 0;
+	atomic<uint64_t> queryCopyCount = 0;
+	atomic<uint64_t> visibilityQueryCount = 0;
+	bool telemetryEnabled = false;
+	TimingCounter attemptTiming;
+	TimingCounter supportCheckTiming;
+	TimingCounter preparationTiming;
+	TimingCounter residencyTiming;
+	TimingCounter allocatorTiming;
+	TimingCounter commandObjectTiming;
+	TimingCounter encodingTiming;
+	TimingCounter commitTiming;
 	string lastError;
+	unordered_set<string> replayableExceptions;
+	unordered_set<string> preparationFailures;
 
 	MVKMetal4CommandQueueState() {
 		for (auto& counter : fallbackReasonCounts) { counter.store(0, memory_order_relaxed); }
@@ -227,7 +283,10 @@ struct MVKMetal4CommandQueueState {
 		for (size_t offset = 0; offset < allocators.size(); offset++) {
 			size_t idx = (nextAllocatorIndex + offset) % allocators.size();
 			auto& slot = allocators[idx];
-			if (slot.retired || slot.encoding || slot.inFlightCount != 0) { continue; }
+			// Metal permits serial reuse after endCommandBuffer, even while older
+			// command buffers backed by this allocator remain in flight. Only reset
+			// the allocator after all of those command buffers have completed.
+			if (slot.retired || slot.encoding) { continue; }
 			if (slot.resetPending && slot.inFlightCount == 0) {
 				[slot.allocator reset];
 				slot.resetPending = false;
@@ -286,12 +345,10 @@ struct MVKMetal4CommandQueueState {
 		lock_guard<mutex> guard(lock);
 		if (shuttingDown.load(memory_order_acquire)) { return false; }
 
-		unordered_set<uintptr_t> seen;
 		bool changed = false;
 		for (id<MTLAllocation> allocation : allocations) {
 			if (!allocation) { return false; }
 			uintptr_t key = (uintptr_t)allocation;
-			if (!seen.insert(key).second) { continue; }
 			auto it = residentAllocations.find(key);
 			if (it == residentAllocations.end()) {
 				[residencySet addAllocation:allocation];
@@ -307,11 +364,9 @@ struct MVKMetal4CommandQueueState {
 
 	void releaseResidency(const vector<id<MTLAllocation>>& allocations) {
 		lock_guard<mutex> guard(lock);
-		unordered_set<uintptr_t> seen;
 		bool changed = false;
 		for (id<MTLAllocation> allocation : allocations) {
 			uintptr_t key = (uintptr_t)allocation;
-			if (!seen.insert(key).second) { continue; }
 			auto it = residentAllocations.find(key);
 			if (it == residentAllocations.end()) { continue; }
 			if (it->second.inFlightCount > 0) { it->second.inFlightCount--; }
@@ -385,22 +440,113 @@ struct MVKMetal4CommandQueueState {
 	uint64_t recordSubmissionAttempt() {
 		return attemptedSubmissionCount.fetch_add(1, memory_order_relaxed) + 1;
 	}
+	uint64_t startTiming() const {
+		return telemetryEnabled ? mvkGetRuntimeNanoseconds() : 0;
+	}
+	void recordTiming(TimingCounter& timing, uint64_t startedAt) {
+		if (!telemetryEnabled || !startedAt) { return; }
+		timing.record(mvkGetRuntimeNanoseconds() - startedAt);
+	}
+	void recordAttemptTiming(uint64_t startedAt) { recordTiming(attemptTiming, startedAt); }
+	void recordSupportCheckTiming(uint64_t startedAt) { recordTiming(supportCheckTiming, startedAt); }
+	void recordPreparationTiming(uint64_t startedAt) { recordTiming(preparationTiming, startedAt); }
+	void recordResidencyTiming(uint64_t startedAt) { recordTiming(residencyTiming, startedAt); }
+	void recordAllocatorTiming(uint64_t startedAt) { recordTiming(allocatorTiming, startedAt); }
+	void recordCommandObjectTiming(uint64_t startedAt) { recordTiming(commandObjectTiming, startedAt); }
+	void recordEncodingTiming(uint64_t startedAt) { recordTiming(encodingTiming, startedAt); }
+	void recordCommitTiming(uint64_t startedAt) { recordTiming(commitTiming, startedAt); }
 	void recordRealSubmission() { realSubmissionCount.fetch_add(1, memory_order_relaxed); }
-	MVKMetal4FallbackTelemetry recordFallback(MVKMetal4FallbackReason reason) {
+	MVKMetal4FallbackTelemetry recordUnsupportedCommand(const char* commandName) {
+		const char* stableName = commandName && commandName[0] ? commandName : "unknown_command";
+		lock_guard<mutex> guard(unsupportedCommandLock);
+		for (size_t idx = 0; idx < unsupportedCommandTypeCount; idx++) {
+			auto& entry = unsupportedCommands[idx];
+			if (entry.name == stableName || (entry.name && !strcmp(entry.name, stableName))) {
+				entry.count++;
+				return { 0, 0, entry.name, entry.count };
+			}
+		}
+		if (unsupportedCommandTypeCount < unsupportedCommands.size()) {
+			auto& entry = unsupportedCommands[unsupportedCommandTypeCount++];
+			entry.name = stableName;
+			entry.count = 1;
+			return { 0, 0, entry.name, entry.count };
+		}
+		unsupportedCommandOverflowCount++;
+		return { 0, 0, "other_unsupported_command", unsupportedCommandOverflowCount };
+	}
+
+	string unsupportedCommandSummary() {
+		lock_guard<mutex> guard(unsupportedCommandLock);
+		vector<UnsupportedCommandEntry> entries(
+			unsupportedCommands.begin(),
+			unsupportedCommands.begin() + unsupportedCommandTypeCount);
+		sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+			return left.count > right.count;
+		});
+		string summary;
+		size_t emitted = 0;
+		for (const auto& entry : entries) {
+			if (!entry.name || emitted == 8) { break; }
+			if (!summary.empty()) { summary += ","; }
+			summary += entry.name;
+			summary += ":";
+			summary += to_string(entry.count);
+			emitted++;
+		}
+		if (unsupportedCommandOverflowCount) {
+			if (!summary.empty()) { summary += ","; }
+			summary += "other:" + to_string(unsupportedCommandOverflowCount);
+		}
+		return summary.empty() ? "none" : summary;
+	}
+
+	MVKMetal4FallbackTelemetry recordFallback(MVKMetal4FallbackReason reason,
+											 const char* unsupportedCommand = nullptr) {
 		auto index = static_cast<size_t>(reason);
-		return {
-			fallbackCount.fetch_add(1, memory_order_relaxed) + 1,
-			fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1,
-		};
+		MVKMetal4FallbackTelemetry telemetry = unsupportedCommand
+			? recordUnsupportedCommand(unsupportedCommand)
+			: MVKMetal4FallbackTelemetry{};
+		telemetry.totalCount = fallbackCount.fetch_add(1, memory_order_relaxed) + 1;
+		telemetry.reasonCount = fallbackReasonCounts[index].fetch_add(1, memory_order_relaxed) + 1;
+		return telemetry;
+	}
+
+	bool recordReplayableException(const char* phase,
+								 NSException* exception,
+								 string* summary) {
+		string exceptionName = exception.name.UTF8String ?: "unknown";
+		string exceptionReason = exception.reason.UTF8String ?: "unknown";
+		string nextSummary = "phase=" + string(phase ?: "unknown") +
+			", name=" + exceptionName +
+			", reason=" + exceptionReason;
+		lock_guard<mutex> guard(lock);
+		bool changed = replayableExceptions.size() < kMetal4UnsupportedCommandCapacity &&
+			replayableExceptions.insert(nextSummary).second;
+		if (summary) { *summary = nextSummary; }
+		return changed;
+	}
+
+	bool recordPreparationFailure(const char* commandType, string* summary) {
+		string nextSummary = commandType ?: "MVKCommand";
+		lock_guard<mutex> guard(lock);
+		bool changed = preparationFailures.size() < kMetal4UnsupportedCommandCapacity &&
+			preparationFailures.insert(nextSummary).second;
+		if (summary) { *summary = nextSummary; }
+		return changed;
 	}
 	void recordBufferCopy(uint64_t count = 1) { bufferCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordBufferFill(uint64_t count = 1) { bufferFillCount.fetch_add(count, memory_order_relaxed); }
+	void recordBufferUpdate(uint64_t count = 1) { bufferUpdateCount.fetch_add(count, memory_order_relaxed); }
 	void recordImageCopy(uint64_t count = 1) { imageCopyCount.fetch_add(count, memory_order_relaxed); }
 	void recordComputeDispatch(uint64_t count = 1) { computeDispatchCount.fetch_add(count, memory_order_relaxed); }
 	void recordRenderSubmission() { renderSubmissionCount.fetch_add(1, memory_order_relaxed); }
 	void recordRenderPass(uint64_t count = 1) { renderPassCount.fetch_add(count, memory_order_relaxed); }
 	void recordDraw(uint64_t count = 1) { drawCount.fetch_add(count, memory_order_relaxed); }
 	void recordBarrier(uint64_t count = 1) { barrierCount.fetch_add(count, memory_order_relaxed); }
+	void recordQueryReset(uint64_t count = 1) { queryResetCount.fetch_add(count, memory_order_relaxed); }
+	void recordQueryCopy(uint64_t count = 1) { queryCopyCount.fetch_add(count, memory_order_relaxed); }
+	void recordVisibilityQuery(uint64_t count = 1) { visibilityQueryCount.fetch_add(count, memory_order_relaxed); }
 
 	void recordFailure(NSString* reason) {
 		lock_guard<mutex> guard(lock);
@@ -422,6 +568,9 @@ struct MVKMetal4CommandQueueState {
 
 static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stages) {
 	MTLStages mtlStages = 0;
+	if (mvkIsAnyFlagEnabled(stages, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT)) {
+		mtlStages |= MTLStageVertex | MTLStageFragment;
+	}
 	if (mvkIsAnyFlagEnabled(stages,
 						  VK_PIPELINE_STAGE_2_TRANSFER_BIT |
 						  VK_PIPELINE_STAGE_2_COPY_BIT |
@@ -459,8 +608,12 @@ static MTLStages mvkMetal4StagesFromVkPipelineStages(VkPipelineStageFlags2 stage
 class MVKMetal4TransferCommandEncoder final : public MVKMetal4CommandEncoder {
 
 public:
-	explicit MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state) :
-		_state(std::move(state)) {}
+	MVKMetal4TransferCommandEncoder(shared_ptr<MVKMetal4CommandQueueState> state,
+								 MVKDevice* device,
+								 id<MTLDevice> mtlDevice,
+								 MVKPixelFormats* pixelFormats) :
+		_state(std::move(state)), _device(device), _pixelFormats(pixelFormats),
+		_mtlDevice(mtlDevice) {}
 
 	struct BufferBinding {
 		id<MTLBuffer> buffer = nil;
@@ -486,11 +639,71 @@ public:
 	struct CommandCounters {
 		uint64_t bufferCopies = 0;
 		uint64_t bufferFills = 0;
+		uint64_t bufferUpdates = 0;
 		uint64_t imageCopies = 0;
 		uint64_t computeDispatches = 0;
 		uint64_t renderPasses = 0;
 		uint64_t draws = 0;
 		uint64_t barriers = 0;
+		uint64_t queryResets = 0;
+		uint64_t queryCopies = 0;
+		uint64_t visibilityQueries = 0;
+	};
+	struct QueryPoolBinding {
+		id<MTLBuffer> resetBuffer = nil;
+		id<MTLBuffer> resultBuffer = nil;
+		NSUInteger visibilityOffset = NSUIntegerMax;
+		NSUInteger visibilityLength = 0;
+	};
+	struct PendingVisibilityQueryCopy {
+		MVKQueryPool* queryPool = nullptr;
+		uint32_t query = 0;
+		NSUInteger sourceOffset = 0;
+	};
+	struct PendingQueryReset {
+		MVKQueryPool* queryPool = nullptr;
+		uint32_t firstQuery = 0;
+		uint32_t queryCount = 0;
+	};
+	struct UpdateDataBinding {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger size = 0;
+	};
+	struct BoundDescriptorSet {
+		MVKDescriptorSetLayout* layout = nullptr;
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+	};
+	struct BoundVertexBuffer {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+		NSUInteger size = 0;
+		NSUInteger stride = 0;
+	};
+	struct BoundIndexBuffer {
+		id<MTLBuffer> buffer = nil;
+		NSUInteger offset = 0;
+		NSUInteger size = 0;
+		MTLIndexType type = MTLIndexTypeUInt16;
+	};
+	struct DepthStencilStateBinding {
+		MVKStencilReference compareMask = {};
+		MVKStencilReference writeMask = {};
+		id<MTLDepthStencilState> state = nil;
+	};
+	struct GraphicsPipelineBinding {
+		id<MTLRenderPipelineState> pipelineState = nil;
+		vector<DepthStencilStateBinding> depthStencilStates;
+	};
+	struct ClearAttachmentsBinding {
+		MVKRPSKeyClearAtt pipelineKey = {};
+		id<MTLRenderPipelineState> pipelineState = nil;
+		id<MTLDepthStencilState> depthStencilState = nil;
+		id<MTLBuffer> clearColors = nil;
+		id<MTLBuffer> vertices = nil;
+		vector<VkClearRect> rects;
+		NSUInteger vertexCount = 0;
+		uint32_t stencilReference = 0;
 	};
 
 	~MVKMetal4TransferCommandEncoder() override {
@@ -500,8 +713,27 @@ public:
 			for (id<MTLTexture> texture : item.second.textures) { [texture release]; }
 		}
 		for (auto& item : _imageViews) { [item.second.texture release]; }
+		for (auto& item : _queryPools) {
+			[item.second.resetBuffer release];
+			[item.second.resultBuffer release];
+		}
+		[_visibilityResultBuffer release];
+		for (auto& item : _updateData) { [item.second.buffer release]; }
 		for (auto& item : _computePipelines) { [item.second release]; }
-		for (auto& item : _graphicsPipelines) { [item.second release]; }
+		for (auto& item : _graphicsPipelines) {
+			[item.second.pipelineState release];
+			for (auto& depthStencil : item.second.depthStencilStates) {
+				[depthStencil.state release];
+			}
+		}
+		for (auto& item : _clearAttachments) {
+			[item.second.pipelineState release];
+			[item.second.depthStencilState release];
+			[item.second.clearColors release];
+			[item.second.vertices release];
+		}
+		for (id<MTLAllocation> allocation : _descriptorAllocations) { [allocation release]; }
+		[_argumentTable release];
 	}
 
 	bool useBuffer(MVKBuffer* buffer) override {
@@ -510,7 +742,7 @@ public:
 		id<MTLBuffer> mtlBuffer = buffer->getMTLBuffer();
 		if (!mtlBuffer) { return false; }
 		_buffers.emplace(buffer, BufferBinding{[mtlBuffer retain], buffer->getMTLBufferOffset()});
-		_allocations.push_back((id<MTLAllocation>)mtlBuffer);
+		useAllocation((id<MTLAllocation>)mtlBuffer);
 		return true;
 	}
 
@@ -526,7 +758,7 @@ public:
 				return false;
 			}
 			binding.textures.push_back([texture retain]);
-			_allocations.push_back((id<MTLAllocation>)texture);
+			useAllocation((id<MTLAllocation>)texture);
 		}
 		_images.emplace(image, std::move(binding));
 		return true;
@@ -555,27 +787,289 @@ public:
 		binding.height = texture.height;
 		[descriptor release];
 		_imageViews.emplace(imageView, binding);
-		_allocations.push_back((id<MTLAllocation>)texture);
+		useAllocation((id<MTLAllocation>)texture);
+		return true;
+	}
+
+	bool useQueryPool(MVKQueryPool* queryPool) override {
+		if (!queryPool) { return false; }
+		if (_queryPools.count(queryPool)) { return true; }
+		id<MTLBuffer> resetBuffer = queryPool->getMetal4ResetMTLBuffer();
+		NSUInteger resultOffset = 0;
+		id<MTLBuffer> resultBuffer =
+			queryPool->getMetal4ResultMTLBuffer(0, 1, resultOffset);
+		_queryPools.emplace(queryPool, QueryPoolBinding{
+			[resetBuffer retain], [resultBuffer retain]});
+		if (resetBuffer) { useAllocation((id<MTLAllocation>)resetBuffer); }
+		if (resultBuffer && resultBuffer != resetBuffer) {
+			useAllocation((id<MTLAllocation>)resultBuffer);
+		}
+		return true;
+	}
+
+	bool useQueryResultPool(MVKQueryPool* queryPool) override {
+		if (!useQueryPool(queryPool)) { return false; }
+		auto binding = _queryPools.find(queryPool);
+		return binding != _queryPools.end() && binding->second.resultBuffer;
+	}
+
+	bool useVisibilityQueryPool(MVKQueryPool* queryPool) override {
+		if (!queryPool || !queryPool->supportsMetal4VisibilityQueries() ||
+			!useQueryPool(queryPool)) {
+			return false;
+		}
+		auto binding = _queryPools.find(queryPool);
+		if (binding == _queryPools.end() || !binding->second.resetBuffer) { return false; }
+		if (binding->second.visibilityOffset != NSUIntegerMax) { return true; }
+		NSUInteger length = binding->second.resetBuffer.length;
+		if (!length || _visibilityResultBufferLength > NSUIntegerMax - length) {
+			recordMetal4PreparationFailure("visibility_query_scratch_size_invalid");
+			return false;
+		}
+		binding->second.visibilityOffset = _visibilityResultBufferLength;
+		binding->second.visibilityLength = length;
+		_visibilityResultBufferLength += length;
+		return true;
+	}
+
+	bool beginVisibilityQueryScopePreparation() override {
+		if (_preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_nested_render_scope");
+			return false;
+		}
+		_preparingVisibilityQueryScope = true;
+		return true;
+	}
+
+	bool endVisibilityQueryScopePreparation() override {
+		if (!_preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_render_scope_end_without_begin");
+			return false;
+		}
+		_preparingVisibilityQueryScope = false;
+		return true;
+	}
+
+	bool beginVisibilityQueryPreparation(MVKQueryPool* queryPool) override {
+		if (!useVisibilityQueryPool(queryPool)) {
+			recordMetal4PreparationFailure("visibility_query_pool_unavailable");
+			return false;
+		}
+		if (_preparingActiveQueryPool) {
+			recordMetal4PreparationFailure("visibility_query_already_active");
+			return false;
+		}
+		_preparingActiveQueryPool = queryPool;
+		return true;
+	}
+
+	bool endVisibilityQueryPreparation(MVKQueryPool* queryPool) override {
+		if (!useVisibilityQueryPool(queryPool) || _preparingActiveQueryPool != queryPool) {
+			recordMetal4PreparationFailure("visibility_query_end_mismatch");
+			return false;
+		}
+		_preparingActiveQueryPool = nullptr;
+		return true;
+	}
+
+	bool finalizePreparation() {
+		if (_preparingActiveQueryPool || _preparingVisibilityQueryScope) {
+			recordMetal4PreparationFailure("visibility_query_scope_unbalanced");
+			return false;
+		}
+		if (!_visibilityResultBufferLength) { return true; }
+		_visibilityResultBuffer = [_mtlDevice
+			newBufferWithLength:_visibilityResultBufferLength
+			options:MTLResourceStorageModeShared |
+					MTLResourceCPUCacheModeDefaultCache];
+		if (!_visibilityResultBuffer) {
+			recordMetal4PreparationFailure("visibility_query_scratch_unavailable");
+			return false;
+		}
+		[_visibilityResultBuffer setLabel:@"Metal 4 Visibility Query Scratch Buffer"];
+		mvkClear(static_cast<char*>(_visibilityResultBuffer.contents),
+				 _visibilityResultBufferLength);
+		useAllocation((id<MTLAllocation>)_visibilityResultBuffer);
+		return true;
+	}
+
+	bool useUpdateBufferData(const void* data, size_t size) override {
+		if (!_mtlDevice || !data || !size || size > 65536) { return false; }
+		auto existing = _updateData.find(data);
+		if (existing != _updateData.end()) { return existing->second.size == size; }
+		id<MTLBuffer> buffer = [_mtlDevice newBufferWithBytes:data
+												 length:size
+												options:MTLResourceStorageModeShared |
+														MTLResourceCPUCacheModeWriteCombined];
+		if (!buffer) { return false; }
+		_updateData.emplace(data, UpdateDataBinding{buffer, size});
+		useAllocation((id<MTLAllocation>)buffer);
 		return true;
 	}
 
 	bool useComputePipeline(MVKComputePipeline* pipeline) override {
-		if (!pipeline || !pipeline->supportsMetal4DescriptorlessExecution()) { return false; }
+		if (!pipeline || !pipeline->supportsMetal4Execution() ||
+			(pipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable())) {
+			return false;
+		}
+		_preparedComputePipeline = pipeline;
 		if (_computePipelines.count(pipeline)) { return true; }
 		id<MTLComputePipelineState> pipelineState = pipeline->getPipelineState();
 		if (!pipelineState) { return false; }
 		_computePipelines.emplace(pipeline, [pipelineState retain]);
-		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		useAllocation((id<MTLAllocation>)pipelineState);
 		return true;
 	}
 
 	bool useGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
-		if (!pipeline || !pipeline->supportsMetal4DescriptorlessRenderExecution()) { return false; }
+		if (!pipeline || !pipeline->supportsMetal4RenderExecution() ||
+			(pipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable())) {
+			return false;
+		}
+		_preparedGraphicsPipeline = pipeline;
 		if (_graphicsPipelines.count(pipeline)) { return true; }
 		id<MTLRenderPipelineState> pipelineState = pipeline->getMainPipelineState();
 		if (!pipelineState) { return false; }
-		_graphicsPipelines.emplace(pipeline, [pipelineState retain]);
-		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		const auto& stateData = pipeline->getStaticStateData();
+		MVKStencilReference compareMask {
+			stateData.depthStencil.frontFaceStencilData.readMask,
+			stateData.depthStencil.backFaceStencilData.readMask,
+		};
+		MVKStencilReference writeMask {
+			stateData.depthStencil.frontFaceStencilData.writeMask,
+			stateData.depthStencil.backFaceStencilData.writeMask,
+		};
+		id<MTLDepthStencilState> depthStencilState =
+			newDepthStencilState(pipeline, compareMask, writeMask);
+		if (!depthStencilState) { return false; }
+		GraphicsPipelineBinding binding;
+		binding.pipelineState = [pipelineState retain];
+		binding.depthStencilStates.push_back(
+			DepthStencilStateBinding{compareMask, writeMask, depthStencilState});
+		_graphicsPipelines.emplace(pipeline, std::move(binding));
+		useAllocation((id<MTLAllocation>)pipelineState);
+		return true;
+	}
+
+	void resetPrepareState() override {
+		_preparedComputePipeline = nullptr;
+		_preparedGraphicsPipeline = nullptr;
+		_preparedComputeDescriptorSets.fill(nullptr);
+		_preparedGraphicsDescriptorSets.fill(nullptr);
+		_preparingActiveQueryPool = nullptr;
+		_preparingVisibilityQueryScope = false;
+		_preparationFailureSummary.clear();
+	}
+
+	void recordMetal4PreparationFailure(const char* commandType) override {
+		if (_preparationFailureSummary.empty()) {
+			_preparationFailureSummary = commandType ?: "MVKCommand";
+		}
+	}
+
+	void recordMetal4EncodingFailure(const char* commandType) override {
+		if (_encodingFailureSummary.empty()) {
+			_encodingFailureSummary = commandType ?: "MVKCommand";
+			if (!_encodingFailureDetail.empty()) {
+				_encodingFailureSummary += ":" + _encodingFailureDetail;
+			}
+		}
+	}
+
+	const char* getMetal4EncodingFailureCommand() const {
+		return _encodingFailureSummary.empty()
+			? "MVKCommand"
+			: _encodingFailureSummary.c_str();
+	}
+
+	const char* getMetal4PreparationFailureCommand() const {
+		return _preparationFailureSummary.empty()
+			? "MVKCommand"
+			: _preparationFailureSummary.c_str();
+	}
+
+	bool useDescriptorSet(VkPipelineBindPoint bindPoint,
+					  MVKDescriptorSet* descriptorSet,
+					  uint32_t setIndex) override {
+		if (bindPoint != VK_PIPELINE_BIND_POINT_COMPUTE &&
+			bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS) {
+			return false;
+		}
+		auto& preparedSets = bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE
+			? _preparedComputeDescriptorSets
+			: _preparedGraphicsDescriptorSets;
+		if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+			setIndex >= preparedSets.size() || !ensureArgumentTable()) {
+			return false;
+		}
+		if (!retainDescriptorAllocation((id<MTLAllocation>)descriptorSet->gpuBufferObject)) {
+			return false;
+		}
+		preparedSets[setIndex] = descriptorSet;
+		return true;
+	}
+
+	bool prepareComputeDispatch() override {
+		if (!_preparedComputePipeline) { return false; }
+		if (!_preparedComputePipeline->supportsMetal4ArgumentTableExecution()) {
+			return _preparedComputePipeline->supportsMetal4DescriptorlessExecution();
+		}
+		MVKPipelineLayout* pipelineLayout = _preparedComputePipeline->getLayout();
+		if (!pipelineLayout) { return false; }
+		vector<id<MTLResource>> resources;
+		const auto& uses =
+			_preparedComputePipeline->getStageResources().bindScript.descriptorBindings;
+		for (const auto& use : uses) {
+			if (use.set >= _preparedComputeDescriptorSets.size() ||
+				use.set >= pipelineLayout->getDescriptorSetCount()) {
+				return false;
+			}
+			MVKDescriptorSet* descriptorSet = _preparedComputeDescriptorSets[use.set];
+			if (!descriptorSet ||
+				descriptorSet->layout != pipelineLayout->getDescriptorSetLayout(use.set)) {
+				return false;
+			}
+			resources.clear();
+			descriptorSet->collectMetal4BindingResources(use.bindingIdx, resources);
+			for (id<MTLResource> resource : resources) {
+				if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	bool prepareGraphicsDraw() override {
+		if (!_preparedGraphicsPipeline) { return false; }
+		if (!_preparedGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution()) {
+			return _preparedGraphicsPipeline->supportsMetal4DescriptorlessRenderExecution();
+		}
+		MVKPipelineLayout* pipelineLayout = _preparedGraphicsPipeline->getLayout();
+		if (!pipelineLayout) { return false; }
+		vector<id<MTLResource>> resources;
+		for (MVKShaderStage stage : {kMVKShaderStageVertex, kMVKShaderStageFragment}) {
+			const auto& uses =
+				_preparedGraphicsPipeline->getStageResources(stage).bindScript.descriptorBindings;
+			for (const auto& use : uses) {
+				if (use.set >= _preparedGraphicsDescriptorSets.size() ||
+					use.set >= pipelineLayout->getDescriptorSetCount()) {
+					return false;
+				}
+				MVKDescriptorSet* descriptorSet = _preparedGraphicsDescriptorSets[use.set];
+				if (!descriptorSet ||
+					descriptorSet->layout != pipelineLayout->getDescriptorSetLayout(use.set)) {
+					return false;
+				}
+				resources.clear();
+				descriptorSet->collectMetal4BindingResources(use.bindingIdx, resources);
+				for (id<MTLResource> resource : resources) {
+					if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) {
+						return false;
+					}
+				}
+			}
+		}
 		return true;
 	}
 
@@ -660,18 +1154,145 @@ public:
 		return true;
 	}
 
+	bool copyBufferImage(MVKBuffer* buffer,
+						 MVKImage* image,
+						 const VkBufferImageCopy2& region,
+						 bool toImage) override {
+		auto bufferIt = _buffers.find(buffer);
+		auto imageIt = _images.find(image);
+		uint8_t plane = MVKImage::getPlaneFromVkImageAspectFlags(
+			region.imageSubresource.aspectMask);
+		if (!ensureComputeEncoder() || bufferIt == _buffers.end() ||
+			imageIt == _images.end() || plane >= imageIt->second.textures.size()) {
+			return false;
+		}
+
+		id<MTLBuffer> mtlBuffer = bufferIt->second.buffer;
+		id<MTLTexture> mtlTexture = imageIt->second.textures[plane];
+		MTLPixelFormat pixelFormat = image->getMTLPixelFormat(plane);
+		MVKPixelFormats* pixelFormats = image->getPixelFormats();
+		uint32_t bufferWidth = region.bufferRowLength ?
+			region.bufferRowLength : region.imageExtent.width;
+		uint32_t bufferHeight = region.bufferImageHeight ?
+			region.bufferImageHeight : region.imageExtent.height;
+		NSUInteger bytesPerRow = pixelFormats->getBytesPerRow(pixelFormat, bufferWidth);
+		NSUInteger activeRowBytes = pixelFormats->getBytesPerRow(
+			pixelFormat, region.imageExtent.width);
+		NSUInteger bytesPerImage =
+			pixelFormats->getBytesPerLayer(pixelFormat, bytesPerRow, bufferHeight);
+		MTLBlitOption options = MTLBlitOptionNone;
+		if (pixelFormats->isDepthFormat(pixelFormat) &&
+			pixelFormats->isStencilFormat(pixelFormat)) {
+			bool copyDepth = mvkAreAllFlagsEnabled(
+				region.imageSubresource.aspectMask, VK_IMAGE_ASPECT_DEPTH_BIT);
+			if (copyDepth) {
+				if (pixelFormats->getBytesPerTexel(pixelFormat) != 4) {
+					NSUInteger rowReduction = bufferWidth;
+					NSUInteger activeReduction = region.imageExtent.width;
+					NSUInteger imageReduction =
+						static_cast<NSUInteger>(bufferWidth) * bufferHeight;
+					if (bytesPerRow < rowReduction ||
+						activeRowBytes < activeReduction ||
+						bytesPerImage < imageReduction) {
+						return false;
+					}
+					bytesPerRow -= rowReduction;
+					activeRowBytes -= activeReduction;
+					bytesPerImage -= imageReduction;
+				}
+				options = MTLBlitOptionDepthFromDepthStencil;
+			} else {
+				bytesPerRow = bufferWidth;
+				activeRowBytes = region.imageExtent.width;
+				bytesPerImage =
+					static_cast<NSUInteger>(bufferWidth) * bufferHeight;
+				options = MTLBlitOptionStencilFromDepthStencil;
+			}
+		}
+		NSUInteger bufferOffset = bufferIt->second.offset + (NSUInteger)region.bufferOffset;
+		NSUInteger rowCount = region.imageExtent.height;
+		NSUInteger maxValue = std::numeric_limits<NSUInteger>::max();
+		bool is3D = image->getMTLTextureType() == MTLTextureType3D;
+		uint32_t layerCount =
+			region.imageSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
+				? image->getLayerCount() - region.imageSubresource.baseArrayLayer
+				: region.imageSubresource.layerCount;
+		NSUInteger imageCount = is3D ? region.imageExtent.depth : layerCount;
+		if (!bytesPerRow || !activeRowBytes || bufferOffset > mtlBuffer.length ||
+			!bytesPerImage || !imageCount ||
+			(imageCount > 1 && bytesPerImage >
+				(maxValue - bufferOffset) / (imageCount - 1))) {
+			return false;
+		}
+		NSUInteger lastImageOffset = bufferOffset + bytesPerImage * (imageCount - 1);
+		if (rowCount > 1 && bytesPerRow >
+			(maxValue - lastImageOffset) / (rowCount - 1)) {
+			return false;
+		}
+		NSUInteger lastRowOffset = lastImageOffset + bytesPerRow * (rowCount - 1);
+		if (lastRowOffset > mtlBuffer.length ||
+			activeRowBytes > mtlBuffer.length - lastRowOffset) {
+			return false;
+		}
+
+		MTLOrigin textureOrigin = mvkMTLOriginFromVkOffset3D(region.imageOffset);
+		MTLSize textureSize = mvkMTLSizeFromVkExtent3D(region.imageExtent);
+		NSUInteger level = region.imageSubresource.mipLevel;
+		if (!is3D) { textureSize.depth = 1; }
+		NSUInteger iterationCount = is3D ? 1 : layerCount;
+		for (NSUInteger iteration = 0; iteration < iterationCount; iteration++) {
+			NSUInteger copyBufferOffset = bufferOffset + bytesPerImage * iteration;
+			NSUInteger slice = region.imageSubresource.baseArrayLayer + iteration;
+			NSUInteger metalBytesPerImage = is3D ? bytesPerImage : 0;
+			if (toImage) {
+				[_computeEncoder copyFromBuffer:mtlBuffer
+								 sourceOffset:copyBufferOffset
+							sourceBytesPerRow:bytesPerRow
+						  sourceBytesPerImage:metalBytesPerImage
+								  sourceSize:textureSize
+								   toTexture:mtlTexture
+							 destinationSlice:slice
+							 destinationLevel:level
+							destinationOrigin:textureOrigin
+								 options:options];
+			} else {
+				[_computeEncoder copyFromTexture:mtlTexture
+								  sourceSlice:slice
+								  sourceLevel:level
+								 sourceOrigin:textureOrigin
+								   sourceSize:textureSize
+									 toBuffer:mtlBuffer
+							 destinationOffset:copyBufferOffset
+						destinationBytesPerRow:bytesPerRow
+					  destinationBytesPerImage:metalBytesPerImage
+									 options:options];
+			}
+			_counters.imageCopies++;
+		}
+		return true;
+	}
+
 	bool bindComputePipeline(MVKComputePipeline* pipeline) override {
 		auto it = _computePipelines.find(pipeline);
 		if (!ensureComputeEncoder() || it == _computePipelines.end()) { return false; }
 		[_computeEncoder setComputePipelineState:it->second];
 		_boundComputePipeline = pipeline;
+		_computeResourcesBoundForEncoder = false;
 		return true;
 	}
 
 	bool dispatchThreadgroups(uint32_t groupCountX,
 							 uint32_t groupCountY,
 							 uint32_t groupCountZ) override {
-		if (!ensureComputeEncoder() || !_boundComputePipeline) { return false; }
+		if (!ensureComputeEncoder()) {
+			return failMetal4Encoding("dispatch_compute_encoder_unavailable");
+		}
+		if (!_boundComputePipeline) {
+			return failMetal4Encoding("dispatch_pipeline_unbound");
+		}
+		if (!_computeResourcesBoundForEncoder && !applyComputeResources()) {
+			return failMetal4Encoding("dispatch_resources_unavailable");
+		}
 		[_computeEncoder dispatchThreadgroups:MTLSizeMake(groupCountX, groupCountY, groupCountZ)
 					  threadsPerThreadgroup:_boundComputePipeline->getThreadgroupSize()];
 		_counters.computeDispatches++;
@@ -682,11 +1303,6 @@ public:
 						 VkAccessFlags2 srcAccess,
 						 VkPipelineStageFlags2 dstStages,
 						 VkAccessFlags2 dstAccess) override {
-		// The strict render slice does not claim barriers from inside an active render pass.
-		// Ending that encoder here would silently terminate Vulkan rendering, while an
-		// intra-pass MTL4 barrier cannot legally name transfer/dispatch stages.
-		if (_renderEncoder) { return false; }
-
 		MTLStages after = mvkMetal4StagesFromVkPipelineStages(srcStages);
 		MTLStages before = mvkMetal4StagesFromVkPipelineStages(dstStages);
 		if (!after) { after = MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit; }
@@ -701,6 +1317,17 @@ public:
 		if (mvkIsAnyFlagEnabled(srcAccess | dstAccess, writes)) {
 			visibility |= MTL4VisibilityOptionDevice;
 		}
+		if (_renderEncoder) {
+			constexpr MTLStages renderStages = MTLStageVertex | MTLStageFragment;
+			if ((after | before) & ~renderStages) {
+				return failMetal4Encoding("pipeline_barrier_render_scope_non_graphics_stage");
+			}
+			[_renderEncoder barrierAfterEncoderStages:after
+						beforeEncoderStages:before
+						  visibilityOptions:visibility];
+			_counters.barriers++;
+			return true;
+		}
 
 		// A Vulkan barrier may cross Metal encoder classes. Defer it until the next
 		// consuming encoder exists, then issue a consumer queue-stage barrier with a
@@ -710,6 +1337,15 @@ public:
 		endComputeEncoding();
 		_pendingBarriers.push_back(PendingBarrier{after, before, visibility});
 		_counters.barriers++;
+		return true;
+	}
+
+	bool trackImageBarrier(const MVKPipelineBarrier& barrier) override {
+		if (barrier.type != MVKPipelineBarrier::Image || !barrier.mvkImage ||
+			_images.find(barrier.mvkImage) == _images.end()) {
+			return false;
+		}
+		_pendingImageBarriers.push_back(barrier);
 		return true;
 	}
 
@@ -744,71 +1380,854 @@ public:
 		return true;
 	}
 
+	bool resetQueryPool(MVKQueryPool* queryPool,
+						uint32_t firstQuery,
+						uint32_t queryCount) override {
+		auto binding = _queryPools.find(queryPool);
+		if (binding == _queryPools.end() || !queryCount) { return false; }
+		if (binding->second.resetBuffer) {
+			NSRange range = queryPool->getMetal4ResetRange(firstQuery, queryCount);
+			if (!range.length || range.location > binding->second.resetBuffer.length ||
+				range.length > binding->second.resetBuffer.length - range.location ||
+				!ensureComputeEncoder()) {
+				return false;
+			}
+			[_computeEncoder fillBuffer:binding->second.resetBuffer range:range value:0];
+			if (binding->second.visibilityOffset != NSUIntegerMax) {
+				NSUInteger scratchOffset = binding->second.visibilityOffset + range.location;
+				if (scratchOffset > _visibilityResultBuffer.length ||
+					range.length > _visibilityResultBuffer.length - scratchOffset) {
+					return false;
+				}
+				[_computeEncoder fillBuffer:_visibilityResultBuffer
+								 range:NSMakeRange(scratchOffset, range.length)
+								 value:0];
+			}
+		}
+		_pendingQueryResets.push_back(PendingQueryReset{queryPool, firstQuery, queryCount});
+		_counters.queryResets++;
+		return true;
+	}
+
+	bool copyQueryPoolResults(MVKQueryPool* queryPool,
+								 uint32_t firstQuery,
+								 uint32_t queryCount,
+								 MVKBuffer* dstBuffer,
+								 VkDeviceSize dstOffset,
+								 VkDeviceSize dstStride,
+								 VkQueryResultFlags flags) override {
+		auto queryBinding = _queryPools.find(queryPool);
+		auto dst = _buffers.find(dstBuffer);
+		if (queryBinding == _queryPools.end() || dst == _buffers.end() ||
+			!queryCount || mvkIsAnyFlagEnabled(flags,
+				VK_QUERY_RESULT_WITH_AVAILABILITY_BIT | VK_QUERY_RESULT_PARTIAL_BIT)) {
+			return false;
+		}
+
+		NSUInteger srcOffset = 0;
+		id<MTLBuffer> srcBuffer =
+			queryPool->getMetal4ResultMTLBuffer(firstQuery, queryCount, srcOffset);
+		if (!srcBuffer || srcBuffer != queryBinding->second.resultBuffer) { return false; }
+
+		for (uint32_t queryIndex = 0; queryIndex < queryCount; queryIndex++) {
+			uint32_t query = firstQuery + queryIndex;
+			bool completed = std::any_of(
+				_completedQueries.begin(), _completedQueries.end(),
+				[queryPool, query](const MVKMetal4CompletedQuery& item) {
+					return item.queryPool == queryPool && item.query == query;
+				});
+			if (!completed) { return false; }
+		}
+
+		NSUInteger elementSize = mvkIsAnyFlagEnabled(flags, VK_QUERY_RESULT_64_BIT) ?
+			sizeof(uint64_t) : sizeof(uint32_t);
+		NSUInteger dstBaseOffset = dst->second.offset + (NSUInteger)dstOffset;
+		if (dstStride < elementSize || srcOffset > srcBuffer.length ||
+			queryCount > (srcBuffer.length - srcOffset) / kMVKQuerySlotSizeInBytes ||
+			dstBaseOffset > dst->second.buffer.length ||
+			elementSize > dst->second.buffer.length ||
+			(queryCount > 1 && dstStride >
+				(std::numeric_limits<NSUInteger>::max() - dstBaseOffset) / (queryCount - 1)) ||
+			dstBaseOffset + (queryCount - 1) * (NSUInteger)dstStride >
+				dst->second.buffer.length - elementSize || !ensureComputeEncoder()) {
+			return false;
+		}
+		[_computeEncoder barrierAfterQueueStages:MTLStageAll
+							 beforeStages:MTLStageBlit
+						visibilityOptions:MTL4VisibilityOptionDevice];
+
+		for (uint32_t query = 0; query < queryCount; query++) {
+			[_computeEncoder copyFromBuffer:srcBuffer
+							 sourceOffset:srcOffset + query * kMVKQuerySlotSizeInBytes
+								 toBuffer:dst->second.buffer
+						destinationOffset:dstBaseOffset + query * (NSUInteger)dstStride
+									 size:elementSize];
+		}
+		[_computeEncoder barrierAfterEncoderStages:MTLStageBlit
+							 beforeEncoderStages:MTLStageBlit
+							 visibilityOptions:MTL4VisibilityOptionDevice];
+		_counters.queryCopies++;
+		return true;
+	}
+
+	bool beginVisibilityQuery(MVKQueryPool* queryPool,
+							  uint32_t query,
+							  VkQueryControlFlags flags) override {
+		if (_activeQueryPool) {
+			return failMetal4Encoding("begin_query_already_active");
+		}
+		auto binding = _queryPools.find(queryPool);
+		NSUInteger queryOffset = MVKOcclusionQueryPool::getVisibilityResultOffset(query);
+		if (binding == _queryPools.end() ||
+			binding->second.visibilityOffset == NSUIntegerMax ||
+			queryOffset > binding->second.visibilityLength ||
+			kMVKQuerySlotSizeInBytes > binding->second.visibilityLength - queryOffset) {
+			return failMetal4Encoding("begin_query_scratch_range_invalid");
+		}
+		_activeQueryPool = queryPool;
+		_activeQuery = query;
+		_activeQueryFlags = flags;
+		_activeQueryScratchOffset = binding->second.visibilityOffset + queryOffset;
+		return applyActiveVisibilityQuery();
+	}
+
+	bool endVisibilityQuery(MVKQueryPool* queryPool, uint32_t query) override {
+		if (_activeQueryPool != queryPool || _activeQuery != query) {
+			return false;
+		}
+		if (_renderEncoder) {
+			[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
+		}
+		_pendingVisibilityQueryCopies.push_back(
+			PendingVisibilityQueryCopy{queryPool, query, _activeQueryScratchOffset});
+		_completedQueries.push_back(MVKMetal4CompletedQuery{queryPool, query});
+		_activeQueryPool = nullptr;
+		_activeQuery = 0;
+		_activeQueryFlags = 0;
+		_activeQueryScratchOffset = 0;
+		_counters.visibilityQueries++;
+		return _renderEncoder || flushPendingVisibilityQueryCopies();
+	}
+
+	bool updateBuffer(MVKBuffer* dstBuffer,
+					  VkDeviceSize dstOffset,
+					  const void* data,
+					  size_t size) override {
+		auto dst = _buffers.find(dstBuffer);
+		auto src = _updateData.find(data);
+		if (dst == _buffers.end() || src == _updateData.end() || src->second.size != size ||
+			!size || !ensureComputeEncoder()) {
+			return false;
+		}
+		NSUInteger destinationOffset = dst->second.offset + static_cast<NSUInteger>(dstOffset);
+		if (destinationOffset > dst->second.buffer.length ||
+			size > dst->second.buffer.length - destinationOffset) {
+			return false;
+		}
+		[_computeEncoder copyFromBuffer:src->second.buffer
+						 sourceOffset:0
+							 toBuffer:dst->second.buffer
+					destinationOffset:destinationOffset
+								 size:size];
+		_counters.bufferUpdates++;
+		return true;
+	}
+
 	bool beginRendering(const VkRenderingInfo& renderingInfo) override {
-		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount != 1 ||
+		if (!_commandBuffer || _renderEncoder || renderingInfo.colorAttachmentCount == 0 ||
+			renderingInfo.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
 			!renderingInfo.pColorAttachments) {
 			return false;
 		}
-		const VkRenderingAttachmentInfo& color = renderingInfo.pColorAttachments[0];
-		auto viewIt = _imageViews.find((MVKImageView*)color.imageView);
-		if (viewIt == _imageViews.end()) { return false; }
+		const ImageViewBinding* firstColorBinding = nullptr;
+		vector<id<MTLTexture>> renderAttachments;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < renderingInfo.colorAttachmentCount;
+			 colorIndex++) {
+			auto viewIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pColorAttachments[colorIndex].imageView);
+			if (viewIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(viewIt->second.texture);
+			if (!firstColorBinding) {
+				firstColorBinding = &viewIt->second;
+			} else if (viewIt->second.width != firstColorBinding->width ||
+					   viewIt->second.height != firstColorBinding->height) {
+				return false;
+			}
+		}
+		auto depthIt = _imageViews.end();
+		if (renderingInfo.pDepthAttachment) {
+			depthIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pDepthAttachment->imageView);
+			if (depthIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(depthIt->second.texture);
+		}
+		auto stencilIt = _imageViews.end();
+		if (renderingInfo.pStencilAttachment) {
+			stencilIt = _imageViews.find(
+				(MVKImageView*)renderingInfo.pStencilAttachment->imageView);
+			if (stencilIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(stencilIt->second.texture);
+		}
 		endComputeEncoding();
 
-		const ImageViewBinding& binding = viewIt->second;
 		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
-		MTLRenderPassColorAttachmentDescriptor* colorDescriptor = descriptor.colorAttachments[0];
-		colorDescriptor.texture = binding.texture;
-		colorDescriptor.level = binding.level;
-		colorDescriptor.slice = binding.slice;
-		colorDescriptor.depthPlane = binding.depthPlane;
-		colorDescriptor.loadAction = mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
-		colorDescriptor.storeAction = mvkMTLStoreActionFromVkAttachmentStoreOpInObj(color.storeOp, false, true, nullptr);
-		colorDescriptor.clearColor = MTLClearColorMake(color.clearValue.color.float32[0],
-												 color.clearValue.color.float32[1],
-												 color.clearValue.color.float32[2],
-												 color.clearValue.color.float32[3]);
+		for (uint32_t colorIndex = 0;
+			 colorIndex < renderingInfo.colorAttachmentCount;
+			 colorIndex++) {
+			const VkRenderingAttachmentInfo& color =
+				renderingInfo.pColorAttachments[colorIndex];
+			const ImageViewBinding& binding =
+				_imageViews.find((MVKImageView*)color.imageView)->second;
+			MTLRenderPassColorAttachmentDescriptor* colorDescriptor =
+				descriptor.colorAttachments[colorIndex];
+			colorDescriptor.texture = binding.texture;
+			colorDescriptor.level = binding.level;
+			colorDescriptor.slice = binding.slice;
+			colorDescriptor.depthPlane = binding.depthPlane;
+			colorDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(color.loadOp, nullptr);
+			colorDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					color.storeOp, false, true, nullptr);
+			colorDescriptor.clearColor = MTLClearColorMake(
+				color.clearValue.color.float32[0],
+				color.clearValue.color.float32[1],
+				color.clearValue.color.float32[2],
+				color.clearValue.color.float32[3]);
+		}
+		if (renderingInfo.pDepthAttachment) {
+			const VkRenderingAttachmentInfo& depth = *renderingInfo.pDepthAttachment;
+			const ImageViewBinding& depthBinding = depthIt->second;
+			MTLRenderPassDepthAttachmentDescriptor* depthDescriptor =
+				descriptor.depthAttachment;
+			depthDescriptor.texture = depthBinding.texture;
+			depthDescriptor.level = depthBinding.level;
+			depthDescriptor.slice = depthBinding.slice;
+			depthDescriptor.depthPlane = depthBinding.depthPlane;
+			depthDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(depth.loadOp, nullptr);
+			depthDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					depth.storeOp, false, true, nullptr);
+			depthDescriptor.clearDepth = depth.clearValue.depthStencil.depth;
+		}
+		if (renderingInfo.pStencilAttachment) {
+			const VkRenderingAttachmentInfo& stencil = *renderingInfo.pStencilAttachment;
+			const ImageViewBinding& stencilBinding = stencilIt->second;
+			MTLRenderPassStencilAttachmentDescriptor* stencilDescriptor =
+				descriptor.stencilAttachment;
+			stencilDescriptor.texture = stencilBinding.texture;
+			stencilDescriptor.level = stencilBinding.level;
+			stencilDescriptor.slice = stencilBinding.slice;
+			stencilDescriptor.depthPlane = stencilBinding.depthPlane;
+			stencilDescriptor.loadAction =
+				mvkMTLLoadActionFromVkAttachmentLoadOpInObj(stencil.loadOp, nullptr);
+			stencilDescriptor.storeAction =
+				mvkMTLStoreActionFromVkAttachmentStoreOpInObj(
+					stencil.storeOp, false, true, nullptr);
+			stencilDescriptor.clearStencil = stencil.clearValue.depthStencil.stencil;
+		}
 		descriptor.renderTargetWidth = renderingInfo.renderArea.extent.width;
 		descriptor.renderTargetHeight = renderingInfo.renderArea.extent.height;
-		descriptor.renderTargetArrayLength = 1;
+		descriptor.renderTargetArrayLength = renderingInfo.layerCount;
+		if (_visibilityResultBuffer) {
+			descriptor.visibilityResultBuffer = _visibilityResultBuffer;
+			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
+		}
 		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor] retain];
 		[descriptor release];
 		if (!_renderEncoder) { return false; }
+		if (_visibilityResultBuffer) {
+			[_renderEncoder barrierAfterQueueStages:MTLStageBlit
+								 beforeStages:MTLStageFragment | MTLStageTile
+							visibilityOptions:MTL4VisibilityOptionDevice];
+		}
+		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
 		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+		if (!applyActiveVisibilityQuery()) { return false; }
 
-		_currentRenderFormat = binding.format;
-		_currentRenderWidth = binding.width;
-		_currentRenderHeight = binding.height;
+		_currentColorAttachmentCount = renderingInfo.colorAttachmentCount;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			_currentColorAttachmentFormats[colorIndex] =
+				_imageViews.find((MVKImageView*)renderingInfo.pColorAttachments[colorIndex].imageView)
+					->second.format;
+		}
+		_currentDepthFormat = renderingInfo.pDepthAttachment
+			? depthIt->second.format
+			: VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = renderingInfo.pStencilAttachment
+			? stencilIt->second.format
+			: VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = firstColorBinding->width;
+		_currentRenderHeight = firstColorBinding->height;
+		_currentRenderLayerCount = renderingInfo.layerCount;
+		_currentRenderArea = renderingInfo.renderArea;
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.renderPasses++;
-		return !_boundGraphicsPipeline || applyGraphicsPipeline();
+		if (_boundGraphicsPipeline) { applyGraphicsPipeline(true); }
+		return true;
+	}
+
+	bool beginRenderPass(MVKRenderPass* renderPass,
+						 MVKFramebuffer* framebuffer,
+						 const VkRect2D& renderArea,
+						 const VkClearValue* clearValues,
+						 size_t clearValueCount,
+						 MVKImageView*const* attachments,
+						 size_t attachmentCount) override {
+		if (!_commandBuffer || _renderEncoder || !renderPass || !framebuffer ||
+			renderPass->getSubpassCount() != 1 || !attachments || !attachmentCount) {
+			return false;
+		}
+		MVKRenderSubpass* subpass = renderPass->getSubpass(0);
+		if (!subpass ||
+			subpass->getColorAttachmentCount() > kMVKMaxColorAttachmentCount) {
+			return false;
+		}
+		bool hasUsedColorAttachment = false;
+		for (uint32_t colorIndex = 0;
+			 colorIndex < subpass->getColorAttachmentCount();
+			 colorIndex++) {
+			hasUsedColorAttachment |= subpass->isColorAttachmentUsed(colorIndex);
+		}
+		if (!hasUsedColorAttachment && !subpass->isDepthAttachmentUsed() &&
+			!subpass->isStencilAttachmentUsed()) {
+			return false;
+		}
+		vector<id<MTLTexture>> renderAttachments;
+		renderAttachments.reserve(attachmentCount);
+		for (size_t attachmentIndex = 0; attachmentIndex < attachmentCount;
+			 attachmentIndex++) {
+			auto viewIt = _imageViews.find(attachments[attachmentIndex]);
+			if (viewIt == _imageViews.end()) { return false; }
+			renderAttachments.push_back(viewIt->second.texture);
+		}
+		endComputeEncoding();
+
+		MTLRenderPassDescriptor* legacyDescriptor =
+			[MTLRenderPassDescriptor renderPassDescriptor];
+		subpass->populateMTLRenderPassDescriptor(
+			legacyDescriptor,
+			0,
+			framebuffer,
+			MVKArrayRef<MVKImageView*const>(attachments, attachmentCount),
+			MVKArrayRef<const VkClearValue>(clearValues, clearValueCount),
+			true,
+			false,
+			false);
+
+		MTL4RenderPassDescriptor* descriptor = [MTL4RenderPassDescriptor new];
+		for (uint32_t colorIndex = 0;
+			 colorIndex < subpass->getColorAttachmentCount();
+			 colorIndex++) {
+			descriptor.colorAttachments[colorIndex] =
+				legacyDescriptor.colorAttachments[colorIndex];
+		}
+		if (subpass->isDepthAttachmentUsed()) {
+			descriptor.depthAttachment = legacyDescriptor.depthAttachment;
+		}
+		if (subpass->isStencilAttachmentUsed()) {
+			descriptor.stencilAttachment = legacyDescriptor.stencilAttachment;
+		}
+		descriptor.renderTargetWidth = renderArea.extent.width;
+		descriptor.renderTargetHeight = renderArea.extent.height;
+		descriptor.renderTargetArrayLength = framebuffer->getLayerCount();
+		if (_visibilityResultBuffer) {
+			descriptor.visibilityResultBuffer = _visibilityResultBuffer;
+			descriptor.visibilityResultType = MTLVisibilityResultTypeAccumulate;
+		}
+		_renderEncoder = [[_commandBuffer renderCommandEncoderWithDescriptor:descriptor]
+			retain];
+		[descriptor release];
+		if (!_renderEncoder) { return false; }
+		if (_visibilityResultBuffer) {
+			[_renderEncoder barrierAfterQueueStages:MTLStageBlit
+								 beforeStages:MTLStageFragment | MTLStageTile
+							visibilityOptions:MTL4VisibilityOptionDevice];
+		}
+		applyRenderAttachmentBarrier(_renderEncoder, renderAttachments);
+		applyPendingBarriers(_renderEncoder, MTLStageVertex | MTLStageFragment);
+		if (!applyActiveVisibilityQuery()) { return false; }
+
+		VkExtent2D extent = framebuffer->getExtent2D();
+		_currentColorAttachmentCount = subpass->getColorAttachmentCount();
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			_currentColorAttachmentFormats[colorIndex] =
+				subpass->getColorAttachmentFormat(colorIndex);
+		}
+		_currentDepthFormat = subpass->isDepthAttachmentUsed()
+			? subpass->getDepthFormat()
+			: VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = subpass->isStencilAttachmentUsed()
+			? subpass->getStencilFormat()
+			: VK_FORMAT_UNDEFINED;
+		_currentRenderWidth = extent.width;
+		_currentRenderHeight = extent.height;
+		_currentRenderLayerCount = framebuffer->getLayerCount();
+		_currentRenderArea = renderArea;
+		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		_counters.renderPasses++;
+		if (_boundGraphicsPipeline) { applyGraphicsPipeline(true); }
+		return true;
 	}
 
 	bool endRendering() override {
 		if (!_renderEncoder) { return false; }
 		endRenderEncoding();
-		return true;
+		return flushPendingVisibilityQueryCopies();
 	}
 
 	bool bindGraphicsPipeline(MVKGraphicsPipeline* pipeline) override {
 		if (_graphicsPipelines.find(pipeline) == _graphicsPipelines.end()) { return false; }
 		_boundGraphicsPipeline = pipeline;
-		return !_renderEncoder || applyGraphicsPipeline();
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		return !_renderEncoder || applyGraphicsPipeline(true);
+	}
+
+	bool setViewports(uint32_t firstViewport,
+					  uint32_t viewportCount,
+					  const VkViewport* viewports) override {
+		if (firstViewport != 0 || viewportCount == 0 ||
+			viewportCount > kMVKMaxViewportScissorCount || !viewports) {
+			return false;
+		}
+		for (uint32_t viewportIndex = 0; viewportIndex < viewportCount; viewportIndex++) {
+			_dynamicViewports[viewportIndex] = viewports[viewportIndex];
+		}
+		_dynamicViewportCount = viewportCount;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		return true;
+	}
+
+	bool setScissors(uint32_t firstScissor,
+					 uint32_t scissorCount,
+					 const VkRect2D* scissors) override {
+		if (firstScissor != 0 || scissorCount == 0 ||
+			scissorCount > kMVKMaxViewportScissorCount || !scissors) {
+			return false;
+		}
+		for (uint32_t scissorIndex = 0; scissorIndex < scissorCount; scissorIndex++) {
+			_dynamicScissors[scissorIndex] = scissors[scissorIndex];
+		}
+		_dynamicScissorCount = scissorCount;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		return true;
+	}
+
+	bool setStencilCompareMask(VkStencilFaceFlags faceMask,
+							   uint32_t stencilCompareMask) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilCompareMask.frontFaceValue = stencilCompareMask;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilCompareMask.backFaceValue = stencilCompareMask;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
+	}
+
+	bool setStencilWriteMask(VkStencilFaceFlags faceMask,
+							 uint32_t stencilWriteMask) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilWriteMask.frontFaceValue = stencilWriteMask;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilWriteMask.backFaceValue = stencilWriteMask;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
+	}
+
+	bool setStencilReference(VkStencilFaceFlags faceMask,
+							 uint32_t stencilReference) override {
+		if (!isValidStencilFaceMask(faceMask)) { return false; }
+		if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
+			_dynamicStencilReference.frontFaceValue = stencilReference;
+		}
+		if (faceMask & VK_STENCIL_FACE_BACK_BIT) {
+			_dynamicStencilReference.backFaceValue = stencilReference;
+		}
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
+	}
+
+	bool setDepthBias(float constantFactor,
+					  float clamp,
+					  float slopeFactor) override {
+		_dynamicDepthBias.depthBiasConstantFactor = constantFactor;
+		_dynamicDepthBias.depthBiasClamp = clamp;
+		_dynamicDepthBias.depthBiasSlopeFactor = slopeFactor;
+		_hasDynamicDepthBias = true;
+		_graphicsPipelineBoundForEncoder = false;
+		return true;
+	}
+
+	bool setBlendConstants(const float* blendConstants) override {
+		if (!blendConstants) { return false; }
+		mvkCopy(_dynamicBlendConstants.float32, blendConstants, 4);
+		_hasDynamicBlendConstants = true;
+		_graphicsBlendConstantsAppliedForEncoder = false;
+		return true;
+	}
+
+	bool bindVertexBuffers(uint32_t firstBinding,
+						   uint32_t bindingCount,
+						   const MVKVertexMTLBufferBinding* bindings) override {
+		if (!bindingCount || !bindings ||
+			firstBinding + bindingCount > kMVKMaxBufferCount) {
+			return false;
+		}
+		for (uint32_t bindingOffset = 0; bindingOffset < bindingCount; bindingOffset++) {
+			const MVKVertexMTLBufferBinding& binding = bindings[bindingOffset];
+			NSUInteger bufferLength = binding.mtlBuffer.length;
+			if (!binding.mtlBuffer || binding.offset > bufferLength ||
+				(binding.size && binding.size > bufferLength - binding.offset)) {
+				return false;
+			}
+			_graphicsVertexBuffers[firstBinding + bindingOffset] = BoundVertexBuffer{
+				binding.mtlBuffer,
+				static_cast<NSUInteger>(binding.offset),
+				binding.size ? binding.size : bufferLength - binding.offset,
+				binding.stride,
+			};
+		}
+		_graphicsResourcesBoundForEncoder = false;
+		return true;
+	}
+
+	bool bindIndexBuffer(MVKBuffer* buffer,
+						 VkDeviceSize offset,
+						 VkDeviceSize size,
+						 VkIndexType indexType) override {
+		auto binding = _buffers.find(buffer);
+		if (!buffer || binding == _buffers.end() ||
+			(indexType != VK_INDEX_TYPE_UINT16 && indexType != VK_INDEX_TYPE_UINT32) ||
+			offset > buffer->getByteCount() || size > buffer->getByteCount() - offset) {
+			return false;
+		}
+		MTLIndexType mtlIndexType = indexType == VK_INDEX_TYPE_UINT16
+			? MTLIndexTypeUInt16
+			: MTLIndexTypeUInt32;
+		NSUInteger indexSize = indexType == VK_INDEX_TYPE_UINT16 ? 2 : 4;
+		NSUInteger mtlOffset = binding->second.offset + offset;
+		if (mtlOffset % indexSize != 0 ||
+			mtlOffset > binding->second.buffer.length ||
+			size > binding->second.buffer.length - mtlOffset) {
+			return false;
+		}
+		_boundIndexBuffer = BoundIndexBuffer{
+			binding->second.buffer,
+			mtlOffset,
+			static_cast<NSUInteger>(size),
+			mtlIndexType,
+		};
+		return true;
+	}
+
+	bool bindDescriptorSets(VkPipelineBindPoint bindPoint,
+							MVKPipelineLayout* layout,
+							uint32_t firstSet,
+							uint32_t setCount,
+							MVKDescriptorSet*const* descriptorSets) override {
+		if ((bindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS &&
+			 bindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) || !layout || !setCount ||
+			!descriptorSets || firstSet + setCount > kMVKMaxDescriptorSetCount ||
+			firstSet + setCount > layout->getDescriptorSetCount()) {
+			return false;
+		}
+		auto& boundSets = bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE
+			? _computeDescriptorSets
+			: _graphicsDescriptorSets;
+		for (uint32_t setOffset = 0; setOffset < setCount; setOffset++) {
+			MVKDescriptorSet* descriptorSet = descriptorSets[setOffset];
+			MVKDescriptorSetLayout* descriptorLayout =
+				layout->getDescriptorSetLayout(firstSet + setOffset);
+			if (!descriptorSet || !descriptorSet->supportsMetal4ArgumentTable() ||
+				descriptorSet->layout != descriptorLayout ||
+				(descriptorLayout->gpuSize() && !descriptorSet->gpuBufferObject)) {
+				return false;
+			}
+			boundSets[firstSet + setOffset] = BoundDescriptorSet{
+				descriptorLayout,
+				descriptorSet->gpuBufferObject,
+				descriptorSet->gpuBufferOffset,
+			};
+		}
+		if (bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE) {
+			_computeResourcesBoundForEncoder = false;
+		} else {
+			_graphicsResourcesBoundForEncoder = false;
+		}
+		return true;
 	}
 
 	bool draw(uint32_t firstVertex,
 			  uint32_t vertexCount,
 			  uint32_t firstInstance,
 			  uint32_t instanceCount) override {
-		if (!_renderEncoder || !_boundGraphicsPipeline || !_graphicsPipelineBoundForEncoder ||
-			!vertexCount || !instanceCount) {
+		if (!_renderEncoder || !_boundGraphicsPipeline || !vertexCount || !instanceCount) {
 			return false;
 		}
+		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) { return false; }
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsViewportScissorAppliedForEncoder &&
+			!applyViewportScissorState()) {
+			return false;
+		}
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsBlendConstantsAppliedForEncoder &&
+			!applyBlendConstantsState()) {
+			return false;
+		}
+		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) { return false; }
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
 		[_renderEncoder drawPrimitives:(MTLPrimitiveType)stateData.primitiveType
 						 vertexStart:firstVertex
 						 vertexCount:vertexCount
 					   instanceCount:instanceCount
 						baseInstance:firstInstance];
+		_counters.draws++;
+		_renderWork = true;
+		return true;
+	}
+
+	bool drawIndexed(uint32_t firstIndex,
+						 uint32_t indexCount,
+						 int32_t vertexOffset,
+						 uint32_t firstInstance,
+						 uint32_t instanceCount) override {
+		if (!_renderEncoder) { return failMetal4Encoding("draw_indexed_render_encoder_unavailable"); }
+		if (!_boundGraphicsPipeline) { return failMetal4Encoding("draw_indexed_pipeline_unbound"); }
+		if (!_boundIndexBuffer.buffer) { return failMetal4Encoding("draw_indexed_index_buffer_unbound"); }
+		if (!indexCount || !instanceCount) { return failMetal4Encoding("draw_indexed_empty_range"); }
+		NSUInteger indexSize = _boundIndexBuffer.type == MTLIndexTypeUInt16 ? 2 : 4;
+		uint64_t firstIndexOffset = uint64_t(firstIndex) * indexSize;
+		uint64_t indexBytes = uint64_t(indexCount) * indexSize;
+		if (firstIndexOffset > _boundIndexBuffer.size ||
+			indexBytes > _boundIndexBuffer.size - firstIndexOffset ||
+			firstIndexOffset > NSUIntegerMax - _boundIndexBuffer.offset) {
+			return failMetal4Encoding("draw_indexed_index_range_invalid");
+		}
+		NSUInteger indexBufferOffset =
+			_boundIndexBuffer.offset + static_cast<NSUInteger>(firstIndexOffset);
+		NSUInteger indexBufferLength = static_cast<NSUInteger>(indexBytes);
+		if (!_graphicsPipelineBoundForEncoder && !applyGraphicsPipeline()) {
+			return failMetal4Encoding("draw_indexed_pipeline_incompatible");
+		}
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsViewportScissorAppliedForEncoder &&
+			!applyViewportScissorState()) {
+			return failMetal4Encoding("draw_indexed_viewport_scissor_unavailable");
+		}
+		if (!_boundGraphicsPipeline->isRasterizationDisabled() &&
+			!_graphicsBlendConstantsAppliedForEncoder &&
+			!applyBlendConstantsState()) {
+			return failMetal4Encoding("draw_indexed_blend_constants_unavailable");
+		}
+		if (!_graphicsResourcesBoundForEncoder && !applyGraphicsResources()) {
+			return failMetal4Encoding("draw_indexed_resources_unavailable");
+		}
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		[_renderEncoder drawIndexedPrimitives:(MTLPrimitiveType)stateData.primitiveType
+								 indexCount:indexCount
+								  indexType:_boundIndexBuffer.type
+								indexBuffer:_boundIndexBuffer.buffer.gpuAddress + indexBufferOffset
+						  indexBufferLength:indexBufferLength
+							  instanceCount:instanceCount
+								 baseVertex:vertexOffset
+							   baseInstance:firstInstance];
+		_counters.draws++;
+		_renderWork = true;
+		return true;
+	}
+
+	bool useClearAttachments(const MVKMetal4ClearAttachmentsInfo& info) override {
+		if (!_device || !_mtlDevice || !info.commandKey || !info.encodingPool ||
+			!info.rects || !info.rectCount ||
+			info.colorAttachmentCount > kMVKMaxColorAttachmentCount ||
+			!info.framebufferLayerCount ||
+			!ensureArgumentTable()) {
+			return false;
+		}
+		if (_clearAttachments.count(info.commandKey)) { return true; }
+
+		ClearAttachmentsBinding binding;
+		binding.rects.assign(info.rects, info.rects + info.rectCount);
+		for (const VkClearRect& rect : binding.rects) {
+			if (!rect.layerCount || rect.baseArrayLayer >= info.framebufferLayerCount ||
+				rect.layerCount > info.framebufferLayerCount - rect.baseArrayLayer ||
+				rect.layerCount > (NSUIntegerMax - binding.vertexCount) / 6) {
+				return false;
+			}
+			binding.vertexCount += static_cast<NSUInteger>(rect.layerCount) * 6;
+		}
+		binding.stencilReference = info.depthStencilValue.stencil;
+		binding.pipelineKey.mtlSampleCount = 1;
+		if (info.framebufferLayerCount > 1) {
+			binding.pipelineKey.enableLayeredRendering();
+		}
+		simd::float4 clearColors[kMVKClearAttachmentCount] = {};
+		MVKPixelFormats* pixelFormats = _pixelFormats;
+		if (!pixelFormats) { return false; }
+		for (uint32_t colorIndex = 0;
+			 colorIndex < info.colorAttachmentCount;
+			 colorIndex++) {
+			VkFormat format = info.colorAttachmentFormats[colorIndex];
+			binding.pipelineKey.attachmentMTLPixelFormats[colorIndex] =
+				pixelFormats->getMTLPixelFormat(format);
+			if (info.clearColors[colorIndex]) {
+				binding.pipelineKey.enableAttachment(colorIndex);
+				MTLClearColor color =
+					pixelFormats->getMTLClearColor(info.colorValues[colorIndex], format);
+				clearColors[colorIndex] = {
+					(float)color.red, (float)color.green,
+					(float)color.blue, (float)color.alpha,
+				};
+			}
+		}
+		binding.pipelineKey.attachmentMTLPixelFormats[kMVKClearAttachmentDepthIndex] =
+			pixelFormats->getMTLPixelFormat(info.depthFormat);
+		binding.pipelineKey.attachmentMTLPixelFormats[kMVKClearAttachmentStencilIndex] =
+			pixelFormats->getMTLPixelFormat(info.stencilFormat);
+		if (info.clearDepth) {
+			binding.pipelineKey.enableAttachment(kMVKClearAttachmentDepthIndex);
+			float depth = info.depthStencilValue.depth;
+			clearColors[kMVKClearAttachmentDepthIndex] = { depth, depth, depth, depth };
+		}
+		if (info.clearStencil) {
+			binding.pipelineKey.enableAttachment(kMVKClearAttachmentStencilIndex);
+		}
+
+		if (binding.pipelineKey.isAnyAttachmentEnabled()) {
+			id<MTLRenderPipelineState> pipelineState =
+				info.encodingPool->getCmdClearMTLRenderPipelineState(binding.pipelineKey);
+			id<MTLDepthStencilState> depthStencilState =
+				info.encodingPool->getMTLDepthStencilState(info.clearDepth, info.clearStencil);
+			if (!pipelineState || !depthStencilState) { return false; }
+			binding.pipelineState = [pipelineState retain];
+			binding.depthStencilState = [depthStencilState retain];
+			binding.clearColors = [_mtlDevice newBufferWithBytes:clearColors
+													  length:sizeof(clearColors)
+													 options:MTLResourceStorageModeShared |
+															 MTLResourceCPUCacheModeWriteCombined];
+			binding.vertices = [_mtlDevice newBufferWithLength:
+				binding.vertexCount * sizeof(simd::float4)
+												 options:MTLResourceStorageModeShared |
+															 MTLResourceCPUCacheModeWriteCombined];
+			if (!binding.clearColors || !binding.vertices) {
+				[binding.pipelineState release];
+				[binding.depthStencilState release];
+				[binding.clearColors release];
+				[binding.vertices release];
+				return false;
+			}
+			useAllocation((id<MTLAllocation>)binding.pipelineState);
+			useAllocation((id<MTLAllocation>)binding.clearColors);
+			useAllocation((id<MTLAllocation>)binding.vertices);
+		}
+		_clearAttachments.emplace(info.commandKey, std::move(binding));
+		return true;
+	}
+
+	bool clearAttachments(const void* commandKey) override {
+		auto item = _clearAttachments.find(commandKey);
+		if (!_renderEncoder) { return failMetal4Encoding("clear_attachments_render_encoder_unavailable"); }
+		if (item == _clearAttachments.end()) { return failMetal4Encoding("clear_attachments_unprepared"); }
+		ClearAttachmentsBinding& binding = item->second;
+		if (!binding.pipelineKey.isAnyAttachmentEnabled()) { return true; }
+		// Vulkan attachment clears must not contribute to an active occlusion query.
+		bool restoreVisibilityQuery = _activeQueryPool != nullptr;
+		if (restoreVisibilityQuery) {
+			[_renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled
+									 offset:_activeQueryScratchOffset];
+		}
+		if (!encodeClearAttachmentsDraw(binding)) { return false; }
+		return !restoreVisibilityQuery || applyActiveVisibilityQuery();
+	}
+
+	bool encodeClearAttachmentsDraw(ClearAttachmentsBinding& binding) {
+		if (!binding.pipelineState || !binding.depthStencilState ||
+			!binding.clearColors || !binding.vertices ||
+			!_currentRenderWidth || !_currentRenderHeight) {
+			return failMetal4Encoding("clear_attachments_materialization_unavailable");
+		}
+
+		auto* vertices = static_cast<simd::float4*>(binding.vertices.contents);
+		NSUInteger vertexIndex = 0;
+		for (const VkClearRect& clearRect : binding.rects) {
+			uint64_t right = uint64_t(clearRect.rect.offset.x) + clearRect.rect.extent.width;
+			uint64_t bottom = uint64_t(clearRect.rect.offset.y) + clearRect.rect.extent.height;
+			if (clearRect.rect.offset.x < 0 || clearRect.rect.offset.y < 0 ||
+				!clearRect.layerCount ||
+				clearRect.baseArrayLayer >= _currentRenderLayerCount ||
+				clearRect.layerCount >
+					_currentRenderLayerCount - clearRect.baseArrayLayer ||
+				right > _currentRenderWidth || bottom > _currentRenderHeight) {
+				return failMetal4Encoding("clear_attachments_rect_invalid");
+			}
+			float leftPos = (float)clearRect.rect.offset.x / _currentRenderWidth;
+			float rightPos = (float)right / _currentRenderWidth;
+			float bottomPos = (float)clearRect.rect.offset.y / _currentRenderHeight;
+			float topPos = (float)bottom / _currentRenderHeight;
+			leftPos = leftPos * 2.0f - 1.0f;
+			rightPos = rightPos * 2.0f - 1.0f;
+			bottomPos = bottomPos * 2.0f - 1.0f;
+			topPos = topPos * 2.0f - 1.0f;
+			uint32_t endLayer = clearRect.baseArrayLayer + clearRect.layerCount;
+			for (uint32_t layer = clearRect.baseArrayLayer; layer < endLayer; layer++) {
+				float layerValue = static_cast<float>(layer);
+				vertices[vertexIndex++] = { leftPos, topPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { leftPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, bottomPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { rightPos, topPos, 0.0f, layerValue };
+				vertices[vertexIndex++] = { leftPos, topPos, 0.0f, layerValue };
+			}
+		}
+
+		[_renderEncoder setRenderPipelineState:binding.pipelineState];
+		[_renderEncoder setDepthStencilState:binding.depthStencilState];
+		[_renderEncoder setCullMode:MTLCullModeNone];
+		[_renderEncoder setFrontFacingWinding:MTLWindingCounterClockwise];
+		[_renderEncoder setTriangleFillMode:MTLTriangleFillModeFill];
+		[_renderEncoder setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
+		[_renderEncoder setStencilReferenceValue:binding.stencilReference];
+		MTLViewport viewport = {
+			0.0, 0.0, (double)_currentRenderWidth, (double)_currentRenderHeight, 0.0, 1.0,
+		};
+		MTLScissorRect scissor = { 0, 0, _currentRenderWidth, _currentRenderHeight };
+		[_renderEncoder setViewport:viewport];
+		[_renderEncoder setScissorRect:scissor];
+		[_argumentTable setAddress:binding.clearColors.gpuAddress atIndex:0];
+		uint32_t vertexBufferIndex =
+			_device->getMetalBufferIndexForVertexAttributeBinding(kMVKVertexContentBufferIndex);
+		[_argumentTable setAddress:binding.vertices.gpuAddress
+				 attributeStride:sizeof(simd::float4)
+						 atIndex:vertexBufferIndex];
+		[_renderEncoder setArgumentTable:_argumentTable
+						 atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+		[_renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+					 vertexStart:0
+					 vertexCount:binding.vertexCount];
+		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 		_counters.draws++;
 		_renderWork = true;
 		return true;
@@ -826,10 +2245,17 @@ public:
 		_computeEncoder = nil;
 		_commandBuffer = nil;
 		_boundComputePipeline = nullptr;
-		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentColorAttachmentCount = 0;
+		_currentDepthFormat = VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
+		_currentRenderLayerCount = 0;
+		_currentRenderArea = {};
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 	}
 
 	const vector<id<MTLAllocation>>& getAllocations() const { return _allocations; }
@@ -837,20 +2263,101 @@ public:
 	void publishCommittedCounters() {
 		_state->recordBufferCopy(_counters.bufferCopies);
 		_state->recordBufferFill(_counters.bufferFills);
+		_state->recordBufferUpdate(_counters.bufferUpdates);
 		_state->recordImageCopy(_counters.imageCopies);
 		_state->recordComputeDispatch(_counters.computeDispatches);
 		_state->recordRenderPass(_counters.renderPasses);
 		_state->recordDraw(_counters.draws);
 		_state->recordBarrier(_counters.barriers);
+		_state->recordQueryReset(_counters.queryResets);
+		_state->recordQueryCopy(_counters.queryCopies);
+		_state->recordVisibilityQuery(_counters.visibilityQueries);
+	}
+
+	void publishCommittedState() {
+		for (const auto& barrier : _pendingImageBarriers) {
+			barrier.mvkImage->applyMetal4ImageLayoutTransition(barrier);
+		}
+		for (const auto& reset : _pendingQueryResets) {
+			reset.queryPool->applyMetal4Reset(reset.firstQuery, reset.queryCount);
+		}
+		for (const auto& query : _completedQueries) {
+			query.queryPool->applyMetal4End(query.query);
+		}
+	}
+
+	const vector<MVKMetal4CompletedQuery>& getCompletedQueries() const {
+		return _completedQueries;
 	}
 
 private:
+	bool failMetal4Encoding(const char* detail) {
+		if (_encodingFailureDetail.empty()) {
+			_encodingFailureDetail = detail ?: "unknown";
+		}
+		return false;
+	}
+
+	bool flushPendingVisibilityQueryCopies() {
+		if (_pendingVisibilityQueryCopies.empty()) { return true; }
+		if (!_visibilityResultBuffer || !ensureComputeEncoder()) {
+			return failMetal4Encoding("visibility_query_copy_encoder_unavailable");
+		}
+		[_computeEncoder barrierAfterQueueStages:MTLStageAll
+							 beforeStages:MTLStageBlit
+						visibilityOptions:MTL4VisibilityOptionDevice];
+		for (const auto& query : _pendingVisibilityQueryCopies) {
+			auto binding = _queryPools.find(query.queryPool);
+			NSUInteger destinationOffset =
+				MVKOcclusionQueryPool::getVisibilityResultOffset(query.query);
+			if (binding == _queryPools.end() || !binding->second.resultBuffer ||
+				query.sourceOffset > _visibilityResultBuffer.length ||
+				kMVKQuerySlotSizeInBytes >
+					_visibilityResultBuffer.length - query.sourceOffset ||
+				destinationOffset > binding->second.resultBuffer.length ||
+				kMVKQuerySlotSizeInBytes >
+					binding->second.resultBuffer.length - destinationOffset) {
+				return failMetal4Encoding("visibility_query_copy_range_invalid");
+			}
+			[_computeEncoder copyFromBuffer:_visibilityResultBuffer
+							 sourceOffset:query.sourceOffset
+								 toBuffer:binding->second.resultBuffer
+						destinationOffset:destinationOffset
+									 size:kMVKQuerySlotSizeInBytes];
+		}
+		[_computeEncoder barrierAfterEncoderStages:MTLStageBlit
+							 beforeEncoderStages:MTLStageBlit
+							 visibilityOptions:MTL4VisibilityOptionDevice];
+		[_computeEncoder barrierAfterStages:MTLStageBlit
+						 beforeQueueStages:MTLStageBlit
+						 visibilityOptions:MTL4VisibilityOptionDevice];
+		_pendingVisibilityQueryCopies.clear();
+		return true;
+	}
+
 	bool ensureComputeEncoder() {
 		if (!_commandBuffer || _renderEncoder) { return false; }
 		if (_computeEncoder) { return true; }
 		_computeEncoder = [[_commandBuffer computeCommandEncoder] retain];
 		if (!_computeEncoder) { return false; }
 		applyPendingBarriers(_computeEncoder, MTLStageDispatch | MTLStageBlit);
+		if (_boundComputePipeline) {
+			auto pipeline = _computePipelines.find(_boundComputePipeline);
+			if (pipeline == _computePipelines.end()) { return false; }
+			[_computeEncoder setComputePipelineState:pipeline->second];
+			_computeResourcesBoundForEncoder = false;
+		}
+		return true;
+	}
+
+	bool applyActiveVisibilityQuery() {
+		if (!_activeQueryPool || !_renderEncoder) { return true; }
+		MTLVisibilityResultMode mode = mvkAreAllFlagsEnabled(
+			_activeQueryFlags, VK_QUERY_CONTROL_PRECISE_BIT)
+			? MTLVisibilityResultModeCounting
+			: MTLVisibilityResultModeBoolean;
+		[_renderEncoder setVisibilityResultMode:mode
+								 offset:_activeQueryScratchOffset];
 		return true;
 	}
 
@@ -873,12 +2380,33 @@ private:
 		}
 	}
 
+	void applyRenderAttachmentBarrier(
+		id<MTL4RenderCommandEncoder> encoder,
+		const vector<id<MTLTexture>>& renderAttachments) {
+		bool overlapsPreviousPass = false;
+		for (id<MTLTexture> attachment : renderAttachments) {
+			if (find(_previousRenderAttachments.begin(),
+					 _previousRenderAttachments.end(),
+					 attachment) != _previousRenderAttachments.end()) {
+				overlapsPreviousPass = true;
+				break;
+			}
+		}
+		if (overlapsPreviousPass) {
+			[encoder barrierAfterQueueStages:MTLStageVertex | MTLStageFragment
+						 beforeStages:MTLStageVertex | MTLStageFragment
+					visibilityOptions:MTL4VisibilityOptionDevice];
+			_counters.barriers++;
+		}
+		_previousRenderAttachments = renderAttachments;
+	}
+
 	void endComputeEncoding() {
 		if (!_computeEncoder) { return; }
 		[_computeEncoder endEncoding];
 		[_computeEncoder release];
 		_computeEncoder = nil;
-		_boundComputePipeline = nullptr;
+		_computeResourcesBoundForEncoder = false;
 	}
 
 	void endRenderEncoding() {
@@ -886,35 +2414,370 @@ private:
 		[_renderEncoder endEncoding];
 		[_renderEncoder release];
 		_renderEncoder = nil;
-		_currentRenderFormat = VK_FORMAT_UNDEFINED;
+		_currentColorAttachmentCount = 0;
+		_currentDepthFormat = VK_FORMAT_UNDEFINED;
+		_currentStencilFormat = VK_FORMAT_UNDEFINED;
 		_currentRenderWidth = 0;
 		_currentRenderHeight = 0;
+		_currentRenderLayerCount = 0;
+		_currentRenderArea = {};
 		_graphicsPipelineBoundForEncoder = false;
+		_graphicsResourcesBoundForEncoder = false;
+		_graphicsViewportScissorAppliedForEncoder = false;
+		_graphicsBlendConstantsAppliedForEncoder = false;
 	}
 
-	bool applyGraphicsPipeline() {
+	static bool isValidStencilFaceMask(VkStencilFaceFlags faceMask) {
+		constexpr VkStencilFaceFlags valid = VK_STENCIL_FACE_FRONT_AND_BACK;
+		return (faceMask & valid) != 0 && (faceMask & ~valid) == 0;
+	}
+
+	bool ensureArgumentTable() {
+		if (_argumentTable) { return true; }
+		if (!_mtlDevice) { return false; }
+		MTL4ArgumentTableDescriptor* descriptor = [MTL4ArgumentTableDescriptor new];
+		descriptor.maxBufferBindCount = kMVKMaxBufferCount;
+		descriptor.maxTextureBindCount = kMVKMaxTextureCount;
+		descriptor.maxSamplerStateBindCount = kMVKMaxSamplerCount;
+		descriptor.initializeBindings = YES;
+		descriptor.supportAttributeStrides = YES;
+		NSError* error = nil;
+		_argumentTable = [_mtlDevice newArgumentTableWithDescriptor:descriptor error:&error];
+		[descriptor release];
+		return _argumentTable != nil;
+	}
+
+	bool useAllocation(id<MTLAllocation> allocation) {
+		if (!allocation) { return false; }
+		if (_allocationKeys.insert((uintptr_t)allocation).second) {
+			_allocations.push_back(allocation);
+		}
+		return true;
+	}
+
+	bool retainDescriptorAllocation(id<MTLAllocation> allocation) {
+		if (!allocation) { return true; }
+		if (_descriptorAllocationSet.insert((const void*)allocation).second) {
+			[allocation retain];
+			_descriptorAllocations.push_back(allocation);
+			useAllocation(allocation);
+		}
+		return true;
+	}
+
+	id<MTLDepthStencilState> newDepthStencilState(
+		MVKGraphicsPipeline* pipeline,
+		const MVKStencilReference& compareMask,
+		const MVKStencilReference& writeMask) {
+		if (!_mtlDevice || !pipeline) { return nil; }
+		const auto& stateData = pipeline->getStaticStateData();
+		MTLDepthStencilDescriptor* depthStencilDescriptor =
+			[MTLDepthStencilDescriptor new];
+		bool depthTestEnabled =
+			stateData.enable.has(MVKRenderStateEnableFlag::DepthTest);
+		depthStencilDescriptor.depthCompareFunction =
+			depthTestEnabled
+				? (MTLCompareFunction)stateData.depthStencil.depthCompareFunction
+				: MTLCompareFunctionAlways;
+		depthStencilDescriptor.depthWriteEnabled =
+			depthTestEnabled && stateData.depthStencil.depthWriteEnabled;
+		bool stencilTestEnabled = stateData.depthStencil.stencilTestEnabled;
+		auto newStencilDescriptor = [](const MVKMTLStencilDescriptorData& stencilData,
+									  uint32_t readMask,
+									  uint32_t writeMaskValue) {
+			MTLStencilDescriptor* descriptor = [MTLStencilDescriptor new];
+			descriptor.stencilCompareFunction =
+				(MTLCompareFunction)stencilData.op.stencilCompareFunction;
+			descriptor.stencilFailureOperation =
+				(MTLStencilOperation)stencilData.op.stencilFailureOperation;
+			descriptor.depthFailureOperation =
+				(MTLStencilOperation)stencilData.op.depthFailureOperation;
+			descriptor.depthStencilPassOperation =
+				(MTLStencilOperation)stencilData.op.depthStencilPassOperation;
+			descriptor.readMask = readMask;
+			descriptor.writeMask = writeMaskValue;
+			return descriptor;
+		};
+		MTLStencilDescriptor* frontFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.frontFaceStencilData,
+							   compareMask.frontFaceValue,
+							   writeMask.frontFaceValue)
+			: nil;
+		MTLStencilDescriptor* backFaceStencil = stencilTestEnabled
+			? newStencilDescriptor(stateData.depthStencil.backFaceStencilData,
+							   compareMask.backFaceValue,
+							   writeMask.backFaceValue)
+			: nil;
+		depthStencilDescriptor.frontFaceStencil = frontFaceStencil;
+		depthStencilDescriptor.backFaceStencil = backFaceStencil;
+		id<MTLDepthStencilState> state =
+			[_mtlDevice newDepthStencilStateWithDescriptor:depthStencilDescriptor];
+		[frontFaceStencil release];
+		[backFaceStencil release];
+		[depthStencilDescriptor release];
+		return state;
+	}
+
+	bool applyGraphicsPipeline(bool allowIncompleteDynamicState = false) {
 		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
 		auto it = _graphicsPipelines.find(_boundGraphicsPipeline);
 		if (it == _graphicsPipelines.end() ||
-			_boundGraphicsPipeline->getMetal4ColorAttachmentFormat() != _currentRenderFormat) {
+			_boundGraphicsPipeline->getMetal4ColorAttachmentCount() !=
+				_currentColorAttachmentCount ||
+			_boundGraphicsPipeline->getMetal4DepthAttachmentFormat() != _currentDepthFormat ||
+			_boundGraphicsPipeline->getMetal4StencilAttachmentFormat() != _currentStencilFormat) {
 			return false;
+		}
+		for (uint32_t colorIndex = 0;
+			 colorIndex < _currentColorAttachmentCount;
+			 colorIndex++) {
+			if (_boundGraphicsPipeline->getMetal4ColorAttachmentFormat(colorIndex) !=
+				_currentColorAttachmentFormats[colorIndex]) {
+				return false;
+			}
 		}
 		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
-		const VkViewport& viewport = _boundGraphicsPipeline->getViewports()[0];
-		const VkRect2D& scissor = _boundGraphicsPipeline->getScissors()[0];
-		if (stateData.numViewports != 1 || stateData.numScissors != 1 ||
-			scissor.offset.x < 0 || scissor.offset.y < 0 ||
-			(uint64_t)scissor.offset.x + scissor.extent.width > _currentRenderWidth ||
-			(uint64_t)scissor.offset.y + scissor.extent.height > _currentRenderHeight) {
-			return false;
+		MVKStencilReference compareMask {
+			stateData.depthStencil.frontFaceStencilData.readMask,
+			stateData.depthStencil.backFaceStencilData.readMask,
+		};
+		MVKStencilReference writeMask {
+			stateData.depthStencil.frontFaceStencilData.writeMask,
+			stateData.depthStencil.backFaceStencilData.writeMask,
+		};
+		if (_boundGraphicsPipeline->usesMetal4DynamicStencilCompareMask()) {
+			compareMask = _dynamicStencilCompareMask;
 		}
-		[_renderEncoder setRenderPipelineState:it->second];
-		[_renderEncoder setViewport:mvkMTLViewportFromVkViewport(viewport)];
-		[_renderEncoder setScissorRect:mvkMTLScissorRectFromVkRect2D(scissor)];
+		if (_boundGraphicsPipeline->usesMetal4DynamicStencilWriteMask()) {
+			writeMask = _dynamicStencilWriteMask;
+		}
+		id<MTLDepthStencilState> depthStencilState = nil;
+		for (auto& depthStencil : it->second.depthStencilStates) {
+			if (depthStencil.compareMask.frontFaceValue == compareMask.frontFaceValue &&
+				depthStencil.compareMask.backFaceValue == compareMask.backFaceValue &&
+				depthStencil.writeMask.frontFaceValue == writeMask.frontFaceValue &&
+				depthStencil.writeMask.backFaceValue == writeMask.backFaceValue) {
+				depthStencilState = depthStencil.state;
+				break;
+			}
+		}
+		if (!depthStencilState) {
+			depthStencilState = newDepthStencilState(
+				_boundGraphicsPipeline, compareMask, writeMask);
+			if (!depthStencilState) { return false; }
+			it->second.depthStencilStates.push_back(
+				DepthStencilStateBinding{compareMask, writeMask, depthStencilState});
+		}
+		[_renderEncoder setRenderPipelineState:it->second.pipelineState];
+		[_renderEncoder setDepthStencilState:depthStencilState];
 		[_renderEncoder setCullMode:(MTLCullMode)stateData.cullMode];
 		[_renderEncoder setFrontFacingWinding:(MTLWinding)stateData.frontFace];
 		[_renderEncoder setTriangleFillMode:(MTLTriangleFillMode)stateData.polygonMode];
+		const MVKDepthBias* depthBias = &stateData.depthBias;
+		if (_boundGraphicsPipeline->usesMetal4DynamicDepthBias()) {
+			if (!_hasDynamicDepthBias) { return allowIncompleteDynamicState; }
+			depthBias = &_dynamicDepthBias;
+		}
+		if (stateData.enable.has(MVKRenderStateEnableFlag::DepthBias)) {
+			[_renderEncoder setDepthBias:depthBias->depthBiasConstantFactor
+						 slopeScale:depthBias->depthBiasSlopeFactor
+							  clamp:depthBias->depthBiasClamp];
+		} else {
+			[_renderEncoder setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
+		}
+		if (stateData.depthStencil.stencilTestEnabled) {
+			uint32_t frontReference = stateData.stencilReference.frontFaceValue;
+			uint32_t backReference = stateData.stencilReference.backFaceValue;
+			if (_boundGraphicsPipeline->usesMetal4DynamicStencilReference()) {
+				frontReference = _dynamicStencilReference.frontFaceValue;
+				backReference = _dynamicStencilReference.backFaceValue;
+			}
+			if (frontReference == backReference) {
+				[_renderEncoder setStencilReferenceValue:frontReference];
+			} else {
+				[_renderEncoder setStencilFrontReferenceValue:frontReference
+									 backReferenceValue:backReference];
+			}
+		}
 		_graphicsPipelineBoundForEncoder = true;
+		return true;
+	}
+
+	bool applyViewportScissorState() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		const auto& stateData = _boundGraphicsPipeline->getStaticStateData();
+		const VkViewport* viewport = nullptr;
+		const VkRect2D* scissor = nullptr;
+		uint32_t viewportCount = 0;
+		uint32_t scissorCount = 0;
+		if (_boundGraphicsPipeline->usesMetal4DynamicViewport()) {
+			if (_dynamicViewportCount == 0) {
+				return failMetal4Encoding("viewport_scissor_dynamic_viewport_unset");
+			}
+			viewport = _dynamicViewports.data();
+			viewportCount = _dynamicViewportCount;
+		} else {
+			if (stateData.numViewports != 1) {
+				return failMetal4Encoding("viewport_scissor_static_viewport_count_unsupported");
+			}
+			viewport = _boundGraphicsPipeline->getViewports();
+			viewportCount = 1;
+		}
+		if (_boundGraphicsPipeline->usesMetal4DynamicScissor()) {
+			if (_dynamicScissorCount == 0) {
+				return failMetal4Encoding("viewport_scissor_dynamic_scissor_unset");
+			}
+			scissor = _dynamicScissors.data();
+			scissorCount = _dynamicScissorCount;
+		} else {
+			if (stateData.numScissors != 1) {
+				return failMetal4Encoding("viewport_scissor_static_scissor_count_unsupported");
+			}
+			scissor = _boundGraphicsPipeline->getScissors();
+			scissorCount = 1;
+		}
+		if (!viewport || !scissor || viewportCount == 0 || scissorCount == 0 ||
+			viewportCount > kMVKMaxViewportScissorCount ||
+			scissorCount > kMVKMaxViewportScissorCount) {
+			return failMetal4Encoding("viewport_scissor_state_invalid");
+		}
+		MTLViewport mtlViewports[kMVKMaxViewportScissorCount];
+		for (uint32_t viewportIndex = 0; viewportIndex < viewportCount; viewportIndex++) {
+			mtlViewports[viewportIndex] = mvkMTLViewportFromVkViewport(viewport[viewportIndex]);
+		}
+		MTLScissorRect mtlScissors[kMVKMaxViewportScissorCount];
+		uint64_t renderLeft = static_cast<uint64_t>(std::max(_currentRenderArea.offset.x, 0));
+		uint64_t renderTop = static_cast<uint64_t>(std::max(_currentRenderArea.offset.y, 0));
+		uint64_t renderRight = std::min<uint64_t>(
+			renderLeft + _currentRenderArea.extent.width, _currentRenderWidth);
+		uint64_t renderBottom = std::min<uint64_t>(
+			renderTop + _currentRenderArea.extent.height, _currentRenderHeight);
+		for (uint32_t scissorIndex = 0; scissorIndex < scissorCount; scissorIndex++) {
+			const VkRect2D& vkScissor = scissor[scissorIndex];
+			if (vkScissor.offset.x < 0 || vkScissor.offset.y < 0) {
+				return failMetal4Encoding("viewport_scissor_negative_offset");
+			}
+			uint64_t left = std::max<uint64_t>(vkScissor.offset.x, renderLeft);
+			uint64_t top = std::max<uint64_t>(vkScissor.offset.y, renderTop);
+			uint64_t right = std::min<uint64_t>(
+				static_cast<uint64_t>(vkScissor.offset.x) + vkScissor.extent.width,
+				renderRight);
+			uint64_t bottom = std::min<uint64_t>(
+				static_cast<uint64_t>(vkScissor.offset.y) + vkScissor.extent.height,
+				renderBottom);
+			if (left >= right || top >= bottom) {
+				mtlScissors[scissorIndex] = {0, 0, 0, 0};
+			} else {
+				mtlScissors[scissorIndex] = {
+					static_cast<NSUInteger>(left),
+					static_cast<NSUInteger>(top),
+					static_cast<NSUInteger>(right - left),
+					static_cast<NSUInteger>(bottom - top),
+				};
+			}
+		}
+		[_renderEncoder setViewports:mtlViewports count:viewportCount];
+		[_renderEncoder setScissorRects:mtlScissors count:scissorCount];
+		_graphicsViewportScissorAppliedForEncoder = true;
+		return true;
+	}
+
+	bool applyBlendConstantsState() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		if (!_boundGraphicsPipeline->usesMetal4BlendConstants()) {
+			_graphicsBlendConstantsAppliedForEncoder = true;
+			return true;
+		}
+		const MVKColor32* blendConstants = nullptr;
+		if (_boundGraphicsPipeline->usesMetal4DynamicBlendConstants()) {
+			if (!_hasDynamicBlendConstants) { return false; }
+			blendConstants = &_dynamicBlendConstants;
+		} else {
+			blendConstants = &_boundGraphicsPipeline->getStaticStateData().blendConstants;
+		}
+		const float* color = blendConstants->float32;
+		[_renderEncoder setBlendColorRed:color[0]
+							 green:color[1]
+							  blue:color[2]
+							 alpha:color[3]];
+		_graphicsBlendConstantsAppliedForEncoder = true;
+		return true;
+	}
+
+	bool applyGraphicsResources() {
+		if (!_renderEncoder || !_boundGraphicsPipeline) { return false; }
+		if (_boundGraphicsPipeline->requiresMetal4ArgumentTable() && !ensureArgumentTable()) {
+			return false;
+		}
+		MVKPipelineLayout* pipelineLayout = _boundGraphicsPipeline->getLayout();
+		MTLRenderStages stages = 0;
+		for (size_t vkBinding : _boundGraphicsPipeline->getVkVertexBuffers()) {
+			const BoundVertexBuffer& vertexBuffer = _graphicsVertexBuffers[vkBinding];
+			if (!vertexBuffer.buffer || vertexBuffer.offset > vertexBuffer.buffer.length) {
+				return false;
+			}
+			uint32_t metalBinding =
+				_boundGraphicsPipeline->getMetalBufferIndexForVertexAttributeBinding(
+					static_cast<uint32_t>(vkBinding));
+			if (_boundGraphicsPipeline->usesMetal4DynamicVertexStride()) {
+				[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
+						 attributeStride:vertexBuffer.stride
+								 atIndex:metalBinding];
+			} else {
+				[_argumentTable setAddress:vertexBuffer.buffer.gpuAddress + vertexBuffer.offset
+								 atIndex:metalBinding];
+			}
+			stages |= MTLRenderStageVertex;
+		}
+		if (_boundGraphicsPipeline->supportsMetal4ArgumentTableRenderExecution()) {
+			for (MVKShaderStage stage : {kMVKShaderStageVertex, kMVKShaderStageFragment}) {
+				const auto& resources = _boundGraphicsPipeline->getStageResources(stage);
+				for (size_t setIndex : resources.resources.descriptorSetData) {
+					if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
+					const BoundDescriptorSet& descriptorSet = _graphicsDescriptorSets[setIndex];
+					if (!descriptorSet.buffer ||
+						descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
+						return false;
+					}
+					[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
+								 atIndex:setIndex];
+				}
+				if (resources.resources.descriptorSetData.areAnyBitsSet()) {
+					stages |= stage == kMVKShaderStageVertex
+						? MTLRenderStageVertex
+						: MTLRenderStageFragment;
+				}
+			}
+		} else if (!_boundGraphicsPipeline->supportsMetal4DescriptorlessRenderExecution()) {
+			return false;
+		}
+		if (stages) { [_renderEncoder setArgumentTable:_argumentTable atStages:stages]; }
+		_graphicsResourcesBoundForEncoder = true;
+		return true;
+	}
+
+	bool applyComputeResources() {
+		if (!_computeEncoder || !_boundComputePipeline) { return false; }
+		if (_boundComputePipeline->supportsMetal4ArgumentTableExecution()) {
+			if (!ensureArgumentTable()) { return false; }
+			MVKPipelineLayout* pipelineLayout = _boundComputePipeline->getLayout();
+			if (!pipelineLayout) { return false; }
+			const auto& resources = _boundComputePipeline->getStageResources();
+			for (size_t setIndex : resources.resources.descriptorSetData) {
+				if (setIndex >= pipelineLayout->getDescriptorSetCount()) { return false; }
+				const BoundDescriptorSet& descriptorSet = _computeDescriptorSets[setIndex];
+				if (!descriptorSet.buffer ||
+					descriptorSet.layout != pipelineLayout->getDescriptorSetLayout(setIndex)) {
+					return false;
+				}
+				[_argumentTable setAddress:descriptorSet.buffer.gpuAddress + descriptorSet.offset
+							 atIndex:setIndex];
+			}
+			[_computeEncoder setArgumentTable:_argumentTable];
+		} else if (!_boundComputePipeline->supportsMetal4DescriptorlessExecution()) {
+			return false;
+		}
+		_computeResourcesBoundForEncoder = true;
 		return true;
 	}
 
@@ -922,21 +2785,77 @@ private:
 	unordered_map<MVKBuffer*, BufferBinding> _buffers;
 	unordered_map<MVKImage*, ImageBinding> _images;
 	unordered_map<MVKImageView*, ImageViewBinding> _imageViews;
+	unordered_map<MVKQueryPool*, QueryPoolBinding> _queryPools;
+	unordered_map<const void*, UpdateDataBinding> _updateData;
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
-	unordered_map<MVKGraphicsPipeline*, id<MTLRenderPipelineState>> _graphicsPipelines;
+	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
+	unordered_map<const void*, ClearAttachmentsBinding> _clearAttachments;
+	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
+	BoundIndexBuffer _boundIndexBuffer = {};
+	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _computeDescriptorSets = {};
+	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _graphicsDescriptorSets = {};
+	array<MVKDescriptorSet*, kMVKMaxDescriptorSetCount>
+		_preparedComputeDescriptorSets = {};
+	array<MVKDescriptorSet*, kMVKMaxDescriptorSetCount>
+		_preparedGraphicsDescriptorSets = {};
+	unordered_set<const void*> _descriptorAllocationSet;
+	vector<id<MTLAllocation>> _descriptorAllocations;
 	vector<PendingBarrier> _pendingBarriers;
+	vector<id<MTLTexture>> _previousRenderAttachments;
+	vector<MVKPipelineBarrier> _pendingImageBarriers;
+	vector<PendingQueryReset> _pendingQueryResets;
+	vector<MVKMetal4CompletedQuery> _completedQueries;
+	unordered_set<uintptr_t> _allocationKeys;
 	vector<id<MTLAllocation>> _allocations;
+	MVKDevice* _device = nullptr;
+	MVKPixelFormats* _pixelFormats = nullptr;
+	id<MTLDevice> _mtlDevice = nil;
 	id<MTL4CommandBuffer> _commandBuffer = nil;
 	id<MTL4ComputeCommandEncoder> _computeEncoder = nil;
 	id<MTL4RenderCommandEncoder> _renderEncoder = nil;
+	id<MTL4ArgumentTable> _argumentTable = nil;
 	MVKComputePipeline* _boundComputePipeline = nullptr;
 	MVKGraphicsPipeline* _boundGraphicsPipeline = nullptr;
-	VkFormat _currentRenderFormat = VK_FORMAT_UNDEFINED;
+	MVKComputePipeline* _preparedComputePipeline = nullptr;
+	MVKGraphicsPipeline* _preparedGraphicsPipeline = nullptr;
+	MVKQueryPool* _preparingActiveQueryPool = nullptr;
+	bool _preparingVisibilityQueryScope = false;
+	id<MTLBuffer> _visibilityResultBuffer = nil;
+	NSUInteger _visibilityResultBufferLength = 0;
+	vector<PendingVisibilityQueryCopy> _pendingVisibilityQueryCopies;
+	MVKQueryPool* _activeQueryPool = nullptr;
+	uint32_t _activeQuery = 0;
+	VkQueryControlFlags _activeQueryFlags = 0;
+	NSUInteger _activeQueryScratchOffset = 0;
+	VkFormat _currentColorAttachmentFormats[kMVKMaxColorAttachmentCount] = {};
+	uint32_t _currentColorAttachmentCount = 0;
+	bool _computeResourcesBoundForEncoder = false;
+	VkFormat _currentDepthFormat = VK_FORMAT_UNDEFINED;
+	VkFormat _currentStencilFormat = VK_FORMAT_UNDEFINED;
 	NSUInteger _currentRenderWidth = 0;
 	NSUInteger _currentRenderHeight = 0;
+	uint32_t _currentRenderLayerCount = 0;
+	VkRect2D _currentRenderArea = {};
+	array<VkViewport, kMVKMaxViewportScissorCount> _dynamicViewports = {};
+	array<VkRect2D, kMVKMaxViewportScissorCount> _dynamicScissors = {};
+	uint32_t _dynamicViewportCount = 0;
+	uint32_t _dynamicScissorCount = 0;
+	MVKColor32 _dynamicBlendConstants = {};
+	MVKDepthBias _dynamicDepthBias = {};
+	MVKStencilReference _dynamicStencilCompareMask = {};
+	MVKStencilReference _dynamicStencilWriteMask = {};
+	MVKStencilReference _dynamicStencilReference = {};
 	bool _graphicsPipelineBoundForEncoder = false;
+	bool _graphicsResourcesBoundForEncoder = false;
+	bool _graphicsViewportScissorAppliedForEncoder = false;
+	bool _graphicsBlendConstantsAppliedForEncoder = false;
+	bool _hasDynamicBlendConstants = false;
+	bool _hasDynamicDepthBias = false;
 	bool _renderWork = false;
 	CommandCounters _counters;
+	string _encodingFailureDetail;
+	string _encodingFailureSummary;
+	string _preparationFailureSummary;
 };
 
 /** Idempotent owner shared by MTL4 commit feedback and queue-order completion. */
@@ -946,6 +2865,7 @@ struct MVKMetal4SubmissionCompletion {
 	MVKQueue* queue = nullptr;
 	shared_ptr<MVKMetal4CommandQueueState> state;
 	vector<id<MTLAllocation>> allocations;
+	vector<MVKMetal4CompletedQuery> completedQueries;
 	size_t allocatorIndex = 0;
 	uint64_t sequence = 0;
 	uint64_t startTime = 0;
@@ -958,6 +2878,7 @@ struct MVKMetal4SubmissionCompletion {
 								  MVKQueue* mvkQueue,
 								  shared_ptr<MVKMetal4CommandQueueState> sharedState,
 								  const vector<id<MTLAllocation>>& residentAllocations,
+								  const vector<MVKMetal4CompletedQuery>& submissionQueries,
 								  size_t slotIndex,
 								  uint64_t orderValue,
 								  uint64_t gpuStartTime) :
@@ -965,6 +2886,7 @@ struct MVKMetal4SubmissionCompletion {
 		queue(mvkQueue),
 		state(std::move(sharedState)),
 		allocations(residentAllocations),
+		completedQueries(submissionQueries),
 		allocatorIndex(slotIndex),
 		sequence(orderValue),
 		startTime(gpuStartTime) {
@@ -1001,6 +2923,9 @@ struct MVKMetal4SubmissionCompletion {
 	}
 
 	void finalize(MVKQueueCommandBufferSubmission* completedSubmission) {
+		for (const auto& query : completedQueries) {
+			query.queryPool->finishMetal4Query(query.query);
+		}
 		state->completeAllocator(allocatorIndex);
 		state->releaseResidency(allocations);
 		queue->addPerformanceInterval(queue->getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
@@ -1606,6 +3531,8 @@ void MVKQueue::initMTL4CommandQueue() {
 		}
 
 		_metal4CommandState = make_shared<MVKMetal4CommandQueueState>();
+		_metal4CommandState->telemetryEnabled =
+			mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_TELEMETRY", 0.0) != 0.0;
 		string failureReason;
 		if (!_metal4CommandState->initialize(mtlDevice, allocatorCount, queueLabel, &failureReason)) {
 			_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
@@ -1663,9 +3590,10 @@ MVKQueue::~MVKQueue() {
 	_device->removeResidencySet(_mtlQueue);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (_metal4CommandState) {
+		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
 		_device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu.",
+			"Metal 4 command backend summary: attempts=%llu, real_submissions=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, buffer_copies=%llu, buffer_fills=%llu, buffer_updates=%llu, image_copies=%llu, compute_dispatches=%llu, render_passes=%llu, draws=%llu, barriers=%llu, query_resets=%llu, query_copies=%llu, visibility_queries=%llu, unsupported_commands=%s.",
 			(unsigned long long)_metal4CommandState->attemptedSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->realSubmissionCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderSubmissionCount.load(memory_order_relaxed),
@@ -1673,11 +3601,16 @@ MVKQueue::~MVKQueue() {
 			(unsigned long long)_metal4CommandState->failureCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->bufferFillCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->bufferUpdateCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->imageCopyCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->computeDispatchCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->renderPassCount.load(memory_order_relaxed),
 			(unsigned long long)_metal4CommandState->drawCount.load(memory_order_relaxed),
-			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed));
+			(unsigned long long)_metal4CommandState->barrierCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->queryResetCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->queryCopyCount.load(memory_order_relaxed),
+			(unsigned long long)_metal4CommandState->visibilityQueryCount.load(memory_order_relaxed),
+			unsupportedCommandSummary.c_str());
 		_metal4CommandState->shutdown();
 		id<MTLResidencySet> residencySet = _metal4CommandState->copyResidencySet();
 		if (_mtl4Queue && residencySet) { [_mtl4Queue removeResidencySet:residencySet]; }
@@ -1876,57 +3809,152 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		return VK_SUCCESS;
 	}
 
-	state->recordSubmissionAttempt();
-	auto recordFallback = [&](MVKMetal4FallbackReason reason) {
-		MVKMetal4FallbackTelemetry fallback = state->recordFallback(reason);
+	uint64_t attemptNumber = state->recordSubmissionAttempt();
+	uint64_t attemptStartedAt =
+		state->telemetryEnabled ? mvkGetRuntimeNanoseconds() : 0;
+	bool attemptTimingRecorded = false;
+	auto reportPeriodicTelemetry = [&]() {
+		bool shouldReport =
+			attemptNumber == 1 || attemptNumber % kMetal4CommandTelemetryInterval == 0;
+		if (!state->telemetryEnabled || !shouldReport) {
+			return;
+		}
+		uint64_t attempts = state->attemptedSubmissionCount.load(memory_order_relaxed);
+		uint64_t realSubmissions = state->realSubmissionCount.load(memory_order_relaxed);
+		uint64_t coveragePpm = attempts ? (realSubmissions * 1000000ULL) / attempts : 0;
+		string unsupportedCommands = state->unsupportedCommandSummary();
+		auto fallbackCount = [&](MVKMetal4FallbackReason reason) {
+			return state->fallbackReasonCounts[static_cast<size_t>(reason)].load(memory_order_relaxed);
+		};
+		_queue->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command backend telemetry: attempts=%llu, real_submissions=%llu, coverage_ppm=%llu, render_submissions=%llu, fallbacks=%llu, failures=%llu, unsupported_semaphore=%llu, unsupported_command_buffer=%llu, prepare_failed=%llu, residency_acquire_failed=%llu, allocator_unavailable=%llu, command_object_unavailable=%llu, encoding_replayable_exception=%llu, command_buffer_not_ended=%llu, precommit_replayable_exception=%llu, unsupported_commands=%s.",
+			(unsigned long long)attempts,
+			(unsigned long long)realSubmissions,
+			(unsigned long long)coveragePpm,
+			(unsigned long long)state->renderSubmissionCount.load(memory_order_relaxed),
+			(unsigned long long)state->fallbackCount.load(memory_order_relaxed),
+			(unsigned long long)state->failureCount.load(memory_order_relaxed),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::UnsupportedSemaphore),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::UnsupportedCommandBuffer),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::PrepareFailed),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::ResidencyAcquireFailed),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::AllocatorUnavailable),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::CommandObjectUnavailable),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::EncodingReplayableException),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::CommandBufferNotEnded),
+			(unsigned long long)fallbackCount(MVKMetal4FallbackReason::PrecommitReplayableException),
+			unsupportedCommands.c_str());
+		_queue->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command backend timing: attempts=%llu, attempt_total_ns=%llu, attempt_max_ns=%llu, support_check_total_ns=%llu, support_check_max_ns=%llu, preparation_total_ns=%llu, preparation_max_ns=%llu, residency_total_ns=%llu, residency_max_ns=%llu, allocator_total_ns=%llu, allocator_max_ns=%llu, command_object_total_ns=%llu, command_object_max_ns=%llu, encoding_total_ns=%llu, encoding_max_ns=%llu, commit_total_ns=%llu, commit_max_ns=%llu.",
+			(unsigned long long)attempts,
+			(unsigned long long)state->attemptTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->attemptTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->supportCheckTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->supportCheckTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->preparationTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->preparationTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->residencyTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->residencyTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->allocatorTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->allocatorTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->commandObjectTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->commandObjectTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->encodingTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->encodingTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->commitTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->commitTiming.maxNs.load(memory_order_relaxed));
+	};
+	auto finishAttemptTelemetry = [&]() {
+		if (attemptTimingRecorded) { return; }
+		state->recordAttemptTiming(attemptStartedAt);
+		attemptTimingRecorded = true;
+		reportPeriodicTelemetry();
+	};
+	auto recordFallback = [&](MVKMetal4FallbackReason reason,
+								 const char* unsupportedCommand = nullptr) {
+		MVKMetal4FallbackTelemetry fallback = state->recordFallback(reason, unsupportedCommand);
+		finishAttemptTelemetry();
 		bool isPowerOfTwo =
 			fallback.totalCount != 0 &&
 			(fallback.totalCount & (fallback.totalCount - 1)) == 0;
-		if (fallback.reasonCount == 1 || isPowerOfTwo) {
+		bool isFirstUnsupportedCommand = fallback.unsupportedCommandCount == 1;
+		if (fallback.reasonCount == 1 || isPowerOfTwo || isFirstUnsupportedCommand) {
+			string unsupportedCommands = state->unsupportedCommandSummary();
 			_queue->reportMessage(
 				MVK_CONFIG_LOG_LEVEL_INFO,
-				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu.",
+				"Metal 4 command backend live: attempts=%llu, real_submissions=%llu, fallbacks=%llu, failures=%llu, latest_fallback=%s, latest_reason_count=%llu, latest_unsupported_command=%s, latest_unsupported_command_count=%llu, unsupported_commands=%s.",
 				(unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)state->realSubmissionCount.load(memory_order_relaxed),
 				(unsigned long long)fallback.totalCount,
 				(unsigned long long)state->failureCount.load(memory_order_relaxed),
 				mvkMetal4FallbackReasonName(reason),
-				(unsigned long long)fallback.reasonCount);
+				(unsigned long long)fallback.reasonCount,
+				fallback.unsupportedCommand,
+				(unsigned long long)fallback.unsupportedCommandCount,
+				unsupportedCommands.c_str());
 		}
 	};
 
+	uint64_t supportCheckStartedAt = state->startTiming();
 	if (!supportsMetal4Semaphores()) {
+		state->recordSupportCheckTiming(supportCheckStartedAt);
 		recordFallback(MVKMetal4FallbackReason::UnsupportedSemaphore);
 		return VK_SUCCESS;
 	}
-	if (!supportsMetal4CommandBuffers()) {
-		recordFallback(MVKMetal4FallbackReason::UnsupportedCommandBuffer);
+	const char* firstUnsupportedCommand = nullptr;
+	if (!supportsMetal4CommandBuffers(&firstUnsupportedCommand)) {
+		state->recordSupportCheckTiming(supportCheckStartedAt);
+		recordFallback(MVKMetal4FallbackReason::UnsupportedCommandBuffer,
+					   firstUnsupportedCommand);
 		return VK_SUCCESS;
 	}
+	state->recordSupportCheckTiming(supportCheckStartedAt);
 
-	MVKMetal4TransferCommandEncoder encoder(state);
-	if (!prepareMetal4CommandBuffers(&encoder)) {
+	MVKMetal4TransferCommandEncoder encoder(
+		state, getDevice(), getMTLDevice(), getPixelFormats());
+	uint64_t preparationStartedAt = state->startTiming();
+	if (!prepareMetal4CommandBuffers(&encoder) || !encoder.finalizePreparation()) {
+		state->recordPreparationTiming(preparationStartedAt);
+		string preparationSummary;
+		if (state->recordPreparationFailure(
+				encoder.getMetal4PreparationFailureCommand(), &preparationSummary)) {
+			_queue->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 command preparation failed for %s.",
+				preparationSummary.c_str());
+		}
 		recordFallback(MVKMetal4FallbackReason::PrepareFailed);
 		return VK_SUCCESS;
 	}
+	state->recordPreparationTiming(preparationStartedAt);
 
 	const auto& allocations = encoder.getAllocations();
+	uint64_t residencyStartedAt = state->startTiming();
 	if (!state->acquireResidency(allocations)) {
+		state->recordResidencyTiming(residencyStartedAt);
 		recordFallback(MVKMetal4FallbackReason::ResidencyAcquireFailed);
 		return VK_SUCCESS;
 	}
+	state->recordResidencyTiming(residencyStartedAt);
 
 	size_t allocatorIndex = 0;
 	id<MTL4CommandAllocator> allocator = nil;
+	uint64_t allocatorStartedAt = state->startTiming();
 	if (!state->acquireAllocator(&allocatorIndex, &allocator)) {
+		state->recordAllocatorTiming(allocatorStartedAt);
 		state->releaseResidency(allocations);
 		recordFallback(MVKMetal4FallbackReason::AllocatorUnavailable);
 		return VK_SUCCESS;
 	}
+	state->recordAllocatorTiming(allocatorStartedAt);
 
+	uint64_t commandObjectStartedAt = state->startTiming();
 	id<MTL4CommandBuffer> commandBuffer = [getMTLDevice() newCommandBuffer];
 	id<MTLResidencySet> residencySet = state->copyResidencySet();
 	MTL4CommitOptions* options = [MTL4CommitOptions new];
+	state->recordCommandObjectTiming(commandObjectStartedAt);
 	if (!commandBuffer || !residencySet || !options) {
 		state->finishEncoding(allocatorIndex, false);
 		state->releaseResidency(allocations);
@@ -1944,35 +3972,48 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	bool encoderEndAttempted = false;
 	bool commandBufferEndAttempted = false;
 	bool commandBufferEnded = false;
+	const char* encodingPhase = "label_command_buffer";
+	uint64_t encodingStartedAt = state->startTiming();
 	@try {
 		commandBuffer.label = [NSString stringWithFormat:@"%s Metal 4 Vulkan transfer submission %llu",
-													 _queue->getName().c_str(),
-													 (unsigned long long)_submissionSequence];
+												 _queue->getName().c_str(),
+												 (unsigned long long)_submissionSequence];
+		encodingPhase = "begin_command_buffer";
 		commandBufferBeginAttempted = true;
 		[commandBuffer beginCommandBufferWithAllocator:allocator];
 		commandBufferBegun = true;
+		encodingPhase = "begin_encoder";
 		if (!encoder.beginEncoding(commandBuffer, residencySet)) {
 			@throw [NSException exceptionWithName:@"MVKMetal4EncoderCreation"
 									 reason:@"Could not create MTL4ComputeCommandEncoder"
 								   userInfo:nil];
 		}
+		encodingPhase = "claim_vulkan_command_buffers";
 		if (!beginMetal4CommandBuffers()) {
 			@throw [NSException exceptionWithName:@"MVKMetal4CommandClaim"
 									 reason:@"Could not claim every Vulkan command buffer"
 								   userInfo:nil];
 		}
 		claimedCommandBuffers = true;
+		encodingPhase = "encode_vulkan_commands";
 		if (!encodeMetal4CommandBuffers(&encoder)) {
+			const char* failedCommand = encoder.getMetal4EncodingFailureCommand();
 			@throw [NSException exceptionWithName:@"MVKMetal4CommandEncoding"
-									 reason:@"Metal 4 command materialization failed"
+									 reason:[NSString stringWithFormat:
+										 @"Metal 4 command materialization failed for %s",
+										 failedCommand]
 								   userInfo:nil];
 		}
+		encodingPhase = "end_encoder";
 		encoderEndAttempted = true;
 		encoder.endEncoding();
+		encodingPhase = "end_command_buffer";
 		commandBufferEndAttempted = true;
 		[commandBuffer endCommandBuffer];
 		commandBufferEnded = true;
+		state->recordEncodingTiming(encodingStartedAt);
 	} @catch (NSException* exception) {
+		state->recordEncodingTiming(encodingStartedAt);
 		bool closedForReplay = !commandBufferBeginAttempted;
 		NSException* cleanupException = nil;
 		if (commandBufferBegun && !encoderEndAttempted && !commandBufferEndAttempted) {
@@ -2005,6 +4046,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			[commandBuffer release];
 			[allocator release];
 			*handled = true;
+			finishAttemptTelemetry();
 			finish();
 			return VK_ERROR_DEVICE_LOST;
 		}
@@ -2014,6 +4056,13 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[residencySet release];
 		[commandBuffer release];
 		[allocator release];
+		string exceptionSummary;
+		if (state->recordReplayableException(encodingPhase, exception, &exceptionSummary)) {
+			_queue->reportMessage(
+				MVK_CONFIG_LOG_LEVEL_INFO,
+				"Metal 4 replayable encoding exception: %s.",
+				exceptionSummary.c_str());
+		}
 		recordFallback(MVKMetal4FallbackReason::EncodingReplayableException);
 		return VK_SUCCESS;
 	}
@@ -2036,6 +4085,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		_queue,
 		state,
 		allocations,
+		encoder.getCompletedQueries(),
 		allocatorIndex,
 		_submissionSequence,
 		startTime);
@@ -2049,6 +4099,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	bool commitAttempted = false;
 	bool queueSideEffectsStarted = false;
 	VkResult result = getConfigurationResult();
+	uint64_t commitStartedAt = state->startTiming();
 	@try {
 		if (_submissionSequence > 1) {
 			queueSideEffectsStarted = true;
@@ -2066,6 +4117,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		[commandQueue commit:commandBuffers count:1 options:options];
 		endMetal4CommandBuffers(true);
 		claimedCommandBuffers = false;
+		encoder.publishCommittedState();
 		encoder.publishCommittedCounters();
 		state->recordRealSubmission();
 		if (encoder.hasRenderWork()) { state->recordRenderSubmission(); }
@@ -2080,7 +4132,9 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 							  (unsigned long long)_submissionSequence,
 							  (unsigned long long)state->attemptedSubmissionCount.load(memory_order_relaxed));
 		}
+		state->recordCommitTiming(commitStartedAt);
 	} @catch (NSException* exception) {
+		state->recordCommitTiming(commitStartedAt);
 		if (!queueSideEffectsStarted && !commitAttempted) {
 			if (claimedCommandBuffers) {
 				endMetal4CommandBuffers(false);
@@ -2126,6 +4180,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			[commandBuffer release];
 			[allocator release];
 			*handled = true;
+			finishAttemptTelemetry();
 			finish();
 			return VK_ERROR_DEVICE_LOST;
 		}
@@ -2147,6 +4202,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 		// commit feedback is the only safe release boundary.
 	}
 
+	finishAttemptTelemetry();
 	[orderingEvent release];
 	[options release];
 	[residencySet release];
@@ -2382,9 +4438,15 @@ void MVKQueueFullCommandBufferSubmission<N>::submitCommandBuffers() {
 
 
 template <size_t N>
-bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers() const {
+bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers(
+	const char** firstUnsupportedCommand) const {
+	if (firstUnsupportedCommand) { *firstUnsupportedCommand = nullptr; }
 	for (const auto& cbInfo : _cmdBuffers) {
-		if (!cbInfo.commandBuffer || !cbInfo.commandBuffer->supportsMetal4Encoding()) { return false; }
+		if (!cbInfo.commandBuffer) {
+			if (firstUnsupportedCommand) { *firstUnsupportedCommand = "null_command_buffer"; }
+			return false;
+		}
+		if (!cbInfo.commandBuffer->supportsMetal4Encoding(firstUnsupportedCommand)) { return false; }
 	}
 	return true;
 }
@@ -2392,6 +4454,7 @@ bool MVKQueueFullCommandBufferSubmission<N>::supportsMetal4CommandBuffers() cons
 template <size_t N>
 bool MVKQueueFullCommandBufferSubmission<N>::prepareMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) {
 	for (auto& cbInfo : _cmdBuffers) {
+		encoder->resetPrepareState();
 		if (!cbInfo.commandBuffer->prepareMetal4Encoding(encoder)) { return false; }
 	}
 	return true;

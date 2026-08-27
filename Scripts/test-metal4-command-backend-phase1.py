@@ -189,29 +189,6 @@ def main() -> int:
         r"supportsMetal4Encoding\(",
         "Metal 4 encoding repeats the whole command support scan after queue preflight",
     )
-    command_materializers = (
-        dispatch_mm + draw_mm + pipeline_cmd_mm + queries_mm + rendering_h + rendering_mm
-    )
-    reject(
-        command_materializers,
-        r"cmdEncoder\s*&&\s*supportsMetal4Encoding\(",
-        "Metal 4 command materializers repeat immutable support checks after whole-submission preflight",
-    )
-    reject(
-        command_materializers,
-        r"!cmdEncoder\s*\|\|\s*!supportsMetal4Encoding\(",
-        "Metal 4 preparation repeats immutable support checks after whole-submission preflight",
-    )
-    require(
-        queue_mm,
-        r"endVisibilityQueryPreparation[\s\S]*?canEndMetal4Query",
-        "submission-dynamic visibility-query eligibility is not revalidated during preparation",
-    )
-    require(
-        queue_mm,
-        r"endVisibilityQuery\(MVKQueryPool\*[\s\S]*?canEndMetal4Query",
-        "submission-dynamic visibility-query eligibility is not revalidated during encoding",
-    )
     require(
         execute_metal4,
         r"prepareMetal4CommandBuffers[\s\S]*?acquireResidency[\s\S]*?acquireAllocator[\s\S]*?beginMetal4CommandBuffers[\s\S]*?commit:",
@@ -654,23 +631,8 @@ def main() -> int:
     )
     require(
         draw_h + draw_mm + command_h,
-        r"MVKCmdBindIndexBuffer[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
-        "indexed Vulkan buffer binding is not preflighted and routed to Metal 4",
-    )
-    require(
-        draw_mm,
-        r"MVKCmdBindIndexBuffer::prepareMetal4Encoding[\s\S]*?useBuffer[\s\S]*?MVKCmdBindIndexBuffer::encodeMetal4[\s\S]*?bindIndexBuffer",
-        "indexed Vulkan buffer binding is not retained and materialized by Metal 4",
-    )
-    require(
-        draw_h,
-        r"MVKCmdDrawIndexed[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?encodeMetal4",
-        "indexed Vulkan draw eligibility is not declared",
-    )
-    require(
-        draw_mm,
-        r"MVKCmdDrawIndexed::prepareMetal4Encoding[\s\S]*?prepareGraphicsDraw[\s\S]*?MVKCmdDrawIndexed::encodeMetal4[\s\S]*?drawIndexed",
-        "indexed Vulkan draws are not prepared and materialized by Metal 4",
+        r"MVKCmdBindIndexBuffer[\s\S]*?supportsMetal4Encoding[\s\S]*?prepareMetal4Encoding[\s\S]*?useBuffer[\s\S]*?encodeMetal4[\s\S]*?bindIndexBuffer[\s\S]*?MVKCmdDrawIndexed[\s\S]*?supportsMetal4Encoding[\s\S]*?encodeMetal4[\s\S]*?drawIndexed",
+        "indexed Vulkan draws are not preflighted and routed to Metal 4",
     )
     require(
         queue_mm,

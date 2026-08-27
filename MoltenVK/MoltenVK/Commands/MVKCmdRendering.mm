@@ -520,7 +520,7 @@ void MVKCmdSetViewport<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 template <size_t N>
 bool MVKCmdSetViewport<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->setViewports(
 			_firstViewport, static_cast<uint32_t>(_viewports.size()), _viewports.data());
 }
@@ -558,7 +558,7 @@ void MVKCmdSetScissor<N>::encode(MVKCommandEncoder* cmdEncoder) {
 
 template <size_t N>
 bool MVKCmdSetScissor<N>::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->setScissors(
 			_firstScissor, static_cast<uint32_t>(_scissors.size()), _scissors.data());
 }

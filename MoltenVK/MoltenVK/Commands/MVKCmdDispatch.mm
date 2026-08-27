@@ -57,11 +57,11 @@ void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 bool MVKCmdDispatch::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && cmdEncoder->prepareComputeDispatch();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareComputeDispatch();
 }
 
 bool MVKCmdDispatch::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->dispatchThreadgroups(_groupCountX, _groupCountY, _groupCountZ);
 }
 

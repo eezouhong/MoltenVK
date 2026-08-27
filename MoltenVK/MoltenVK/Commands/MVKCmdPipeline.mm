@@ -403,12 +403,12 @@ const char* MVKCmdBindGraphicsPipeline::getMetal4UnsupportedReason() const {
 
 bool MVKCmdBindGraphicsPipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
-	return cmdEncoder && cmdEncoder->useGraphicsPipeline(pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useGraphicsPipeline(pipeline);
 }
 
 bool MVKCmdBindGraphicsPipeline::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
 	auto* pipeline = static_cast<MVKGraphicsPipeline*>(_pipeline);
-	return cmdEncoder && cmdEncoder->bindGraphicsPipeline(pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->bindGraphicsPipeline(pipeline);
 }
 
 bool MVKCmdBindGraphicsPipeline::isTessellationPipeline() {
@@ -430,12 +430,12 @@ bool MVKCmdBindComputePipeline::supportsMetal4Encoding() const {
 
 bool MVKCmdBindComputePipeline::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	auto* pipeline = static_cast<MVKComputePipeline*>(_pipeline);
-	return cmdEncoder && cmdEncoder->useComputePipeline(pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useComputePipeline(pipeline);
 }
 
 bool MVKCmdBindComputePipeline::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
 	auto* pipeline = static_cast<MVKComputePipeline*>(_pipeline);
-	return cmdEncoder && cmdEncoder->bindComputePipeline(pipeline);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->bindComputePipeline(pipeline);
 }
 
 
@@ -494,7 +494,7 @@ bool MVKCmdBindDescriptorSetsStatic<N>::supportsMetal4Encoding() const {
 template <size_t N>
 bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder) { return false; }
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
 	for (size_t setOffset = 0; setOffset < _descriptorSets.size(); setOffset++) {
 		if (!cmdEncoder->useDescriptorSet(
 				_pipelineBindPoint,
@@ -509,7 +509,7 @@ bool MVKCmdBindDescriptorSetsStatic<N>::prepareMetal4Encoding(
 template <size_t N>
 bool MVKCmdBindDescriptorSetsStatic<N>::encodeMetal4(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->bindDescriptorSets(_pipelineBindPoint,
 									  _pipelineLayout,
 									  _firstSet,

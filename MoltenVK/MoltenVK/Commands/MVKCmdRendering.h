@@ -304,7 +304,7 @@ public:
 			_viewports.size() <= kMVKMaxViewportScissorCount;
 	}
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
-		return cmdEncoder != nullptr;
+		return cmdEncoder && supportsMetal4Encoding();
 	}
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 
@@ -342,7 +342,7 @@ public:
 			_scissors.size() <= kMVKMaxViewportScissorCount;
 	}
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) override {
-		return cmdEncoder != nullptr;
+		return cmdEncoder && supportsMetal4Encoding();
 	}
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) override;
 

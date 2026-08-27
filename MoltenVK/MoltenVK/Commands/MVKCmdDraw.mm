@@ -72,7 +72,7 @@ bool MVKCmdBindVertexBuffers<N>::supportsMetal4Encoding() const {
 template <size_t N>
 bool MVKCmdBindVertexBuffers<N>::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder) { return false; }
+	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
 	for (MVKBuffer* buffer : _buffers) {
 		if (!cmdEncoder->useBuffer(buffer)) { return false; }
 	}
@@ -82,7 +82,7 @@ bool MVKCmdBindVertexBuffers<N>::prepareMetal4Encoding(
 template <size_t N>
 bool MVKCmdBindVertexBuffers<N>::encodeMetal4(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->bindVertexBuffers(_firstBinding,
 									  static_cast<uint32_t>(_bindings.size()),
 									  _bindings.data());
@@ -157,12 +157,12 @@ bool MVKCmdBindIndexBuffer::supportsMetal4Encoding() const {
 
 bool MVKCmdBindIndexBuffer::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && cmdEncoder->useBuffer(_buffer);
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useBuffer(_buffer);
 }
 
 bool MVKCmdBindIndexBuffer::encodeMetal4(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->bindIndexBuffer(_buffer, _bufferOffset, _bufferSize, _indexType);
 }
 
@@ -407,11 +407,11 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
 
 bool MVKCmdDraw::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && cmdEncoder->prepareGraphicsDraw();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
 }
 
 bool MVKCmdDraw::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->draw(_firstVertex, _vertexCount, _firstInstance, _instanceCount);
 }
 
@@ -445,12 +445,12 @@ VkResult MVKCmdDrawIndexed::setContent(MVKCommandBuffer* cmdBuff,
 
 bool MVKCmdDrawIndexed::prepareMetal4Encoding(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && cmdEncoder->prepareGraphicsDraw();
+	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->prepareGraphicsDraw();
 }
 
 bool MVKCmdDrawIndexed::encodeMetal4(
 	MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder &&
+	return cmdEncoder && supportsMetal4Encoding() &&
 		cmdEncoder->drawIndexed(_firstIndex,
 							_indexCount,
 							_vertexOffset,

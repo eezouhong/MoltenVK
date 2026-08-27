@@ -1106,6 +1106,16 @@ def main() -> int:
         r"Metal 4 command backend summary: .*fallbacks=0, failures=0",
         "controlled Metal 4 E2E does not require zero fallbacks and failures",
     )
+    require(
+        runner,
+        r"Could not create the Metal 4 command queue[\s\S]*?Device does not support Metal 4[\s\S]*?METAL4_BACKEND_E2E_SKIPPED_UNSUPPORTED_DEVICE",
+        "hosted runners without public Metal 4 factories are not reported as an explicit capability skip",
+    )
+    require(
+        runner,
+        r"METAL4_BACKEND_E2E_SKIPPED_UNSUPPORTED_DEVICE[\s\S]*?exit 0",
+        "the explicit unsupported-device capability branch does not exit cleanly",
+    )
     reject(runner, r"MVKCmdClearSingleAttachment1:clear_attachments_active_query", "controlled Metal 4 E2E still expects active-query clear fallback")
     require(runner, r"unsupported_commands=none", "controlled Metal 4 E2E permits unsupported commands")
 

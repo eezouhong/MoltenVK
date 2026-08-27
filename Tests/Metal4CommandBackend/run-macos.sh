@@ -131,6 +131,19 @@ MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
   >"${BUILD_DIR}/metal4.log" 2>&1
 
+if ! grep -q 'Metal 4 Vulkan transfer backend ready' "${BUILD_DIR}/metal4.log"; then
+  if grep -Eq 'Could not create the Metal 4 command queue.*Device does not support Metal 4' "${BUILD_DIR}/metal4.log"; then
+    grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4.log"
+    echo 'METAL4_BACKEND_E2E_SKIPPED_UNSUPPORTED_DEVICE'
+    cat "${BUILD_DIR}/legacy.log"
+    cat "${BUILD_DIR}/metal4.log"
+    exit 0
+  fi
+
+  echo 'Metal 4 command backend did not become ready for an unexpected reason' >&2
+  exit 1
+fi
+
 grep -q 'METAL4_PHASE1C_E2E_PASS' "${BUILD_DIR}/metal4.log"
 grep -q 'TIMELINE_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'ALLOCATOR_REUSE_BURST_OK' "${BUILD_DIR}/metal4.log"

@@ -194,6 +194,32 @@ def main() -> int:
         r"prepareMetal4CommandBuffers[\s\S]*?acquireResidency[\s\S]*?acquireAllocator[\s\S]*?beginMetal4CommandBuffers[\s\S]*?commit:",
         "resource/allocator/command claims are not ordered before commit",
     )
+    acquire_residency = function_body(
+        queue_mm,
+        "bool acquireResidency(const vector<id<MTLAllocation>>& allocations)",
+        "void releaseResidency(const vector<id<MTLAllocation>>& allocations)",
+    )
+    release_residency = function_body(
+        queue_mm,
+        "void releaseResidency(const vector<id<MTLAllocation>>& allocations)",
+        "bool markProbeStatus(NSError* error, NSString* fallbackReason)",
+    )
+    reject(
+        acquire_residency + release_residency,
+        r"unordered_set\s*<\s*uintptr_t\s*>\s+seen",
+        "residency acquire/release still rebuild per-submission allocation dedupe sets",
+    )
+    require(
+        queue_mm,
+        r"bool\s+useAllocation\(id<MTLAllocation>\s+allocation\)[\s\S]*?"
+        r"_allocationKeys\.insert\(\(uintptr_t\)allocation\)[\s\S]*?"
+        r"_allocations\.push_back\(allocation\)",
+        "preparation encoder does not produce one unique allocation list",
+    )
+    if queue_mm.count("_allocations.push_back") != 1:
+        raise AssertionError(
+            "Metal 4 preparation bypasses the unique allocation insertion helper"
+        )
     require(
         execute_metal4,
         r"@catch[\s\S]*?endMetal4CommandBuffers\(false\)[\s\S]*?return\s+VK_SUCCESS",

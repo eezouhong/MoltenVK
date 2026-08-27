@@ -345,12 +345,10 @@ struct MVKMetal4CommandQueueState {
 		lock_guard<mutex> guard(lock);
 		if (shuttingDown.load(memory_order_acquire)) { return false; }
 
-		unordered_set<uintptr_t> seen;
 		bool changed = false;
 		for (id<MTLAllocation> allocation : allocations) {
 			if (!allocation) { return false; }
 			uintptr_t key = (uintptr_t)allocation;
-			if (!seen.insert(key).second) { continue; }
 			auto it = residentAllocations.find(key);
 			if (it == residentAllocations.end()) {
 				[residencySet addAllocation:allocation];
@@ -366,11 +364,9 @@ struct MVKMetal4CommandQueueState {
 
 	void releaseResidency(const vector<id<MTLAllocation>>& allocations) {
 		lock_guard<mutex> guard(lock);
-		unordered_set<uintptr_t> seen;
 		bool changed = false;
 		for (id<MTLAllocation> allocation : allocations) {
 			uintptr_t key = (uintptr_t)allocation;
-			if (!seen.insert(key).second) { continue; }
 			auto it = residentAllocations.find(key);
 			if (it == residentAllocations.end()) { continue; }
 			if (it->second.inFlightCount > 0) { it->second.inFlightCount--; }
@@ -746,7 +742,7 @@ public:
 		id<MTLBuffer> mtlBuffer = buffer->getMTLBuffer();
 		if (!mtlBuffer) { return false; }
 		_buffers.emplace(buffer, BufferBinding{[mtlBuffer retain], buffer->getMTLBufferOffset()});
-		_allocations.push_back((id<MTLAllocation>)mtlBuffer);
+		useAllocation((id<MTLAllocation>)mtlBuffer);
 		return true;
 	}
 
@@ -762,7 +758,7 @@ public:
 				return false;
 			}
 			binding.textures.push_back([texture retain]);
-			_allocations.push_back((id<MTLAllocation>)texture);
+			useAllocation((id<MTLAllocation>)texture);
 		}
 		_images.emplace(image, std::move(binding));
 		return true;
@@ -791,7 +787,7 @@ public:
 		binding.height = texture.height;
 		[descriptor release];
 		_imageViews.emplace(imageView, binding);
-		_allocations.push_back((id<MTLAllocation>)texture);
+		useAllocation((id<MTLAllocation>)texture);
 		return true;
 	}
 
@@ -804,9 +800,9 @@ public:
 			queryPool->getMetal4ResultMTLBuffer(0, 1, resultOffset);
 		_queryPools.emplace(queryPool, QueryPoolBinding{
 			[resetBuffer retain], [resultBuffer retain]});
-		if (resetBuffer) { _allocations.push_back((id<MTLAllocation>)resetBuffer); }
+		if (resetBuffer) { useAllocation((id<MTLAllocation>)resetBuffer); }
 		if (resultBuffer && resultBuffer != resetBuffer) {
-			_allocations.push_back((id<MTLAllocation>)resultBuffer);
+			useAllocation((id<MTLAllocation>)resultBuffer);
 		}
 		return true;
 	}
@@ -893,7 +889,7 @@ public:
 		[_visibilityResultBuffer setLabel:@"Metal 4 Visibility Query Scratch Buffer"];
 		mvkClear(static_cast<char*>(_visibilityResultBuffer.contents),
 				 _visibilityResultBufferLength);
-		_allocations.push_back((id<MTLAllocation>)_visibilityResultBuffer);
+		useAllocation((id<MTLAllocation>)_visibilityResultBuffer);
 		return true;
 	}
 
@@ -907,7 +903,7 @@ public:
 														MTLResourceCPUCacheModeWriteCombined];
 		if (!buffer) { return false; }
 		_updateData.emplace(data, UpdateDataBinding{buffer, size});
-		_allocations.push_back((id<MTLAllocation>)buffer);
+		useAllocation((id<MTLAllocation>)buffer);
 		return true;
 	}
 
@@ -921,7 +917,7 @@ public:
 		id<MTLComputePipelineState> pipelineState = pipeline->getPipelineState();
 		if (!pipelineState) { return false; }
 		_computePipelines.emplace(pipeline, [pipelineState retain]);
-		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		useAllocation((id<MTLAllocation>)pipelineState);
 		return true;
 	}
 
@@ -951,7 +947,7 @@ public:
 		binding.depthStencilStates.push_back(
 			DepthStencilStateBinding{compareMask, writeMask, depthStencilState});
 		_graphicsPipelines.emplace(pipeline, std::move(binding));
-		_allocations.push_back((id<MTLAllocation>)pipelineState);
+		useAllocation((id<MTLAllocation>)pipelineState);
 		return true;
 	}
 
@@ -2140,9 +2136,9 @@ public:
 				[binding.vertices release];
 				return false;
 			}
-			_allocations.push_back((id<MTLAllocation>)binding.pipelineState);
-			_allocations.push_back((id<MTLAllocation>)binding.clearColors);
-			_allocations.push_back((id<MTLAllocation>)binding.vertices);
+			useAllocation((id<MTLAllocation>)binding.pipelineState);
+			useAllocation((id<MTLAllocation>)binding.clearColors);
+			useAllocation((id<MTLAllocation>)binding.vertices);
 		}
 		_clearAttachments.emplace(info.commandKey, std::move(binding));
 		return true;
@@ -2451,12 +2447,20 @@ private:
 		return _argumentTable != nil;
 	}
 
+	bool useAllocation(id<MTLAllocation> allocation) {
+		if (!allocation) { return false; }
+		if (_allocationKeys.insert((uintptr_t)allocation).second) {
+			_allocations.push_back(allocation);
+		}
+		return true;
+	}
+
 	bool retainDescriptorAllocation(id<MTLAllocation> allocation) {
 		if (!allocation) { return true; }
 		if (_descriptorAllocationSet.insert((const void*)allocation).second) {
 			[allocation retain];
 			_descriptorAllocations.push_back(allocation);
-			_allocations.push_back(allocation);
+			useAllocation(allocation);
 		}
 		return true;
 	}
@@ -2801,6 +2805,7 @@ private:
 	vector<MVKPipelineBarrier> _pendingImageBarriers;
 	vector<PendingQueryReset> _pendingQueryResets;
 	vector<MVKMetal4CompletedQuery> _completedQueries;
+	unordered_set<uintptr_t> _allocationKeys;
 	vector<id<MTLAllocation>> _allocations;
 	MVKDevice* _device = nullptr;
 	MVKPixelFormats* _pixelFormats = nullptr;

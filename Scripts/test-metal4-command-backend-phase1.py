@@ -806,6 +806,11 @@ def main() -> int:
         "command telemetry is not emitted once immediately and then at a bounded interval",
     )
     require(
+        queue_mm,
+        r"kMetal4CommandTelemetryInterval\s*=\s*4096",
+        "command telemetry interval is too noisy for high-submit-rate games",
+    )
+    require(
         command_h + command_buffer_mm + queue_mm,
         r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
         "replayable materialization failures do not identify the concrete Vulkan command",

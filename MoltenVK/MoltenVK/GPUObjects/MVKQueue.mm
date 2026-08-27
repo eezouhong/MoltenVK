@@ -58,7 +58,7 @@ static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
 static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
 static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
 static constexpr size_t kMetal4UnsupportedCommandCapacity = 64;
-static constexpr uint64_t kMetal4CommandTelemetryInterval = 256;
+static constexpr uint64_t kMetal4CommandTelemetryInterval = 4096;
 static_assert(kMVKMetal4MaxColorAttachmentCount == kMVKMaxColorAttachmentCount,
 			  "Metal 4 clear attachment transport must match MoltenVK render limits");
 

@@ -51,13 +51,37 @@ using namespace std;
 
 static constexpr uint64_t kCommandSubmissionTelemetryInterval = 4096;
 
+enum MVKLegacySubmissionStage : uint32_t {
+	kMVKLegacySubmissionStageWait = 0,
+	kMVKLegacySubmissionStageEncode,
+	kMVKLegacySubmissionStageSignal,
+	kMVKLegacySubmissionStageCommit,
+};
+
 struct MVKCommandSubmissionTelemetry {
+	struct TimingCounter {
+		atomic<uint64_t> totalNs = 0;
+		atomic<uint64_t> maxNs = 0;
+
+		void record(uint64_t durationNs) {
+			totalNs.fetch_add(durationNs, memory_order_relaxed);
+			uint64_t previousMax = maxNs.load(memory_order_relaxed);
+			while (durationNs > previousMax &&
+				   !maxNs.compare_exchange_weak(
+					   previousMax, durationNs, memory_order_relaxed, memory_order_relaxed)) {}
+		}
+	};
+
 	struct Counter {
 		atomic<uint64_t> submissions = 0;
 		atomic<uint64_t> commandBuffers = 0;
 		atomic<uint64_t> commands = 0;
 		atomic<uint64_t> precommitTotalNs = 0;
 		atomic<uint64_t> precommitMaxNs = 0;
+		TimingCounter waitTiming;
+		TimingCounter encodeTiming;
+		TimingCounter signalTiming;
+		TimingCounter commitTiming;
 	};
 
 	Counter legacy;
@@ -80,6 +104,16 @@ struct MVKCommandSubmissionTelemetry {
 			   !counter.precommitMaxNs.compare_exchange_weak(
 				   previousMax, precommitNs, memory_order_relaxed, memory_order_relaxed)) {}
 		return counter.submissions.fetch_add(1, memory_order_relaxed) + 1;
+	}
+
+	void recordLegacyStage(uint32_t stage, uint64_t durationNs) {
+		switch (stage) {
+			case kMVKLegacySubmissionStageWait: legacy.waitTiming.record(durationNs); break;
+			case kMVKLegacySubmissionStageEncode: legacy.encodeTiming.record(durationNs); break;
+			case kMVKLegacySubmissionStageSignal: legacy.signalTiming.record(durationNs); break;
+			case kMVKLegacySubmissionStageCommit: legacy.commitTiming.record(durationNs); break;
+			default: break;
+		}
 	}
 };
 
@@ -213,11 +247,28 @@ struct MVKMetal4CommandQueueState {
 	atomic<uint64_t> queryResetCount = 0;
 	atomic<uint64_t> queryCopyCount = 0;
 	atomic<uint64_t> visibilityQueryCount = 0;
+	atomic<uint64_t> preparedAllocationCount = 0;
+	atomic<uint64_t> preparedAllocationMax = 0;
+	atomic<uint64_t> allocationUseCount = 0;
+	atomic<uint64_t> allocationUniqueCount = 0;
+	atomic<uint64_t> descriptorBindingCollectionCount = 0;
+	atomic<uint64_t> descriptorResourceCount = 0;
+	atomic<uint64_t> depthStencilCreationCount = 0;
+	atomic<uint64_t> argumentTableCreationCount = 0;
+	atomic<uint64_t> residencyNewAllocationCount = 0;
+	atomic<uint64_t> residencyReusedAllocationCount = 0;
+	atomic<uint64_t> residencyCommitCount = 0;
 	bool telemetryEnabled = false;
 	TimingCounter attemptTiming;
 	TimingCounter supportCheckTiming;
 	TimingCounter preparationTiming;
+	TimingCounter commandPreparationTiming;
+	TimingCounter finalizePreparationTiming;
+	TimingCounter descriptorCollectionTiming;
+	TimingCounter depthStencilCreationTiming;
+	TimingCounter argumentTableCreationTiming;
 	TimingCounter residencyTiming;
+	TimingCounter residencyCommitTiming;
 	TimingCounter allocatorTiming;
 	TimingCounter commandObjectTiming;
 	TimingCounter encodingTiming;
@@ -380,6 +431,8 @@ struct MVKMetal4CommandQueueState {
 		if (shuttingDown.load(memory_order_acquire)) { return false; }
 
 		bool changed = false;
+		uint64_t newAllocationCount = 0;
+		uint64_t reusedAllocationCount = 0;
 		for (id<MTLAllocation> allocation : allocations) {
 			if (!allocation) { return false; }
 			uintptr_t key = (uintptr_t)allocation;
@@ -388,11 +441,21 @@ struct MVKMetal4CommandQueueState {
 				[residencySet addAllocation:allocation];
 				residentAllocations.emplace(key, ResidencyEntry{[allocation retain], 1});
 				changed = true;
+				newAllocationCount++;
 			} else {
 				it->second.inFlightCount++;
+				reusedAllocationCount++;
 			}
 		}
-		if (changed) { [residencySet commit]; }
+		if (telemetryEnabled) {
+			residencyNewAllocationCount.fetch_add(newAllocationCount, memory_order_relaxed);
+			residencyReusedAllocationCount.fetch_add(reusedAllocationCount, memory_order_relaxed);
+		}
+		if (changed) {
+			uint64_t commitStartedAt = startTiming();
+			[residencySet commit];
+			recordResidencyCommitTiming(commitStartedAt);
+		}
 		return true;
 	}
 
@@ -484,7 +547,40 @@ struct MVKMetal4CommandQueueState {
 	void recordAttemptTiming(uint64_t startedAt) { recordTiming(attemptTiming, startedAt); }
 	void recordSupportCheckTiming(uint64_t startedAt) { recordTiming(supportCheckTiming, startedAt); }
 	void recordPreparationTiming(uint64_t startedAt) { recordTiming(preparationTiming, startedAt); }
+	void recordCommandPreparationTiming(uint64_t startedAt) { recordTiming(commandPreparationTiming, startedAt); }
+	void recordFinalizePreparationTiming(uint64_t startedAt) { recordTiming(finalizePreparationTiming, startedAt); }
+	void recordDescriptorCollection(uint64_t startedAt, uint64_t resourceCount) {
+		recordTiming(descriptorCollectionTiming, startedAt);
+		if (!telemetryEnabled) { return; }
+		descriptorBindingCollectionCount.fetch_add(1, memory_order_relaxed);
+		descriptorResourceCount.fetch_add(resourceCount, memory_order_relaxed);
+	}
+	void recordDepthStencilCreation(uint64_t startedAt) {
+		recordTiming(depthStencilCreationTiming, startedAt);
+		if (telemetryEnabled) { depthStencilCreationCount.fetch_add(1, memory_order_relaxed); }
+	}
+	void recordArgumentTableCreation(uint64_t startedAt) {
+		recordTiming(argumentTableCreationTiming, startedAt);
+		if (telemetryEnabled) { argumentTableCreationCount.fetch_add(1, memory_order_relaxed); }
+	}
+	void recordPreparedAllocations(uint64_t count) {
+		if (!telemetryEnabled) { return; }
+		preparedAllocationCount.fetch_add(count, memory_order_relaxed);
+		uint64_t previousMax = preparedAllocationMax.load(memory_order_relaxed);
+		while (count > previousMax &&
+			   !preparedAllocationMax.compare_exchange_weak(
+				   previousMax, count, memory_order_relaxed, memory_order_relaxed)) {}
+	}
+	void recordAllocationUse(bool unique) {
+		if (!telemetryEnabled) { return; }
+		allocationUseCount.fetch_add(1, memory_order_relaxed);
+		if (unique) { allocationUniqueCount.fetch_add(1, memory_order_relaxed); }
+	}
 	void recordResidencyTiming(uint64_t startedAt) { recordTiming(residencyTiming, startedAt); }
+	void recordResidencyCommitTiming(uint64_t startedAt) {
+		recordTiming(residencyCommitTiming, startedAt);
+		if (telemetryEnabled) { residencyCommitCount.fetch_add(1, memory_order_relaxed); }
+	}
 	void recordAllocatorTiming(uint64_t startedAt) { recordTiming(allocatorTiming, startedAt); }
 	void recordCommandObjectTiming(uint64_t startedAt) { recordTiming(commandObjectTiming, startedAt); }
 	void recordEncodingTiming(uint64_t startedAt) { recordTiming(encodingTiming, startedAt); }
@@ -973,8 +1069,10 @@ public:
 			stateData.depthStencil.frontFaceStencilData.writeMask,
 			stateData.depthStencil.backFaceStencilData.writeMask,
 		};
+		uint64_t depthStencilStartedAt = _state->startTiming();
 		id<MTLDepthStencilState> depthStencilState =
 			newDepthStencilState(pipeline, compareMask, writeMask);
+		_state->recordDepthStencilCreation(depthStencilStartedAt);
 		if (!depthStencilState) { return false; }
 		GraphicsPipelineBinding binding;
 		binding.pipelineState = [pipelineState retain];
@@ -1064,7 +1162,9 @@ public:
 				return false;
 			}
 			resources.clear();
+			uint64_t collectionStartedAt = _state->startTiming();
 			descriptorSet->collectMetal4BindingResources(use.bindingIdx, resources);
+			_state->recordDescriptorCollection(collectionStartedAt, resources.size());
 			for (id<MTLResource> resource : resources) {
 				if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) {
 					return false;
@@ -1096,7 +1196,9 @@ public:
 					return false;
 				}
 				resources.clear();
+				uint64_t collectionStartedAt = _state->startTiming();
 				descriptorSet->collectMetal4BindingResources(use.bindingIdx, resources);
+				_state->recordDescriptorCollection(collectionStartedAt, resources.size());
 				for (id<MTLResource> resource : resources) {
 					if (!retainDescriptorAllocation((id<MTLAllocation>)resource)) {
 						return false;
@@ -2469,6 +2571,7 @@ private:
 	bool ensureArgumentTable() {
 		if (_argumentTable) { return true; }
 		if (!_mtlDevice) { return false; }
+		uint64_t startedAt = _state->startTiming();
 		MTL4ArgumentTableDescriptor* descriptor = [MTL4ArgumentTableDescriptor new];
 		descriptor.maxBufferBindCount = kMVKMaxBufferCount;
 		descriptor.maxTextureBindCount = kMVKMaxTextureCount;
@@ -2478,12 +2581,15 @@ private:
 		NSError* error = nil;
 		_argumentTable = [_mtlDevice newArgumentTableWithDescriptor:descriptor error:&error];
 		[descriptor release];
+		_state->recordArgumentTableCreation(startedAt);
 		return _argumentTable != nil;
 	}
 
 	bool useAllocation(id<MTLAllocation> allocation) {
 		if (!allocation) { return false; }
-		if (_allocationKeys.insert((uintptr_t)allocation).second) {
+		bool unique = _allocationKeys.insert((uintptr_t)allocation).second;
+		_state->recordAllocationUse(unique);
+		if (unique) {
 			_allocations.push_back(allocation);
 		}
 		return true;
@@ -3343,6 +3449,39 @@ void MVKQueue::reportCommandSubmissionTelemetry(const char* backend, const char*
 		(unsigned long long)(precommitTotalNs / submissions),
 		(unsigned long long)(commands ? precommitTotalNs / commands : 0),
 		phase);
+	if (backend && !strcmp(backend, "legacy")) {
+		auto reportStage = [&](const MVKCommandSubmissionTelemetry::TimingCounter& timing,
+							 uint64_t* totalNs,
+							 uint64_t* maxNs) {
+			*totalNs = timing.totalNs.load(memory_order_relaxed);
+			*maxNs = timing.maxNs.load(memory_order_relaxed);
+		};
+		uint64_t waitTotalNs = 0, waitMaxNs = 0;
+		uint64_t encodeTotalNs = 0, encodeMaxNs = 0;
+		uint64_t signalTotalNs = 0, signalMaxNs = 0;
+		uint64_t commitTotalNs = 0, commitMaxNs = 0;
+		reportStage(counter.waitTiming, &waitTotalNs, &waitMaxNs);
+		reportStage(counter.encodeTiming, &encodeTotalNs, &encodeMaxNs);
+		reportStage(counter.signalTiming, &signalTotalNs, &signalMaxNs);
+		reportStage(counter.commitTiming, &commitTotalNs, &commitMaxNs);
+		_device->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Legacy command backend timing: submissions=%llu, wait_total_ns=%llu, wait_avg_ns=%llu, wait_max_ns=%llu, encoding_total_ns=%llu, encoding_avg_ns=%llu, encoding_max_ns=%llu, signal_total_ns=%llu, signal_avg_ns=%llu, signal_max_ns=%llu, commit_total_ns=%llu, commit_avg_ns=%llu, commit_max_ns=%llu, phase=%s.",
+			(unsigned long long)submissions,
+			(unsigned long long)waitTotalNs,
+			(unsigned long long)(waitTotalNs / submissions),
+			(unsigned long long)waitMaxNs,
+			(unsigned long long)encodeTotalNs,
+			(unsigned long long)(encodeTotalNs / submissions),
+			(unsigned long long)encodeMaxNs,
+			(unsigned long long)signalTotalNs,
+			(unsigned long long)(signalTotalNs / submissions),
+			(unsigned long long)signalMaxNs,
+			(unsigned long long)commitTotalNs,
+			(unsigned long long)(commitTotalNs / submissions),
+			(unsigned long long)commitMaxNs,
+			phase);
+	}
 }
 
 void MVKQueue::initName() {
@@ -3826,22 +3965,35 @@ VkResult MVKQueueCommandBufferSubmission::execute() {
 	VkResult metal4Result = executeMetal4(&handledByMetal4);
 	if (handledByMetal4) { return metal4Result; }
 
+	uint64_t legacyStageStartedAt = _commandSubmissionStartedAt ? mvkGetRuntimeNanoseconds() : 0;
 	// If using encoded semaphore waiting, do so now.
 	for (auto& ws : _waitSemaphores) { ws.encodeWait(getActiveMTLCommandBuffer()); }
+	recordLegacySubmissionStageTiming(kMVKLegacySubmissionStageWait, legacyStageStartedAt);
 
 	// Wait time from an async vkQueueSubmit() call to starting submit and encoding of the command buffers
 	addPerformanceInterval(_queue->getPerformanceStats().queue.waitSubmitCommandBuffers, _creationTime);
 
 	// Submit each command buffer.
+	legacyStageStartedAt = _commandSubmissionStartedAt ? mvkGetRuntimeNanoseconds() : 0;
 	submitCommandBuffers();
+	recordLegacySubmissionStageTiming(kMVKLegacySubmissionStageEncode, legacyStageStartedAt);
 
 	// If using encoded semaphore signaling, do so now.
+	legacyStageStartedAt = _commandSubmissionStartedAt ? mvkGetRuntimeNanoseconds() : 0;
 	for (auto& ss : _signalSemaphores) { ss.encodeSignal(getActiveMTLCommandBuffer()); }
+	recordLegacySubmissionStageTiming(kMVKLegacySubmissionStageSignal, legacyStageStartedAt);
 	recordCommandSubmissionTiming("legacy");
 
 	// Commit the last MTLCommandBuffer.
 	// Nothing after this because callback might destroy this instance before this function ends.
 	return commitActiveMTLCommandBuffer(true);
+}
+
+void MVKQueueCommandBufferSubmission::recordLegacySubmissionStageTiming(uint32_t stage,
+												 uint64_t startedAt) {
+	if (!startedAt || !_queue->_commandSubmissionTelemetry) { return; }
+	_queue->_commandSubmissionTelemetry->recordLegacyStage(
+		stage, mvkGetRuntimeNanoseconds() - startedAt);
 }
 
 void MVKQueueCommandBufferSubmission::recordCommandSubmissionTiming(const char* backend) {
@@ -3947,6 +4099,33 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			(unsigned long long)state->encodingTiming.maxNs.load(memory_order_relaxed),
 			(unsigned long long)state->commitTiming.totalNs.load(memory_order_relaxed),
 			(unsigned long long)state->commitTiming.maxNs.load(memory_order_relaxed));
+		_queue->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command preparation detail: attempts=%llu, command_walk_total_ns=%llu, command_walk_max_ns=%llu, finalize_total_ns=%llu, finalize_max_ns=%llu, prepared_allocations=%llu, prepared_allocations_max=%llu, allocation_uses=%llu, unique_allocations=%llu, descriptor_collection_total_ns=%llu, descriptor_collection_max_ns=%llu, descriptor_binding_collections=%llu, descriptor_resources=%llu, depth_stencil_creation_total_ns=%llu, depth_stencil_creation_max_ns=%llu, depth_stencil_creations=%llu, argument_table_creation_total_ns=%llu, argument_table_creation_max_ns=%llu, argument_table_creations=%llu, residency_new_allocations=%llu, residency_reused_allocations=%llu, residency_commits=%llu, residency_commit_total_ns=%llu, residency_commit_max_ns=%llu.",
+			(unsigned long long)attempts,
+			(unsigned long long)state->commandPreparationTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->commandPreparationTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->finalizePreparationTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->finalizePreparationTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->preparedAllocationCount.load(memory_order_relaxed),
+			(unsigned long long)state->preparedAllocationMax.load(memory_order_relaxed),
+			(unsigned long long)state->allocationUseCount.load(memory_order_relaxed),
+			(unsigned long long)state->allocationUniqueCount.load(memory_order_relaxed),
+			(unsigned long long)state->descriptorCollectionTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->descriptorCollectionTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->descriptorBindingCollectionCount.load(memory_order_relaxed),
+			(unsigned long long)state->descriptorResourceCount.load(memory_order_relaxed),
+			(unsigned long long)state->depthStencilCreationTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->depthStencilCreationTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->depthStencilCreationCount.load(memory_order_relaxed),
+			(unsigned long long)state->argumentTableCreationTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->argumentTableCreationTiming.maxNs.load(memory_order_relaxed),
+			(unsigned long long)state->argumentTableCreationCount.load(memory_order_relaxed),
+			(unsigned long long)state->residencyNewAllocationCount.load(memory_order_relaxed),
+			(unsigned long long)state->residencyReusedAllocationCount.load(memory_order_relaxed),
+			(unsigned long long)state->residencyCommitCount.load(memory_order_relaxed),
+			(unsigned long long)state->residencyCommitTiming.totalNs.load(memory_order_relaxed),
+			(unsigned long long)state->residencyCommitTiming.maxNs.load(memory_order_relaxed));
 	};
 	auto finishAttemptTelemetry = [&]() {
 		if (attemptTimingRecorded) { return; }
@@ -3997,7 +4176,14 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	MVKMetal4TransferCommandEncoder encoder(
 		state, getDevice(), getMTLDevice(), getPixelFormats());
 	uint64_t preparationStartedAt = state->startTiming();
-	if (!prepareMetal4CommandBuffers(&encoder) || !encoder.finalizePreparation()) {
+	uint64_t commandPreparationStartedAt = state->startTiming();
+	bool commandPreparationSucceeded = prepareMetal4CommandBuffers(&encoder);
+	state->recordCommandPreparationTiming(commandPreparationStartedAt);
+	uint64_t finalizePreparationStartedAt = state->startTiming();
+	bool finalizePreparationSucceeded =
+		commandPreparationSucceeded && encoder.finalizePreparation();
+	state->recordFinalizePreparationTiming(finalizePreparationStartedAt);
+	if (!commandPreparationSucceeded || !finalizePreparationSucceeded) {
 		state->recordPreparationTiming(preparationStartedAt);
 		string preparationSummary;
 		if (state->recordPreparationFailure(
@@ -4013,6 +4199,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	state->recordPreparationTiming(preparationStartedAt);
 
 	const auto& allocations = encoder.getAllocations();
+	state->recordPreparedAllocations(allocations.size());
 	uint64_t residencyStartedAt = state->startTiming();
 	if (!state->acquireResidency(allocations)) {
 		state->recordResidencyTiming(residencyStartedAt);
@@ -4394,7 +4581,15 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 
 	// Retrieve the result before committing MTLCommandBuffer, because finish() will destroy this instance.
 	VkResult rslt = mtlCmdBuff ? getConfigurationResult() : VK_ERROR_OUT_OF_POOL_MEMORY;
+	auto commandSubmissionTelemetry = _queue->_commandSubmissionTelemetry;
+	uint64_t legacyCommitStartedAt =
+		(_commandSubmissionStartedAt && commandSubmissionTelemetry) ? mvkGetRuntimeNanoseconds() : 0;
 	[mtlCmdBuff commit];
+	if (legacyCommitStartedAt) {
+		commandSubmissionTelemetry->recordLegacyStage(
+			kMVKLegacySubmissionStageCommit,
+			mvkGetRuntimeNanoseconds() - legacyCommitStartedAt);
+	}
 	[mtlCmdBuff release];		// retained
 
 	// If we need to signal completion, but an error occurred and the MTLCommandBuffer

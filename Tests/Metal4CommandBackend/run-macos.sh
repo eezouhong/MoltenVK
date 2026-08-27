@@ -26,7 +26,7 @@ trap print_diagnostics EXIT
 
 # Current packages place the dylib inside MoltenVK.xcframework. Keep the lookup
 # independent of the XCFramework slice directory name and architecture spelling.
-DYLIB="$(find "${ROOT}/Package" -type f -name 'libMoltenVK.dylib' -print | head -n 1)"
+DYLIB="${MVK_TEST_DYLIB:-$(find "${ROOT}/Package" -type f -name 'libMoltenVK.dylib' -print | head -n 1)}"
 if [[ -z "${DYLIB}" ]]; then
   echo "libMoltenVK.dylib was not produced by the package build" >&2
   find "${ROOT}/Package" -maxdepth 6 -type f -print >&2 || true
@@ -122,6 +122,7 @@ grep -q 'RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'GRAPHICS_REBIND_AFTER_RENDER_OK' "${BUILD_DIR}/legacy.log"
 grep -q 'UPDATE_BUFFER_OK' "${BUILD_DIR}/legacy.log"
 grep -Eq 'Command submission CPU timing: backend=legacy, submissions=[1-9][0-9]*, command_buffers=[1-9][0-9]*, commands=[1-9][0-9]*, precommit_total_ns=[1-9][0-9]*' "${BUILD_DIR}/legacy.log"
+grep -Eq 'Legacy command backend timing: submissions=[1-9][0-9]*, wait_total_ns=[0-9]+, .*encoding_total_ns=[1-9][0-9]*, .*signal_total_ns=[0-9]+, .*commit_total_ns=[1-9][0-9]*' "${BUILD_DIR}/legacy.log"
 if grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/legacy.log"; then
   echo "Metal 4 marker appeared with the backend disabled" >&2
   exit 1

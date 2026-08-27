@@ -326,6 +326,7 @@ protected:
 	virtual uint64_t getCommandBufferCount() const { return 0; }
 	virtual uint64_t getRecordedCommandCount() const { return 0; }
 	void recordCommandSubmissionTiming(const char* backend);
+	void recordLegacySubmissionStageTiming(uint32_t stage, uint64_t startedAt);
 
 	MVKCommandEncodingContext _encodingContext;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _signalSemaphores;

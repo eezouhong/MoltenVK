@@ -844,6 +844,16 @@ def main() -> int:
         "encoding_replayable_exception",
         "command_buffer_not_ended",
         "precommit_replayable_exception",
+        "Metal 4 command preparation detail",
+        "command_walk_total_ns",
+        "finalize_total_ns",
+        "prepared_allocations",
+        "descriptor_collection_total_ns",
+        "depth_stencil_creation_total_ns",
+        "argument_table_creation_total_ns",
+        "residency_new_allocations",
+        "residency_reused_allocations",
+        "residency_commit_total_ns",
     ):
         require(queue_mm, re.escape(token), f"performance telemetry is missing: {token}")
     require(
@@ -882,12 +892,24 @@ def main() -> int:
         "precommit_max_ns=%llu",
         "precommit_avg_ns=%llu",
         "precommit_ns_per_command=%llu",
+        "Legacy command backend timing",
+        "wait_total_ns=%llu",
+        "encoding_total_ns=%llu",
+        "signal_total_ns=%llu",
+        "commit_total_ns=%llu",
     ):
         require(queue_mm, re.escape(token), f"cross-backend submission telemetry is missing: {token}")
     require(
         execute_submission,
         r'recordCommandSubmissionTiming\(\s*"legacy"[\s\S]*?commitActiveMTLCommandBuffer',
         "legacy submission CPU timing is not recorded before the final commit boundary",
+    )
+    require(
+        execute_submission,
+        r'recordLegacySubmissionStageTiming\(kMVKLegacySubmissionStageWait[\s\S]*?'
+        r'recordLegacySubmissionStageTiming\(kMVKLegacySubmissionStageEncode[\s\S]*?'
+        r'recordLegacySubmissionStageTiming\(kMVKLegacySubmissionStageSignal',
+        "legacy submission telemetry does not split semaphore and command encoding stages",
     )
     require(
         execute_metal4,

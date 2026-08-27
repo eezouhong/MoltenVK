@@ -206,6 +206,7 @@ grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BU
 grep -q 'Metal 4 command backend telemetry:' "${BUILD_DIR}/metal4.log"
 grep -Eq 'coverage_ppm=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'Metal 4 command backend timing: .*attempt_total_ns=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -Eq 'Metal 4 command preparation by type: attempts=[1-9][0-9]*, commands=.*count=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'Command submission CPU timing: backend=metal4, submissions=[1-9][0-9]*, command_buffers=[1-9][0-9]*, commands=[1-9][0-9]*, precommit_total_ns=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'image_copies=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'compute_dispatches=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"

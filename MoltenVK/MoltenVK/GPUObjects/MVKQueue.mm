@@ -171,6 +171,12 @@ struct MVKMetal4CompletedQuery {
 	uint32_t query = 0;
 };
 
+struct MVKMetal4PreparationCommandTiming {
+	uint64_t count = 0;
+	uint64_t totalNs = 0;
+	uint64_t maxNs = 0;
+};
+
 /**
  * Queue-independent ownership shared by MTL4 feedback and event callbacks.
  * The state owns the allocator arena, ordering event, and command-backend
@@ -211,10 +217,12 @@ struct MVKMetal4CommandQueueState {
 
 	mutex lock;
 	mutex unsupportedCommandLock;
+	mutex preparationCommandTimingLock;
 	condition_variable probeReady;
 	vector<AllocatorSlot> allocators;
 	size_t nextAllocatorIndex = 0;
 	unordered_map<uintptr_t, ResidencyEntry> residentAllocations;
+	unordered_map<string, MVKMetal4PreparationCommandTiming> preparationCommandTimings;
 	id<MTLResidencySet> residencySet = nil;
 	id<MTLSharedEvent> orderingEvent = nil;
 	MTLSharedEventListener* orderingListener = nil;
@@ -562,6 +570,48 @@ struct MVKMetal4CommandQueueState {
 	void recordArgumentTableCreation(uint64_t startedAt) {
 		recordTiming(argumentTableCreationTiming, startedAt);
 		if (telemetryEnabled) { argumentTableCreationCount.fetch_add(1, memory_order_relaxed); }
+	}
+	void mergePreparationCommandTimings(
+		const unordered_map<const char*, MVKMetal4PreparationCommandTiming>& timings) {
+		if (!telemetryEnabled || timings.empty()) { return; }
+		lock_guard<mutex> guard(preparationCommandTimingLock);
+		for (const auto& entry : timings) {
+			auto& aggregate = preparationCommandTimings[entry.first ?: "MVKCommand"];
+			aggregate.count += entry.second.count;
+			aggregate.totalNs += entry.second.totalNs;
+			aggregate.maxNs = max(aggregate.maxNs, entry.second.maxNs);
+		}
+	}
+	string preparationCommandTimingSummary() {
+		lock_guard<mutex> guard(preparationCommandTimingLock);
+		vector<pair<string, MVKMetal4PreparationCommandTiming>> entries(
+			preparationCommandTimings.begin(), preparationCommandTimings.end());
+		sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+			return left.second.totalNs > right.second.totalNs;
+		});
+		string summary;
+		uint64_t otherCount = 0;
+		uint64_t otherTotalNs = 0;
+		uint64_t otherMaxNs = 0;
+		for (size_t i = 0; i < entries.size(); i++) {
+			if (i >= 16) {
+				otherCount += entries[i].second.count;
+				otherTotalNs += entries[i].second.totalNs;
+				otherMaxNs = max(otherMaxNs, entries[i].second.maxNs);
+				continue;
+			}
+			if (!summary.empty()) { summary += ";"; }
+			summary += entries[i].first + "{count=" + to_string(entries[i].second.count) +
+				",total_ns=" + to_string(entries[i].second.totalNs) +
+				",max_ns=" + to_string(entries[i].second.maxNs) + "}";
+		}
+		if (otherCount) {
+			if (!summary.empty()) { summary += ";"; }
+			summary += "other{count=" + to_string(otherCount) +
+				",total_ns=" + to_string(otherTotalNs) +
+				",max_ns=" + to_string(otherMaxNs) + "}";
+		}
+		return summary.empty() ? "none" : summary;
 	}
 	void recordPreparedAllocations(uint64_t count) {
 		if (!telemetryEnabled) { return; }
@@ -1097,6 +1147,23 @@ public:
 		if (_preparationFailureSummary.empty()) {
 			_preparationFailureSummary = commandType ?: "MVKCommand";
 		}
+	}
+
+	bool isMetal4PreparationCommandTimingEnabled() const override {
+		return _state->telemetryEnabled;
+	}
+
+	void recordMetal4PreparationCommandTiming(const char* commandType,
+										 uint64_t durationNs) override {
+		auto& timing = _preparationCommandTimings[commandType ?: "MVKCommand"];
+		timing.count++;
+		timing.totalNs += durationNs;
+		timing.maxNs = max(timing.maxNs, durationNs);
+	}
+
+	void flushPreparationCommandTimings() {
+		_state->mergePreparationCommandTimings(_preparationCommandTimings);
+		_preparationCommandTimings.clear();
 	}
 
 	void recordMetal4EncodingFailure(const char* commandType) override {
@@ -2930,6 +2997,7 @@ private:
 	unordered_map<MVKComputePipeline*, id<MTLComputePipelineState>> _computePipelines;
 	unordered_map<MVKGraphicsPipeline*, GraphicsPipelineBinding> _graphicsPipelines;
 	unordered_map<const void*, ClearAttachmentsBinding> _clearAttachments;
+	unordered_map<const char*, MVKMetal4PreparationCommandTiming> _preparationCommandTimings;
 	array<BoundVertexBuffer, kMVKMaxBufferCount> _graphicsVertexBuffers = {};
 	BoundIndexBuffer _boundIndexBuffer = {};
 	array<BoundDescriptorSet, kMVKMaxDescriptorSetCount> _computeDescriptorSets = {};
@@ -4126,6 +4194,12 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			(unsigned long long)state->residencyCommitCount.load(memory_order_relaxed),
 			(unsigned long long)state->residencyCommitTiming.totalNs.load(memory_order_relaxed),
 			(unsigned long long)state->residencyCommitTiming.maxNs.load(memory_order_relaxed));
+		string preparationCommandSummary = state->preparationCommandTimingSummary();
+		_queue->reportMessage(
+			MVK_CONFIG_LOG_LEVEL_INFO,
+			"Metal 4 command preparation by type: attempts=%llu, commands=%s.",
+			(unsigned long long)attempts,
+			preparationCommandSummary.c_str());
 	};
 	auto finishAttemptTelemetry = [&]() {
 		if (attemptTimingRecorded) { return; }
@@ -4178,6 +4252,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 	uint64_t preparationStartedAt = state->startTiming();
 	uint64_t commandPreparationStartedAt = state->startTiming();
 	bool commandPreparationSucceeded = prepareMetal4CommandBuffers(&encoder);
+	encoder.flushPreparationCommandTimings();
 	state->recordCommandPreparationTiming(commandPreparationStartedAt);
 	uint64_t finalizePreparationStartedAt = state->startTiming();
 	bool finalizePreparationSucceeded =

@@ -337,8 +337,16 @@ bool MVKCommandBuffer::supportsMetal4Encoding(const char** firstUnsupportedComma
 
 bool MVKCommandBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
 	if (!cmdEncoder) { return false; }
+	bool timingEnabled = cmdEncoder->isMetal4PreparationCommandTimingEnabled();
 	for (MVKCommand* command = _head; command; command = command->_next) {
-		if (!command->prepareMetal4Encoding(cmdEncoder)) {
+		uint64_t startedAt = timingEnabled ? mvkGetRuntimeNanoseconds() : 0;
+		bool succeeded = command->prepareMetal4Encoding(cmdEncoder);
+		if (timingEnabled) {
+			cmdEncoder->recordMetal4PreparationCommandTiming(
+				command->getMetal4CommandTypeName(),
+				mvkGetRuntimeNanoseconds() - startedAt);
+		}
+		if (!succeeded) {
 			cmdEncoder->recordMetal4PreparationFailure(command->getMetal4CommandTypeName());
 			return false;
 		}

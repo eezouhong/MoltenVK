@@ -854,6 +854,8 @@ def main() -> int:
         "residency_new_allocations",
         "residency_reused_allocations",
         "residency_commit_total_ns",
+        "Metal 4 command preparation by type",
+        "preparationCommandTimingSummary",
     ):
         require(queue_mm, re.escape(token), f"performance telemetry is missing: {token}")
     require(

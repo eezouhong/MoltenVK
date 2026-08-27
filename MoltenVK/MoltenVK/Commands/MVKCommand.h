@@ -110,6 +110,10 @@ public:
 	/** Records the first command whose Metal 4 resource preflight failed. */
 	virtual void recordMetal4PreparationFailure(const char*) {}
 
+	/** Enables and records bounded per-command preparation diagnostics. */
+	virtual bool isMetal4PreparationCommandTimingEnabled() const { return false; }
+	virtual void recordMetal4PreparationCommandTiming(const char*, uint64_t) {}
+
 	/** Registers one immutable Metal 3 descriptor set at its Vulkan set index. */
 	virtual bool useDescriptorSet(VkPipelineBindPoint bindPoint,
 								 MVKDescriptorSet* descriptorSet,

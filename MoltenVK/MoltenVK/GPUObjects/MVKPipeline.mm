@@ -1115,14 +1115,16 @@ MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
 		uint32_t cachePolicy = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_CACHE_POLICY", 0.0) == 0.0
 			? 0u : 1u;
 		bool useAsyncTasks = mvkGetEnvVarNumber("MVK_CONFIG_METAL4_FLEXIBLE_ASYNC", 0.0) != 0.0;
-		// shouldMaximizeConcurrentCompilation controls the device-selected CPU
-		// compilation width. Do not impose a second MoltenVK-local cap here.
+		double configuredAsyncMax = mvkGetEnvVarNumber(
+			"MVK_CONFIG_METAL4_FLEXIBLE_ASYNC_MAX",
+			3.0);
+		size_t configuredAsyncTaskMax = static_cast<size_t>(
+			mvkClamp(configuredAsyncMax, 1.0, 3.0));
 		size_t deviceAsyncTaskMax = max<size_t>(
 			1,
 			static_cast<size_t>(mtlDevice.maximumConcurrentCompilationTaskCount));
-		size_t configuredAsyncTaskMax = deviceAsyncTaskMax;
 		size_t effectiveAsyncTaskMax = useAsyncTasks
-			? deviceAsyncTaskMax
+			? min(configuredAsyncTaskMax, deviceAsyncTaskMax)
 			: 1;
 			uint64_t configuredTimeoutNs = device->getMVKConfig().metalCompileTimeout;
 			uint64_t compilerTimeoutNs = configuredTimeoutNs >=
@@ -5165,14 +5167,26 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 														 MVKPipeline* pipeline,
 														 VkPipelineCreationFeedback* pShaderFeedback,
 														 uint64_t startTime) {
-	bool wasAdded = false;
+	bool cacheRepresentationChanged = false;
+	bool wasCacheHit = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(pContext, shaderModule, pipeline, &wasAdded, pShaderFeedback, startTime);
+	MVKShaderLibrary* shLib = slCache->getShaderLibrary(
+		pContext,
+		shaderModule,
+		pipeline,
+		&cacheRepresentationChanged,
+		&wasCacheHit,
+		pShaderFeedback,
+		startTime);
 	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
 		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
 	}
-	if (wasAdded) { markDirty(); }
-	else if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
+	if (cacheRepresentationChanged) { markDirty(); }
+	if (wasCacheHit && pShaderFeedback) {
+		mvkEnableFlags(
+			pShaderFeedback->flags,
+			VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+	}
 	return shLib;
 }
 
@@ -5221,11 +5235,40 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
-	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
-	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
-	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
+	bool next() { return (++_index < getEntryCount()); }
+	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() {
+		return isDeferred()
+			? getDeferredShaderConversionConfig()
+			: _pSLCache->_shaderLibraries[_index].first;
+	}
+	MVKCompressor<std::string>& getCompressedMSL() {
+		return isDeferred()
+			? getDeferredCompressedMSL()
+			: _pSLCache->_shaderLibraries[_index].second->getCompressedMSL();
+	}
+	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() {
+		return isDeferred()
+			? getDeferredShaderConversionResultInfo()
+			: _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo;
+	}
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
+
+	size_t getEntryCount() const {
+		return _pSLCache
+			? _pSLCache->_shaderLibraries.size() + _pSLCache->_deferredShaderLibraries.size()
+			: 0;
+	}
+	bool isDeferred() const { return _index >= _pSLCache->_shaderLibraries.size(); }
+	size_t getDeferredIndex() const { return _index - _pSLCache->_shaderLibraries.size(); }
+	SPIRVToMSLConversionConfiguration& getDeferredShaderConversionConfig() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].shaderConfig;
+	}
+	SPIRVToMSLConversionResultInfo& getDeferredShaderConversionResultInfo() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].resultInfo;
+	}
+	MVKCompressor<std::string>& getDeferredCompressedMSL() {
+		return _pSLCache->_deferredShaderLibraries[getDeferredIndex()].compressedMSL;
+	}
 
 	MVKShaderLibraryCache* _pSLCache;
 	size_t _count = 0;
@@ -5381,10 +5424,22 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					MVKCompressor<std::string> compressedMSL;
 					reader(compressedMSL);
 
-					// Add the shader library to the staging cache.
+					// Keep imported entries compressed until an exact Pipeline request
+					// needs the matching shader-module/config key. Generic MoltenVK use
+					// without the shared repository retains the legacy eager path.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
+					if (slCache->supportsDeferredShaderLibraryImport()) {
+						slCache->addDeferredShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					} else {
+						slCache->addShaderLibrary(
+							&shaderConversionConfig,
+							resultInfo,
+							compressedMSL);
+					}
 
 					break;
 				}

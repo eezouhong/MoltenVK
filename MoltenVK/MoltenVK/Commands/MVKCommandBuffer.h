@@ -127,7 +127,7 @@ public:
 	 */
 	bool supportsMetal4Encoding(const char** firstUnsupportedCommand = nullptr) const;
 
-	/** Resolves every Metal resource used by the retained command stream. */
+	/** Resolves every Metal resource after whole-submission Metal 4 support preflight. */
 	bool prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder);
 
 	/**
@@ -139,7 +139,7 @@ public:
 	/** Releases the host-side claim, preserving execution only after commit. */
 	void endMetal4Execution(bool previousWasExecuted, bool committed);
 
-	/** Materializes the previously preflighted command stream. */
+	/** Materializes the previously preflighted and prepared command stream. */
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder);
 
 	/** Returns the number of commands currently in this command buffer. */

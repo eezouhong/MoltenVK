@@ -169,6 +169,26 @@ def main() -> int:
         r"supportsMetal4Semaphores\(\)[\s\S]*?supportsMetal4CommandBuffers\([^)]*\)[\s\S]*?prepareMetal4CommandBuffers",
         "submission support is not classified before Metal 4 encoding",
     )
+    prepare_metal4 = function_body(
+        command_buffer_mm,
+        "bool MVKCommandBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder)",
+        "bool MVKCommandBuffer::beginMetal4Execution(bool* previousWasExecuted)",
+    )
+    encode_metal4 = function_body(
+        command_buffer_mm,
+        "bool MVKCommandBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder)",
+        "void MVKCommandBuffer::submit(",
+    )
+    reject(
+        prepare_metal4,
+        r"supportsMetal4Encoding\(",
+        "Metal 4 preparation repeats the whole command support scan after queue preflight",
+    )
+    reject(
+        encode_metal4,
+        r"supportsMetal4Encoding\(",
+        "Metal 4 encoding repeats the whole command support scan after queue preflight",
+    )
     require(
         execute_metal4,
         r"prepareMetal4CommandBuffers[\s\S]*?acquireResidency[\s\S]*?acquireAllocator[\s\S]*?beginMetal4CommandBuffers[\s\S]*?commit:",

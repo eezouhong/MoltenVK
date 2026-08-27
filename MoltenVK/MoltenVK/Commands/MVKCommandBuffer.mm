@@ -336,7 +336,7 @@ bool MVKCommandBuffer::supportsMetal4Encoding(const char** firstUnsupportedComma
 }
 
 bool MVKCommandBuffer::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	if (!cmdEncoder) { return false; }
 	for (MVKCommand* command = _head; command; command = command->_next) {
 		if (!command->prepareMetal4Encoding(cmdEncoder)) {
 			cmdEncoder->recordMetal4PreparationFailure(command->getMetal4CommandTypeName());
@@ -372,7 +372,7 @@ void MVKCommandBuffer::endMetal4Execution(bool previousWasExecuted, bool committ
 }
 
 bool MVKCommandBuffer::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	if (!cmdEncoder || !supportsMetal4Encoding()) { return false; }
+	if (!cmdEncoder) { return false; }
 	for (MVKCommand* command = _head; command; command = command->_next) {
 		if (!command->encodeMetal4(cmdEncoder)) {
 			cmdEncoder->recordMetal4EncodingFailure(command->getMetal4CommandTypeName());

@@ -49,6 +49,40 @@
 
 using namespace std;
 
+static constexpr uint64_t kCommandSubmissionTelemetryInterval = 4096;
+
+struct MVKCommandSubmissionTelemetry {
+	struct Counter {
+		atomic<uint64_t> submissions = 0;
+		atomic<uint64_t> commandBuffers = 0;
+		atomic<uint64_t> commands = 0;
+		atomic<uint64_t> precommitTotalNs = 0;
+		atomic<uint64_t> precommitMaxNs = 0;
+	};
+
+	Counter legacy;
+	Counter metal4;
+
+	Counter& counterFor(const char* backend) {
+		return backend && !strcmp(backend, "metal4") ? metal4 : legacy;
+	}
+
+	uint64_t record(const char* backend,
+					uint64_t commandBufferCount,
+					uint64_t commandCount,
+					uint64_t precommitNs) {
+		auto& counter = counterFor(backend);
+		counter.commandBuffers.fetch_add(commandBufferCount, memory_order_relaxed);
+		counter.commands.fetch_add(commandCount, memory_order_relaxed);
+		counter.precommitTotalNs.fetch_add(precommitNs, memory_order_relaxed);
+		uint64_t previousMax = counter.precommitMaxNs.load(memory_order_relaxed);
+		while (precommitNs > previousMax &&
+			   !counter.precommitMaxNs.compare_exchange_weak(
+				   previousMax, precommitNs, memory_order_relaxed, memory_order_relaxed)) {}
+		return counter.submissions.fetch_add(1, memory_order_relaxed) + 1;
+	}
+};
+
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 static constexpr uint32_t kMetal4CommandAllocatorDefaultCount = 4;
@@ -3278,11 +3312,37 @@ MVKQueue::MVKQueue(MVKDevice* device, MVKQueueFamily* queueFamily, uint32_t inde
 	_index = index;
 	_priority = priority;
 	_globalPriority = globalPriority;
+	if (mvkGetEnvVarNumber("MVK_CONFIG_COMMAND_SUBMISSION_TELEMETRY", 0.0) != 0.0) {
+		_commandSubmissionTelemetry = make_shared<MVKCommandSubmissionTelemetry>();
+	}
 
 	initName();
 	initExecQueue();
 	initMTLCommandQueue();
 	initMTL4CommandQueue();
+}
+
+void MVKQueue::reportCommandSubmissionTelemetry(const char* backend, const char* phase) {
+	if (!_commandSubmissionTelemetry) { return; }
+	auto& counter = _commandSubmissionTelemetry->counterFor(backend);
+	uint64_t submissions = counter.submissions.load(memory_order_relaxed);
+	if (!submissions) { return; }
+	uint64_t commandBuffers = counter.commandBuffers.load(memory_order_relaxed);
+	uint64_t commands = counter.commands.load(memory_order_relaxed);
+	uint64_t precommitTotalNs = counter.precommitTotalNs.load(memory_order_relaxed);
+	uint64_t precommitMaxNs = counter.precommitMaxNs.load(memory_order_relaxed);
+	_device->reportMessage(
+		MVK_CONFIG_LOG_LEVEL_INFO,
+		"Command submission CPU timing: backend=%s, submissions=%llu, command_buffers=%llu, commands=%llu, precommit_total_ns=%llu, precommit_max_ns=%llu, precommit_avg_ns=%llu, precommit_ns_per_command=%llu, phase=%s.",
+		backend,
+		(unsigned long long)submissions,
+		(unsigned long long)commandBuffers,
+		(unsigned long long)commands,
+		(unsigned long long)precommitTotalNs,
+		(unsigned long long)precommitMaxNs,
+		(unsigned long long)(precommitTotalNs / submissions),
+		(unsigned long long)(commands ? precommitTotalNs / commands : 0),
+		phase);
 }
 
 void MVKQueue::initName() {
@@ -3588,6 +3648,9 @@ MVKQueue::~MVKQueue() {
 	destroyExecQueue();
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
+	reportCommandSubmissionTelemetry("legacy", "summary");
+	reportCommandSubmissionTelemetry("metal4", "summary");
+	_commandSubmissionTelemetry.reset();
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (_metal4CommandState) {
 		string unsupportedCommandSummary = _metal4CommandState->unsupportedCommandSummary();
@@ -3754,6 +3817,9 @@ MVKQueueSubmission::~MVKQueueSubmission() {
 VkResult MVKQueueCommandBufferSubmission::execute() {
 
 	_queue->_submissionCaptureScope->beginScope();
+	if (_queue->_commandSubmissionTelemetry) {
+		_commandSubmissionStartedAt = mvkGetRuntimeNanoseconds();
+	}
 	_submissionSequence = _queue->reserveMetal4SubmissionSequence();
 
 	bool handledByMetal4 = false;
@@ -3771,10 +3837,26 @@ VkResult MVKQueueCommandBufferSubmission::execute() {
 
 	// If using encoded semaphore signaling, do so now.
 	for (auto& ss : _signalSemaphores) { ss.encodeSignal(getActiveMTLCommandBuffer()); }
+	recordCommandSubmissionTiming("legacy");
 
 	// Commit the last MTLCommandBuffer.
 	// Nothing after this because callback might destroy this instance before this function ends.
 	return commitActiveMTLCommandBuffer(true);
+}
+
+void MVKQueueCommandBufferSubmission::recordCommandSubmissionTiming(const char* backend) {
+	if (_commandSubmissionTimingRecorded || !_commandSubmissionStartedAt ||
+		!_queue->_commandSubmissionTelemetry) {
+		return;
+	}
+	uint64_t elapsedNs = mvkGetRuntimeNanoseconds() - _commandSubmissionStartedAt;
+	uint64_t submissionCount = _queue->_commandSubmissionTelemetry->record(
+		backend, getCommandBufferCount(), getRecordedCommandCount(), elapsedNs);
+	_commandSubmissionTimingRecorded = true;
+	if (submissionCount == 1 ||
+		submissionCount % kCommandSubmissionTelemetryInterval == 0) {
+		_queue->reportCommandSubmissionTelemetry(backend, "periodic");
+	}
 }
 
 bool MVKQueueCommandBufferSubmission::supportsMetal4Semaphores() const {
@@ -4110,6 +4192,7 @@ VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled) {
 			wait.encodeMetal4Wait(commandQueue);
 		}
 
+		recordCommandSubmissionTiming("metal4");
 		id<MTL4CommandBuffer> commandBuffers[] = { commandBuffer };
 		state->finishEncoding(allocatorIndex, true);
 		allocatorInFlight = true;
@@ -4496,6 +4579,20 @@ bool MVKQueueFullCommandBufferSubmission<N>::encodeMetal4CommandBuffers(MVKMetal
 		if (!cbInfo.commandBuffer->encodeMetal4(encoder)) { return false; }
 	}
 	return true;
+}
+
+template <size_t N>
+uint64_t MVKQueueFullCommandBufferSubmission<N>::getCommandBufferCount() const {
+	return _cmdBuffers.size();
+}
+
+template <size_t N>
+uint64_t MVKQueueFullCommandBufferSubmission<N>::getRecordedCommandCount() const {
+	uint64_t count = 0;
+	for (const auto& cbInfo : _cmdBuffers) {
+		if (cbInfo.commandBuffer) { count += cbInfo.commandBuffer->getCommandCount(); }
+	}
+	return count;
 }
 
 template <size_t N>

@@ -164,6 +164,11 @@ def main() -> int:
         "VkResult MVKQueueCommandBufferSubmission::executeMetal4(bool* handled)",
         "// Returns the active MTLCommandBuffer",
     )
+    execute_submission = function_body(
+        queue_mm,
+        "VkResult MVKQueueCommandBufferSubmission::execute()",
+        "bool MVKQueueCommandBufferSubmission::supportsMetal4Semaphores() const",
+    )
     require(
         execute_metal4,
         r"supportsMetal4Semaphores\(\)[\s\S]*?supportsMetal4CommandBuffers\([^)]*\)[\s\S]*?prepareMetal4CommandBuffers",
@@ -857,6 +862,44 @@ def main() -> int:
         "command telemetry interval is too noisy for high-submit-rate games",
     )
     require(
+        queue_mm,
+        r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_COMMAND_SUBMISSION_TELEMETRY"\s*,\s*0\.0\s*\)',
+        "cross-backend command submission telemetry is not private and default-off",
+    )
+    reject(
+        config,
+        r"COMMAND_SUBMISSION_TELEMETRY",
+        "cross-backend command submission telemetry changed the public MVKConfiguration ABI",
+    )
+    for token in (
+        "MVKCommandSubmissionTelemetry",
+        "Command submission CPU timing",
+        "backend=%s",
+        "submissions=%llu",
+        "command_buffers=%llu",
+        "commands=%llu",
+        "precommit_total_ns=%llu",
+        "precommit_max_ns=%llu",
+        "precommit_avg_ns=%llu",
+        "precommit_ns_per_command=%llu",
+    ):
+        require(queue_mm, re.escape(token), f"cross-backend submission telemetry is missing: {token}")
+    require(
+        execute_submission,
+        r'recordCommandSubmissionTiming\(\s*"legacy"[\s\S]*?commitActiveMTLCommandBuffer',
+        "legacy submission CPU timing is not recorded before the final commit boundary",
+    )
+    require(
+        execute_metal4,
+        r'recordCommandSubmissionTiming\(\s*"metal4"[\s\S]*?\[commandQueue\s+commit:',
+        "Metal 4 submission CPU timing is not recorded at the same pre-commit boundary",
+    )
+    require(
+        queue_h + queue_mm,
+        r"getCommandBufferCount[\s\S]*?getRecordedCommandCount[\s\S]*?getCommandCount",
+        "submission telemetry does not normalize timing by command-buffer and recorded-command counts",
+    )
+    require(
         command_h + command_buffer_mm + queue_mm,
         r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
         "replayable materialization failures do not identify the concrete Vulkan command",
@@ -1180,6 +1223,11 @@ def main() -> int:
         runner,
         r"MVK_CONFIG_METAL4_COMMAND_TELEMETRY=1[\s\S]*?Metal 4 command backend telemetry",
         "runtime performance telemetry is not enabled and asserted by the controlled E2E",
+    )
+    require(
+        runner,
+        r"MVK_CONFIG_COMMAND_SUBMISSION_TELEMETRY=1[\s\S]*?Command submission CPU timing: backend=legacy[\s\S]*?Command submission CPU timing: backend=metal4",
+        "controlled E2E does not require comparable legacy and Metal 4 submission timing",
     )
     for counter in (
         "image_copies",

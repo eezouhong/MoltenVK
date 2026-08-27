@@ -143,7 +143,7 @@ public:
 	bool encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder);
 
 	/** Returns the number of commands currently in this command buffer. */
-	uint32_t getCommandCount() { return _commandCount; }
+	uint32_t getCommandCount() const { return _commandCount; }
 
 	/** Returns the command pool backing this command buffer. */
 	MVKCommandPool* getCommandPool() { return _commandPool; }

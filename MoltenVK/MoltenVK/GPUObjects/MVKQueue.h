@@ -35,6 +35,7 @@ class MVKPhysicalDevice;
 class MVKGPUCaptureScope;
 struct MVKMetal4CommandQueueState;
 struct MVKMetal4SubmissionCompletion;
+struct MVKCommandSubmissionTelemetry;
 
 
 #pragma mark -
@@ -171,6 +172,7 @@ protected:
 	void initExecQueue();
 	void initMTLCommandQueue();
 	void initMTL4CommandQueue();
+	void reportCommandSubmissionTelemetry(const char* backend, const char* phase);
 	bool validateMTL4CommandObjects();
 	bool startMTL4CommandSubmissionProbe();
 	void destroyExecQueue();
@@ -185,6 +187,7 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+	std::shared_ptr<MVKCommandSubmissionTelemetry> _commandSubmissionTelemetry;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	id<MTL4CommandQueue> _mtl4Queue = nil;
 	std::shared_ptr<MVKMetal4CommandQueueState> _metal4CommandState;
@@ -320,6 +323,9 @@ protected:
 	virtual bool beginMetal4CommandBuffers() { return true; }
 	virtual void endMetal4CommandBuffers(bool) {}
 	virtual bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder*) { return true; }
+	virtual uint64_t getCommandBufferCount() const { return 0; }
+	virtual uint64_t getRecordedCommandCount() const { return 0; }
+	void recordCommandSubmissionTiming(const char* backend);
 
 	MVKCommandEncodingContext _encodingContext;
 	MVKSmallVector<MVKSemaphoreSubmitInfo> _signalSemaphores;
@@ -328,6 +334,8 @@ protected:
 	MVKCommandUse _commandUse = kMVKCommandUseNone;
 	bool _legacyOrderingWaitEncoded = false;
 	bool _emulatedWaitDone = false;		//Used to track if we've already waited for emulated semaphores.
+	uint64_t _commandSubmissionStartedAt = 0;
+	bool _commandSubmissionTimingRecorded = false;
 };
 
 
@@ -356,6 +364,8 @@ protected:
 	bool beginMetal4CommandBuffers() override;
 	void endMetal4CommandBuffers(bool committed) override;
 	bool encodeMetal4CommandBuffers(MVKMetal4CommandEncoder* encoder) override;
+	uint64_t getCommandBufferCount() const override;
+	uint64_t getRecordedCommandCount() const override;
 
 	MVKSmallVector<MVKCommandBufferSubmitInfo, N> _cmdBuffers;
 	MVKSmallVector<uint8_t, N> _metal4PreviousExecutionState;

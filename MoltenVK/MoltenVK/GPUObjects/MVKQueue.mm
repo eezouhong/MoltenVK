@@ -864,7 +864,8 @@ public:
 	}
 
 	bool endVisibilityQueryPreparation(MVKQueryPool* queryPool) override {
-		if (!useVisibilityQueryPool(queryPool) || _preparingActiveQueryPool != queryPool) {
+		if (!queryPool || !queryPool->canEndMetal4Query() ||
+			!useVisibilityQueryPool(queryPool) || _preparingActiveQueryPool != queryPool) {
 			recordMetal4PreparationFailure("visibility_query_end_mismatch");
 			return false;
 		}
@@ -1492,7 +1493,8 @@ public:
 	}
 
 	bool endVisibilityQuery(MVKQueryPool* queryPool, uint32_t query) override {
-		if (_activeQueryPool != queryPool || _activeQuery != query) {
+		if (!queryPool || !queryPool->canEndMetal4Query() ||
+			_activeQueryPool != queryPool || _activeQuery != query) {
 			return false;
 		}
 		if (_renderEncoder) {

@@ -66,12 +66,12 @@ bool MVKCmdBeginQuery::supportsMetal4Encoding() const {
 }
 
 bool MVKCmdBeginQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->beginVisibilityQueryPreparation(_queryPool);
 }
 
 bool MVKCmdBeginQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->beginVisibilityQuery(_queryPool, _query, _flags);
 }
 
@@ -92,12 +92,12 @@ bool MVKCmdEndQuery::supportsMetal4Encoding() const {
 }
 
 bool MVKCmdEndQuery::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->endVisibilityQueryPreparation(_queryPool);
 }
 
 bool MVKCmdEndQuery::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->endVisibilityQuery(_queryPool, _query);
 }
 
@@ -148,11 +148,11 @@ void MVKCmdResetQueryPool::encode(MVKCommandEncoder* cmdEncoder) {
 }
 
 bool MVKCmdResetQueryPool::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() && cmdEncoder->useQueryPool(_queryPool);
+	return cmdEncoder && cmdEncoder->useQueryPool(_queryPool);
 }
 
 bool MVKCmdResetQueryPool::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->resetQueryPool(_queryPool, _query, _queryCount);
 }
 
@@ -200,12 +200,12 @@ bool MVKCmdCopyQueryPoolResults::supportsMetal4Encoding() const {
 }
 
 bool MVKCmdCopyQueryPoolResults::prepareMetal4Encoding(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->useQueryResultPool(_queryPool) && cmdEncoder->useBuffer(_destBuffer);
 }
 
 bool MVKCmdCopyQueryPoolResults::encodeMetal4(MVKMetal4CommandEncoder* cmdEncoder) {
-	return cmdEncoder && supportsMetal4Encoding() &&
+	return cmdEncoder &&
 		cmdEncoder->copyQueryPoolResults(_queryPool, _query, _queryCount,
 			_destBuffer, _destOffset, _destStride, _flags);
 }

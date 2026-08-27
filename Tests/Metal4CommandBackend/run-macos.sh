@@ -127,6 +127,7 @@ fi
 
 MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=2 \
 MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
+MVK_CONFIG_METAL4_COMMAND_TELEMETRY=1 \
 MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
   >"${BUILD_DIR}/metal4.log" 2>&1
@@ -198,6 +199,9 @@ grep -q 'GRAPHICS_REBIND_AFTER_RENDER_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'UPDATE_BUFFER_OK' "${BUILD_DIR}/metal4.log"
 grep -q 'Metal 4 Vulkan transfer backend ready' "${BUILD_DIR}/metal4.log"
 grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4.log"
+grep -q 'Metal 4 command backend telemetry:' "${BUILD_DIR}/metal4.log"
+grep -Eq 'coverage_ppm=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
+grep -Eq 'Metal 4 command backend timing: .*attempt_total_ns=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'image_copies=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'compute_dispatches=[1-9][0-9]*' "${BUILD_DIR}/metal4.log"
 grep -Eq 'compute_dispatches=([2-9]|[1-9][0-9]+)' "${BUILD_DIR}/metal4.log"
@@ -217,6 +221,7 @@ grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4.log"
 
 MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0 \
 MVK_CONFIG_METAL4_COMMAND_BACKEND=1 \
+MVK_CONFIG_METAL4_COMMAND_TELEMETRY=1 \
 MVK_CONFIG_METAL4_COMMAND_VALIDATION=1 \
   "${BUILD_DIR}/metal4-transfer-e2e" \
   >"${BUILD_DIR}/metal4-single-queue.log" 2>&1
@@ -267,13 +272,16 @@ grep -q 'RENDER_SCOPE_PIPELINE_BARRIER_OK' "${BUILD_DIR}/metal4-single-queue.log
 grep -q 'RENDER_SCOPE_BATCHED_PIPELINE_BARRIER_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'GRAPHICS_REBIND_AFTER_RENDER_OK' "${BUILD_DIR}/metal4-single-queue.log"
 grep -q 'Executed first Vulkan submission on the Metal 4 transfer backend' "${BUILD_DIR}/metal4-single-queue.log"
+grep -q 'Metal 4 command backend telemetry:' "${BUILD_DIR}/metal4-single-queue.log"
+grep -Eq 'coverage_ppm=[1-9][0-9]*' "${BUILD_DIR}/metal4-single-queue.log"
+grep -Eq 'Metal 4 command backend timing: .*attempt_total_ns=[1-9][0-9]*' "${BUILD_DIR}/metal4-single-queue.log"
 grep -Eq 'Metal 4 command backend summary: .*fallbacks=0, failures=0' "${BUILD_DIR}/metal4-single-queue.log"
 if grep -q 'Metal 4 command materialization failed' "${BUILD_DIR}/metal4-single-queue.log"; then
   echo "Single-queue Metal 4 run unexpectedly replayed a command through the legacy backend" >&2
   exit 1
 fi
 grep -q 'unsupported_commands=none' "${BUILD_DIR}/metal4-single-queue.log"
-if grep -q 'unsupported_semaphore' "${BUILD_DIR}/metal4-single-queue.log"; then
+if grep -q 'latest_fallback=unsupported_semaphore' "${BUILD_DIR}/metal4-single-queue.log"; then
   echo "Single-queue semaphore unexpectedly forced Metal 4 fallback" >&2
   exit 1
 fi

@@ -771,6 +771,40 @@ def main() -> int:
         r"totalCount\s*&\s*\(fallback\.totalCount\s*-\s*1\)",
         "fallback snapshots are not rate-limited to power-of-two totals",
     )
+    for token in (
+        "MVK_CONFIG_METAL4_COMMAND_TELEMETRY",
+        "kMetal4CommandTelemetryInterval",
+        "Metal 4 command backend telemetry",
+        "coverage_ppm",
+        "attempt_total_ns",
+        "support_check_total_ns",
+        "preparation_total_ns",
+        "residency_total_ns",
+        "allocator_total_ns",
+        "command_object_total_ns",
+        "encoding_total_ns",
+        "commit_total_ns",
+        "unsupported_semaphore",
+        "unsupported_command_buffer",
+        "prepare_failed",
+        "residency_acquire_failed",
+        "allocator_unavailable",
+        "command_object_unavailable",
+        "encoding_replayable_exception",
+        "command_buffer_not_ended",
+        "precommit_replayable_exception",
+    ):
+        require(queue_mm, re.escape(token), f"performance telemetry is missing: {token}")
+    require(
+        execute_metal4,
+        r"recordSubmissionAttempt\(\)[\s\S]*?mvkGetRuntimeNanoseconds\(\)[\s\S]*?recordAttemptTiming",
+        "Metal 4 attempts are not timed from the command-backend boundary",
+    )
+    require(
+        queue_mm,
+        r"attemptNumber\s*==\s*1[\s\S]*?attemptNumber\s*%\s*kMetal4CommandTelemetryInterval",
+        "command telemetry is not emitted once immediately and then at a bounded interval",
+    )
     require(
         command_h + command_buffer_mm + queue_mm,
         r"recordMetal4EncodingFailure[\s\S]*?getMetal4CommandTypeName[\s\S]*?Metal 4 command materialization failed for %s",
@@ -1091,6 +1125,11 @@ def main() -> int:
         "Metal 4 E2E does not exercise MeloNX's single-queue semaphore style",
     )
     require(runner, r"Executed first Vulkan submission on the Metal 4 transfer backend", "runtime path proof is missing")
+    require(
+        runner,
+        r"MVK_CONFIG_METAL4_COMMAND_TELEMETRY=1[\s\S]*?Metal 4 command backend telemetry",
+        "runtime performance telemetry is not enabled and asserted by the controlled E2E",
+    )
     for counter in (
         "image_copies",
         "compute_dispatches",

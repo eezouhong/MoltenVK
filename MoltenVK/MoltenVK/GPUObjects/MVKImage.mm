@@ -1908,6 +1908,81 @@ id<MTLTexture> MVKImageViewPlane::getMTLTexture() {
     }
 }
 
+bool MVKImageViewPlane::isMetal4TextureViewPoolEligible() {
+	if (!_useMTLTextureView || !_mtlPixFmt || !_imageView->_image ||
+		_imageView->getPlaneCount() != 1 || _imageView->getIs2dViewOf3d()) {
+		return false;
+	}
+	auto* image = _imageView->_image;
+	bool imageCompressed = image->getIsCompressed();
+	bool viewCompressed = getPixelFormats()->getFormatType(_mtlPixFmt) == kMVKFormatCompressed;
+	bool isBlockTexelView = image->_isBlockTexelViewCompatible && imageCompressed && !viewCompressed;
+	return !isBlockTexelView;
+}
+
+MTLResourceID MVKImageViewPlane::getMetal4TextureViewResourceID() {
+	id<MTLTexture> baseMTLTexture = _imageView->_image
+		? _imageView->_image->getMTLTexture(_planeIndex)
+		: nil;
+	if (!baseMTLTexture) { return {}; }
+	MVKMetal4TextureViewPool* pool = getDevice()->getMetal4TextureViewPool();
+	if (!_useMTLTextureView) {
+		if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
+		return baseMTLTexture.gpuResourceID;
+	}
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (pool && pool->isEnabled() && isMetal4TextureViewPoolEligible()) {
+		lock_guard<mutex> lock(_imageView->_lock);
+		if (_metal4TextureViewHandle.isValid() && _metal4TextureViewBase == baseMTLTexture) {
+			return _metal4TextureViewHandle.resourceID;
+		}
+		if (_metal4TextureViewHandle.isValid()) {
+			pool->releaseTextureView(_metal4TextureViewHandle);
+			_metal4TextureViewHandle = {};
+			[_metal4TextureViewBase release];
+			_metal4TextureViewBase = nil;
+		}
+
+		MTLTextureViewDescriptor* descriptor = [MTLTextureViewDescriptor new];
+		descriptor.pixelFormat = _mtlPixFmt;
+		descriptor.textureType = _imageView->_mtlTextureType;
+		descriptor.levelRange = NSMakeRange(
+			_imageView->_subresourceRange.baseMipLevel,
+			_imageView->_subresourceRange.levelCount);
+		descriptor.sliceRange = NSMakeRange(
+			_imageView->_subresourceRange.baseArrayLayer,
+			_imageView->_subresourceRange.layerCount);
+		if (_useNativeSwizzle) {
+			descriptor.swizzle = mvkMTLTextureSwizzleChannelsFromVkComponentMapping(_componentSwizzle);
+		}
+		_metal4TextureViewHandle = pool->acquireTextureView(baseMTLTexture, descriptor);
+		[descriptor release];
+		if (_metal4TextureViewHandle.isValid()) {
+			_metal4TextureViewBase = [baseMTLTexture retain];
+			return _metal4TextureViewHandle.resourceID;
+		}
+	}
+	if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
+#endif
+
+	id<MTLTexture> texture = getMTLTexture();
+	return texture ? texture.gpuResourceID : MTLResourceID{};
+}
+
+id<MTLTexture> MVKImageViewPlane::getMetal4TextureViewBaseTexture() {
+	if (!_useMTLTextureView) {
+		return _imageView->_image ? _imageView->_image->getMTLTexture(_planeIndex) : nil;
+	}
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	{
+		lock_guard<mutex> lock(_imageView->_lock);
+		if (_metal4TextureViewHandle.isValid()) { return _metal4TextureViewBase; }
+	}
+#endif
+	return getMTLTexture();
+}
+
 bool MVKImageViewPlane::matchesMTLTextureViewBase(id<MTLTexture> mtlTexture) {
     id<MTLTexture> cachedBaseMTLTexture = mvkGetBaseMTLTexture(_mtlTexture);
     if (cachedBaseMTLTexture == mtlTexture) { return true; }
@@ -2008,7 +2083,8 @@ id<MTLTexture> MVKImageViewPlane::newMTLTextureFromBaseMTLTexture(id<MTLTexture>
         mtlTex = aliasTex;
     }
 
-    id<MTLTexture> texView = nil;
+	uint64_t textureViewStart = mvkGetTimestamp();
+	id<MTLTexture> texView = nil;
     if (_useNativeSwizzle) {
         texView = [mtlTex newTextureViewWithPixelFormat: _mtlPixFmt
                                             textureType: _imageView->_mtlTextureType
@@ -2020,8 +2096,11 @@ id<MTLTexture> MVKImageViewPlane::newMTLTextureFromBaseMTLTexture(id<MTLTexture>
                                             textureType: _imageView->_mtlTextureType
                                                  levels: levelRange
                                                  slices: sliceRange];    // retained
-    }
-    [aliasTex release];
+	}
+	if (auto* pool = getDevice()->getMetal4TextureViewPool()) {
+		pool->recordHeavyweightTextureViewCreation(mvkGetElapsedNanoseconds(textureViewStart));
+	}
+	[aliasTex release];
     return texView;
 }
 
@@ -2202,7 +2281,21 @@ void MVKImageViewPlane::releaseMTLTexture() {
 	}
 }
 
+void MVKImageViewPlane::releaseMetal4TextureView() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (_metal4TextureViewHandle.isValid()) {
+		if (auto* pool = getDevice()->getMetal4TextureViewPool()) {
+			pool->releaseTextureView(_metal4TextureViewHandle);
+		}
+		_metal4TextureViewHandle = {};
+	}
+	[_metal4TextureViewBase release];
+	_metal4TextureViewBase = nil;
+#endif
+}
+
 MVKImageViewPlane::~MVKImageViewPlane() {
+	releaseMetal4TextureView();
 	releaseMTLTexture();
 }
 

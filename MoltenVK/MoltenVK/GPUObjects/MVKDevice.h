@@ -673,12 +673,15 @@ public:
 	static MVKMetal4TextureViewPool* create(MVKDevice* device);
 	~MVKMetal4TextureViewPool();
 	void logTelemetry();
+	bool isEnabled() const;
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	MVKMetal4TextureViewHandle acquireTextureView(id<MTLTexture> texture,
 											MTLTextureViewDescriptor* descriptor);
 #endif
 	void releaseTextureView(MVKMetal4TextureViewHandle handle);
+	void recordTextureViewBypass();
+	void recordHeavyweightTextureViewCreation(uint64_t durationNs);
 
 	struct Impl;
 

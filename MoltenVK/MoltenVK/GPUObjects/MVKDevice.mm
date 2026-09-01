@@ -83,12 +83,18 @@ struct MVKMetal4TextureViewPool::Impl {
 	size_t liveSlots = 0;
 	size_t highWaterSlots = 0;
 	uint64_t assignments = 0;
+	uint64_t eligibleRequests = 0;
+	uint64_t bypassedRequests = 0;
 	uint64_t reuses = 0;
 	uint64_t releases = 0;
 	uint64_t fallbacks = 0;
 	uint64_t resetFailures = 0;
+	uint64_t heavyweightCreations = 0;
+	uint64_t heavyweightCreationNs = 0;
+	uint64_t maxHeavyweightCreationNs = 0;
 	uint64_t totalAssignmentNs = 0;
 	uint64_t maxAssignmentNs = 0;
+	bool enabled = false;
 	bool telemetryEnabled = false;
 
 	Impl(MVKDevice* mvkDevice,
@@ -96,12 +102,14 @@ struct MVKMetal4TextureViewPool::Impl {
 		 id<MTLTexture> tombstone,
 		 size_t configuredChunkSize,
 		 size_t configuredMaximumSlots,
+		 bool poolEnabled,
 		 bool enableTelemetry) :
 		device(mvkDevice),
 		mtlDevice(metalDevice),
 		tombstoneTexture(tombstone),
 		chunkSize(configuredChunkSize),
 		maximumSlots(configuredMaximumSlots),
+		enabled(poolEnabled),
 		telemetryEnabled(enableTelemetry) {}
 
 	~Impl() {
@@ -116,6 +124,7 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 		mvkGetEnvVarNumber("MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", 0.0) == 0.0) {
 		return nullptr;
 	}
+	constexpr bool enabled = true;
 
 #if MVK_USE_METAL_PRIVATE_API
 	device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
@@ -131,7 +140,7 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 	}
 	if (@available(macOS 26.0, iOS 26.0, *)) {
 		id<MTLDevice> mtlDevice = device->getPhysicalDevice()->getMTLDevice();
-		if (![mtlDevice respondsToSelector:@selector(newTextureViewPoolWithDescriptor:error:)]) {
+		if (enabled && ![mtlDevice respondsToSelector:@selector(newTextureViewPoolWithDescriptor:error:)]) {
 			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
 						  "Metal 4 texture view pool unavailable on this device.");
 			return nullptr;
@@ -147,29 +156,34 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 			262144.0));
 		maximumSlots = (maximumSlots / chunkSize) * chunkSize;
 
-		MTLTextureDescriptor* tombstoneDescriptor =
-			[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-															 width:1
-															height:1
-														 mipmapped:NO];
-		tombstoneDescriptor.storageMode = MTLStorageModePrivate;
-		tombstoneDescriptor.usage = MTLTextureUsageShaderRead;
-		id<MTLTexture> tombstone = [mtlDevice newTextureWithDescriptor:tombstoneDescriptor];
-		if (!tombstone) {
+		id<MTLTexture> tombstone = nil;
+		if (enabled) {
+			MTLTextureDescriptor* tombstoneDescriptor =
+				[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+																 width:1
+																height:1
+															 mipmapped:NO];
+			tombstoneDescriptor.storageMode = MTLStorageModePrivate;
+			tombstoneDescriptor.usage = MTLTextureUsageShaderRead;
+			tombstone = [mtlDevice newTextureWithDescriptor:tombstoneDescriptor];
+		}
+		if (enabled && !tombstone) {
 			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
 						  "Metal 4 texture view pool could not create its release sentinel.");
 			return nullptr;
 		}
-		tombstone.label = @"MoltenVK Metal 4 Texture View Pool Sentinel";
+		if (tombstone) { tombstone.label = @"MoltenVK Metal 4 Texture View Pool Sentinel"; }
 
 		device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 texture view pool enabled with %zu-slot chunks and a %zu-slot maximum.",
+						  "Metal 4 texture view pool %s with %zu-slot chunks and a %zu-slot maximum.",
+						  enabled ? "enabled" : "disabled for A/B telemetry",
 						  chunkSize,
 						  maximumSlots);
 		bool telemetryEnabled = mvkGetEnvVarNumber(
 			"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", 0.0) != 0.0;
 		return new MVKMetal4TextureViewPool(make_shared<Impl>(
-			device, mtlDevice, tombstone, chunkSize, maximumSlots, telemetryEnabled));
+			device, mtlDevice, tombstone, chunkSize, maximumSlots,
+			enabled, telemetryEnabled));
 	}
 #endif
 	return nullptr;
@@ -186,10 +200,15 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 	if (impl && impl->telemetryEnabled) {
 		unique_lock<mutex> guard(impl->lock);
 		uint64_t assignments = impl->assignments;
+		uint64_t eligibleRequests = impl->eligibleRequests;
+		uint64_t bypassedRequests = impl->bypassedRequests;
 		uint64_t reuses = impl->reuses;
 		uint64_t releases = impl->releases;
 		uint64_t fallbacks = impl->fallbacks;
 		uint64_t resetFailures = impl->resetFailures;
+		uint64_t heavyweightCreations = impl->heavyweightCreations;
+		uint64_t heavyweightCreationNs = impl->heavyweightCreationNs;
+		uint64_t maxHeavyweightCreationNs = impl->maxHeavyweightCreationNs;
 		size_t chunkCount = impl->chunks.size();
 		size_t createdSlots = impl->createdSlots;
 		size_t liveSlots = impl->liveSlots;
@@ -199,12 +218,17 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 		guard.unlock();
 		impl->device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 texture view pool telemetry: assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
+			"Metal 4 texture view pool telemetry: eligible_requests=%llu, bypassed_requests=%llu, assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, heavyweight_creations=%llu, heavyweight_creation_ms=%.3f, max_heavyweight_creation_ms=%.3f, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
+			(unsigned long long)eligibleRequests,
+			(unsigned long long)bypassedRequests,
 			(unsigned long long)assignments,
 			(unsigned long long)reuses,
 			(unsigned long long)releases,
 			(unsigned long long)fallbacks,
 			(unsigned long long)resetFailures,
+			(unsigned long long)heavyweightCreations,
+			static_cast<double>(heavyweightCreationNs) / 1e6,
+			static_cast<double>(maxHeavyweightCreationNs) / 1e6,
 			chunkCount,
 			createdSlots,
 			liveSlots,
@@ -212,6 +236,15 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 			static_cast<double>(totalAssignmentNs) / 1e6,
 			static_cast<double>(maxAssignmentNs) / 1e6);
 	}
+#endif
+}
+
+bool MVKMetal4TextureViewPool::isEnabled() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	return impl && impl->enabled;
+#else
+	return false;
 #endif
 }
 
@@ -224,6 +257,7 @@ MVKMetal4TextureViewHandle MVKMetal4TextureViewPool::acquireTextureView(
 
 	uint64_t startNs = mvkGetTimestamp();
 	unique_lock<mutex> guard(impl->lock);
+	impl->eligibleRequests++;
 	MVKMetal4TextureViewHandle handle;
 	bool reused = false;
 	if (!impl->freeHandles.empty()) {
@@ -311,6 +345,28 @@ void MVKMetal4TextureViewPool::releaseTextureView(MVKMetal4TextureViewHandle han
 	}
 #else
 	(void)handle;
+#endif
+}
+
+void MVKMetal4TextureViewPool::recordTextureViewBypass() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl) { return; }
+	lock_guard<mutex> guard(impl->lock);
+	impl->bypassedRequests++;
+#endif
+}
+
+void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(uint64_t durationNs) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl) { return; }
+	lock_guard<mutex> guard(impl->lock);
+	impl->heavyweightCreations++;
+	impl->heavyweightCreationNs += durationNs;
+	impl->maxHeavyweightCreationNs = max(impl->maxHeavyweightCreationNs, durationNs);
+#else
+	(void)durationNs;
 #endif
 }
 

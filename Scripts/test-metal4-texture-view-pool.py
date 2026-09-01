@@ -125,8 +125,22 @@ def test_source_contract() -> None:
     require(descriptor_mm, "getMetal4TextureViewBaseTexture", DESCRIPTOR_MM)
     require_pattern(
         descriptor_mm,
-        r"MVKArgumentBufferMode::Metal3[\s\S]*?MVKDescriptorGPULayout::TexBufSoA",
+        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA",
         DESCRIPTOR_MM,
+    )
+    if "useMetal4TextureViewPool = set->supportsMetal4ArgumentTable()" in descriptor_mm:
+        raise AssertionError(
+            f"{DESCRIPTOR_MM}: per-set pooled representations make descriptor copies unsafe"
+        )
+    require_pattern(
+        descriptor_mm,
+        r"mvkPushDescriptorSet[\s\S]*?writeDescriptorSetCPUBufferDispatch\([^;]*false\)",
+        DESCRIPTOR_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"pool\s*&&\s*pool->isEnabled\(\)\s*&&\s*isMetal4TextureViewPoolEligible",
+        IMAGE_MM,
     )
 
     combined = device_h + device_mm + image_h + image_mm + descriptor_mm

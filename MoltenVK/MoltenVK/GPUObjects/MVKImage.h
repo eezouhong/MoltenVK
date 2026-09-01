@@ -551,7 +551,14 @@ public:
     /** Returns the Metal texture underlying this image view. */
     id<MTLTexture> getMTLTexture();
 
+	/** Returns the lightweight Metal 4 view ID, or the compatible heavyweight ID fallback. */
+	MTLResourceID getMetal4TextureViewResourceID();
+
+	/** Returns the Metal resource that owns the storage addressed by the Metal 4 view ID. */
+	id<MTLTexture> getMetal4TextureViewBaseTexture();
+
     void releaseMTLTexture();
+	void releaseMetal4TextureView();
 
 	/** Returns the packed component swizzle of this image view. */
 	uint32_t getPackedSwizzle() { return _useShaderSwizzle ? mvkPackSwizzle(_componentSwizzle) : 0; }
@@ -564,12 +571,15 @@ protected:
     id<MTLTexture> newMTLTexture();
     id<MTLTexture> newMTLTextureFromBaseMTLTexture(id<MTLTexture> baseMTLTexture);
     bool matchesMTLTextureViewBase(id<MTLTexture> mtlTexture);
+	bool isMetal4TextureViewPoolEligible();
     VkResult initSwizzledMTLPixelFormat(const VkImageViewCreateInfo* pCreateInfo);
     MVKImageViewPlane(MVKImageView* imageView, uint8_t planeIndex, MTLPixelFormat mtlPixFmt, const VkImageViewCreateInfo* pCreateInfo);
 
     friend MVKImageView;
-    MVKImageView* _imageView;
+	MVKImageView* _imageView;
 	id<MTLTexture> _mtlTexture;
+	id<MTLTexture> _metal4TextureViewBase = nil;
+	MVKMetal4TextureViewHandle _metal4TextureViewHandle;
 	VkComponentMapping _componentSwizzle;
     MTLPixelFormat _mtlPixFmt;
 	uint8_t _planeIndex;
@@ -603,6 +613,12 @@ public:
 
 	/** Returns the Metal texture underlying this image view.  */
 	id<MTLTexture> getMTLTexture(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMTLTexture() : nil; }	// Guard against destroyed instance retained in a descriptor.
+
+	/** Returns a Metal 4 texture-view-pool resource ID, with heavyweight fallback. */
+	MTLResourceID getMetal4TextureViewResourceID(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewResourceID() : MTLResourceID{}; }
+
+	/** Returns the resource that must remain resident for the Metal 4 texture-view ID. */
+	id<MTLTexture> getMetal4TextureViewBaseTexture(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewBaseTexture() : nil; }
 
 	/** Returns the Metal pixel format of this image view. */
 	MTLPixelFormat getMTLPixelFormat(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->_mtlPixFmt : MTLPixelFormatInvalid; }	// Guard against destroyed instance retained in a descriptor.

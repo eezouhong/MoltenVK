@@ -1908,36 +1908,49 @@ id<MTLTexture> MVKImageViewPlane::getMTLTexture() {
     }
 }
 
-bool MVKImageViewPlane::isMetal4TextureViewPoolEligible() {
-	if (!_useMTLTextureView || !_mtlPixFmt || !_imageView->_image ||
-		_imageView->getPlaneCount() != 1 || _imageView->getIs2dViewOf3d()) {
-		return false;
-	}
+MVKMetal4TextureViewClass MVKImageViewPlane::getMetal4TextureViewClass() {
+	if (!_useMTLTextureView) { return MVKMetal4TextureViewClass::DirectBase; }
+	if (!_mtlPixFmt || !_imageView->_image) { return MVKMetal4TextureViewClass::MissingBacking; }
+	if (_imageView->getPlaneCount() != 1) { return MVKMetal4TextureViewClass::MultiPlane; }
+	if (_imageView->getIs2dViewOf3d()) { return MVKMetal4TextureViewClass::TwoDOfThreeD; }
 	auto* image = _imageView->_image;
 	bool imageCompressed = image->getIsCompressed();
 	bool viewCompressed = getPixelFormats()->getFormatType(_mtlPixFmt) == kMVKFormatCompressed;
 	bool isBlockTexelView = image->_isBlockTexelViewCompatible && imageCompressed && !viewCompressed;
-	return !isBlockTexelView;
+	return isBlockTexelView ? MVKMetal4TextureViewClass::BlockTexelAlias
+						 : MVKMetal4TextureViewClass::Eligible;
+}
+
+bool MVKImageViewPlane::isMetal4TextureViewPoolEligible() {
+	return getMetal4TextureViewClass() == MVKMetal4TextureViewClass::Eligible;
 }
 
 MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
+	MVKMetal4TextureViewPool* pool = getDevice()->getMetal4TextureViewPool();
+	bool poolEnabled = pool && pool->isEnabled();
+	if (poolEnabled) { pool->recordTextureViewLookup(); }
+	MVKMetal4TextureViewClass viewClass = getMetal4TextureViewClass();
 	id<MTLTexture> baseMTLTexture = _imageView->_image
 		? _imageView->_image->getMTLTexture(_planeIndex)
 		: nil;
-	if (!baseMTLTexture) { return {}; }
-	MVKMetal4TextureViewPool* pool = getDevice()->getMetal4TextureViewPool();
-	if (!_useMTLTextureView) {
-		if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
+	if (!baseMTLTexture) {
+		if (poolEnabled) { pool->recordTextureViewBypass(MVKMetal4TextureViewClass::MissingBacking); }
+		return {};
+	}
+	if (viewClass == MVKMetal4TextureViewClass::DirectBase) {
+		if (poolEnabled) { pool->recordTextureViewBypass(viewClass); }
 		return { baseMTLTexture.gpuResourceID, baseMTLTexture };
 	}
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	if (pool && pool->isEnabled() && isMetal4TextureViewPoolEligible()) {
+	if (poolEnabled && viewClass == MVKMetal4TextureViewClass::Eligible) {
 		lock_guard<mutex> lock(_imageView->_lock);
 		if (_metal4TextureViewHandle.isValid() && _metal4TextureViewBase == baseMTLTexture) {
+			pool->recordTextureViewCacheHit();
 			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
 		if (_metal4TextureViewHandle.isValid()) {
+			pool->recordTextureViewRebind();
 			pool->releaseTextureView(_metal4TextureViewHandle);
 			_metal4TextureViewHandle = {};
 			[_metal4TextureViewBase release];
@@ -1962,8 +1975,10 @@ MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
 			_metal4TextureViewBase = [baseMTLTexture retain];
 			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
+		pool->recordTextureViewBypass(MVKMetal4TextureViewClass::PoolFailure);
+	} else if (poolEnabled) {
+		pool->recordTextureViewBypass(viewClass);
 	}
-	if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
 #endif
 
 	id<MTLTexture> texture = getMTLTexture();
@@ -2086,7 +2101,9 @@ id<MTLTexture> MVKImageViewPlane::newMTLTextureFromBaseMTLTexture(id<MTLTexture>
                                                  slices: sliceRange];    // retained
 	}
 	if (auto* pool = getDevice()->getMetal4TextureViewPool()) {
-		pool->recordHeavyweightTextureViewCreation(mvkGetElapsedNanoseconds(textureViewStart));
+		pool->recordHeavyweightTextureViewCreation(mvkGetElapsedNanoseconds(textureViewStart),
+											  getMetal4TextureViewClass(),
+											  _imageView->_usage);
 	}
 	[aliasTex release];
     return texView;

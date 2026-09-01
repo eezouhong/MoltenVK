@@ -93,9 +93,21 @@ def test_source_contract() -> None:
     descriptor_mm = DESCRIPTOR_MM.read_text()
 
     require(device_h, "struct MVKMetal4TextureViewHandle", DEVICE_H)
+    require(device_h, "enum class MVKMetal4TextureViewClass", DEVICE_H)
+    for view_class in (
+        "DirectBase",
+        "Eligible",
+        "MultiPlane",
+        "TwoDOfThreeD",
+        "BlockTexelAlias",
+    ):
+        require(device_h, view_class, DEVICE_H)
     require(device_h, "class MVKMetal4TextureViewPool", DEVICE_H)
     require(device_h, "MVKMetal4TextureViewHandle acquireTextureView", DEVICE_H)
     require(device_h, "void releaseTextureView", DEVICE_H)
+    require(device_h, "recordTextureViewLookup", DEVICE_H)
+    require(device_h, "recordTextureViewCacheHit", DEVICE_H)
+    require(device_h, "recordTextureViewRebind", DEVICE_H)
     require(device_h, "MVKMetal4TextureViewPool* getMetal4TextureViewPool()", DEVICE_H)
 
     require(device_mm, "MTLResourceViewPoolDescriptor", DEVICE_MM)
@@ -106,9 +118,38 @@ def test_source_contract() -> None:
     require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", DEVICE_MM)
     require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", DEVICE_MM)
     require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
+    for counter in (
+        "bindingLookups",
+        "cachedBindingHits",
+        "baseRebinds",
+        "directBaseBindings",
+        "multiPlaneBypasses",
+        "twoDOfThreeDBypasses",
+        "blockTexelAliasBypasses",
+        "heavyEligibleShaderOnly",
+        "heavyEligibleAttachmentCapable",
+    ):
+        require(device_mm, f"atomic<uint64_t> {counter}", DEVICE_MM)
+        require(device_mm, counter, DEVICE_MM)
+    require(device_mm, "binding_lookups=%llu", DEVICE_MM)
+    require(device_mm, "cached_binding_hits=%llu", DEVICE_MM)
+    require(device_mm, "heavy_eligible_shader_only=%llu", DEVICE_MM)
+    require(device_mm, "heavy_eligible_attachment_capable=%llu", DEVICE_MM)
     require_pattern(
         device_mm,
-        r"recordHeavyweightTextureViewCreation[\s\S]*?heavyweightCreations\s*&\s*\(impl->heavyweightCreations\s*-\s*1\)[\s\S]*?logTelemetry\(\)",
+        r"recordTextureViewBypass\([^)]*MVKMetal4TextureViewClass[\s\S]*?fetch_add\(1,\s*memory_order_relaxed\)",
+        DEVICE_MM,
+    )
+    bypass_body = re.search(
+        r"void MVKMetal4TextureViewPool::recordTextureViewBypass\([^}]+\}",
+        device_mm,
+        re.DOTALL,
+    )
+    if not bypass_body or "impl->lock" in bypass_body.group(0):
+        raise AssertionError(f"{DEVICE_MM}: high-frequency bypass telemetry must not take the pool mutex")
+    require_pattern(
+        device_mm,
+        r"recordHeavyweightTextureViewCreation[\s\S]*?creationCount\s*&\s*\(creationCount\s*-\s*1\)[\s\S]*?logTelemetry\(\)",
         DEVICE_MM,
     )
     require_pattern(
@@ -124,11 +165,20 @@ def test_source_contract() -> None:
 
     require(image_h, "struct MVKMetal4TextureViewBinding", IMAGE_H)
     require(image_h, "getMetal4TextureViewBinding", IMAGE_H)
+    require(image_h, "getMetal4TextureViewClass", IMAGE_H)
     require(image_mm, "MTLTextureViewDescriptor", IMAGE_MM)
     require(image_mm, "releaseMetal4TextureView", IMAGE_MM)
     require(image_mm, "isMetal4TextureViewPoolEligible", IMAGE_MM)
     require(image_mm, "is2dViewOf3d", IMAGE_MM)
     require(image_mm, "isBlockTexelView", IMAGE_MM)
+    require(image_mm, "recordTextureViewLookup", IMAGE_MM)
+    require(image_mm, "recordTextureViewCacheHit", IMAGE_MM)
+    require(image_mm, "recordTextureViewRebind", IMAGE_MM)
+    require_pattern(
+        image_mm,
+        r"recordHeavyweightTextureViewCreation\([^;]*getMetal4TextureViewClass\(\)[^;]*_imageView->_usage",
+        IMAGE_MM,
+    )
 
     require(descriptor_mm, "setTextureResourceID", DESCRIPTOR_MM)
     require(descriptor_mm, "getMetal4TextureViewBinding", DESCRIPTOR_MM)
@@ -157,7 +207,7 @@ def test_source_contract() -> None:
     )
     require_pattern(
         image_mm,
-        r"pool\s*&&\s*pool->isEnabled\(\)\s*&&\s*isMetal4TextureViewPoolEligible",
+        r"poolEnabled\s*&&\s*viewClass\s*==\s*MVKMetal4TextureViewClass::Eligible",
         IMAGE_MM,
     )
 

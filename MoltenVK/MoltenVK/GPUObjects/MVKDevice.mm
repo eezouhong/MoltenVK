@@ -84,14 +84,29 @@ struct MVKMetal4TextureViewPool::Impl {
 	size_t highWaterSlots = 0;
 	uint64_t assignments = 0;
 	uint64_t eligibleRequests = 0;
-	uint64_t bypassedRequests = 0;
+	atomic<uint64_t> bindingLookups = 0;
+	atomic<uint64_t> cachedBindingHits = 0;
+	atomic<uint64_t> baseRebinds = 0;
+	atomic<uint64_t> bypassedRequests = 0;
+	atomic<uint64_t> directBaseBindings = 0;
+	atomic<uint64_t> missingBackingBypasses = 0;
+	atomic<uint64_t> multiPlaneBypasses = 0;
+	atomic<uint64_t> twoDOfThreeDBypasses = 0;
+	atomic<uint64_t> blockTexelAliasBypasses = 0;
+	atomic<uint64_t> poolFailureBypasses = 0;
 	uint64_t reuses = 0;
 	uint64_t releases = 0;
 	uint64_t fallbacks = 0;
 	uint64_t resetFailures = 0;
-	uint64_t heavyweightCreations = 0;
-	uint64_t heavyweightCreationNs = 0;
-	uint64_t maxHeavyweightCreationNs = 0;
+	atomic<uint64_t> heavyweightCreations = 0;
+	atomic<uint64_t> heavyweightCreationNs = 0;
+	atomic<uint64_t> maxHeavyweightCreationNs = 0;
+	atomic<uint64_t> heavyEligibleShaderOnly = 0;
+	atomic<uint64_t> heavyEligibleAttachmentCapable = 0;
+	atomic<uint64_t> heavyMultiPlane = 0;
+	atomic<uint64_t> heavyTwoDOfThreeD = 0;
+	atomic<uint64_t> heavyBlockTexelAlias = 0;
+	atomic<uint64_t> heavyOther = 0;
 	uint64_t totalAssignmentNs = 0;
 	uint64_t maxAssignmentNs = 0;
 	bool enabled = false;
@@ -201,14 +216,29 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 		unique_lock<mutex> guard(impl->lock);
 		uint64_t assignments = impl->assignments;
 		uint64_t eligibleRequests = impl->eligibleRequests;
-		uint64_t bypassedRequests = impl->bypassedRequests;
+		uint64_t bindingLookups = impl->bindingLookups.load(memory_order_relaxed);
+		uint64_t cachedBindingHits = impl->cachedBindingHits.load(memory_order_relaxed);
+		uint64_t baseRebinds = impl->baseRebinds.load(memory_order_relaxed);
+		uint64_t bypassedRequests = impl->bypassedRequests.load(memory_order_relaxed);
+		uint64_t directBaseBindings = impl->directBaseBindings.load(memory_order_relaxed);
+		uint64_t missingBackingBypasses = impl->missingBackingBypasses.load(memory_order_relaxed);
+		uint64_t multiPlaneBypasses = impl->multiPlaneBypasses.load(memory_order_relaxed);
+		uint64_t twoDOfThreeDBypasses = impl->twoDOfThreeDBypasses.load(memory_order_relaxed);
+		uint64_t blockTexelAliasBypasses = impl->blockTexelAliasBypasses.load(memory_order_relaxed);
+		uint64_t poolFailureBypasses = impl->poolFailureBypasses.load(memory_order_relaxed);
 		uint64_t reuses = impl->reuses;
 		uint64_t releases = impl->releases;
 		uint64_t fallbacks = impl->fallbacks;
 		uint64_t resetFailures = impl->resetFailures;
-		uint64_t heavyweightCreations = impl->heavyweightCreations;
-		uint64_t heavyweightCreationNs = impl->heavyweightCreationNs;
-		uint64_t maxHeavyweightCreationNs = impl->maxHeavyweightCreationNs;
+		uint64_t heavyweightCreations = impl->heavyweightCreations.load(memory_order_relaxed);
+		uint64_t heavyweightCreationNs = impl->heavyweightCreationNs.load(memory_order_relaxed);
+		uint64_t maxHeavyweightCreationNs = impl->maxHeavyweightCreationNs.load(memory_order_relaxed);
+		uint64_t heavyEligibleShaderOnly = impl->heavyEligibleShaderOnly.load(memory_order_relaxed);
+		uint64_t heavyEligibleAttachmentCapable = impl->heavyEligibleAttachmentCapable.load(memory_order_relaxed);
+		uint64_t heavyMultiPlane = impl->heavyMultiPlane.load(memory_order_relaxed);
+		uint64_t heavyTwoDOfThreeD = impl->heavyTwoDOfThreeD.load(memory_order_relaxed);
+		uint64_t heavyBlockTexelAlias = impl->heavyBlockTexelAlias.load(memory_order_relaxed);
+		uint64_t heavyOther = impl->heavyOther.load(memory_order_relaxed);
 		size_t chunkCount = impl->chunks.size();
 		size_t createdSlots = impl->createdSlots;
 		size_t liveSlots = impl->liveSlots;
@@ -218,15 +248,30 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 		guard.unlock();
 		impl->device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 texture view pool telemetry: eligible_requests=%llu, bypassed_requests=%llu, assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, heavyweight_creations=%llu, heavyweight_creation_ms=%.3f, max_heavyweight_creation_ms=%.3f, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
+			"Metal 4 texture view pool telemetry: binding_lookups=%llu, cached_binding_hits=%llu, base_rebinds=%llu, eligible_requests=%llu, bypassed_requests=%llu, direct_base_bindings=%llu, missing_backing_bypasses=%llu, multi_plane_bypasses=%llu, two_d_of_three_d_bypasses=%llu, block_texel_alias_bypasses=%llu, pool_failure_bypasses=%llu, assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, heavyweight_creations=%llu, heavy_eligible_shader_only=%llu, heavy_eligible_attachment_capable=%llu, heavy_multi_plane=%llu, heavy_two_d_of_three_d=%llu, heavy_block_texel_alias=%llu, heavy_other=%llu, heavyweight_creation_ms=%.3f, max_heavyweight_creation_ms=%.3f, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
+			(unsigned long long)bindingLookups,
+			(unsigned long long)cachedBindingHits,
+			(unsigned long long)baseRebinds,
 			(unsigned long long)eligibleRequests,
 			(unsigned long long)bypassedRequests,
+			(unsigned long long)directBaseBindings,
+			(unsigned long long)missingBackingBypasses,
+			(unsigned long long)multiPlaneBypasses,
+			(unsigned long long)twoDOfThreeDBypasses,
+			(unsigned long long)blockTexelAliasBypasses,
+			(unsigned long long)poolFailureBypasses,
 			(unsigned long long)assignments,
 			(unsigned long long)reuses,
 			(unsigned long long)releases,
 			(unsigned long long)fallbacks,
 			(unsigned long long)resetFailures,
 			(unsigned long long)heavyweightCreations,
+			(unsigned long long)heavyEligibleShaderOnly,
+			(unsigned long long)heavyEligibleAttachmentCapable,
+			(unsigned long long)heavyMultiPlane,
+			(unsigned long long)heavyTwoDOfThreeD,
+			(unsigned long long)heavyBlockTexelAlias,
+			(unsigned long long)heavyOther,
 			static_cast<double>(heavyweightCreationNs) / 1e6,
 			static_cast<double>(maxHeavyweightCreationNs) / 1e6,
 			chunkCount,
@@ -348,29 +393,111 @@ void MVKMetal4TextureViewPool::releaseTextureView(MVKMetal4TextureViewHandle han
 #endif
 }
 
-void MVKMetal4TextureViewPool::recordTextureViewBypass() {
+void MVKMetal4TextureViewPool::recordTextureViewLookup() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;
-	if (!impl) { return; }
-	lock_guard<mutex> guard(impl->lock);
-	impl->bypassedRequests++;
+	if (impl && impl->telemetryEnabled) {
+		impl->bindingLookups.fetch_add(1, memory_order_relaxed);
+	}
 #endif
 }
 
-void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(uint64_t durationNs) {
+void MVKMetal4TextureViewPool::recordTextureViewCacheHit() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;
-	if (!impl) { return; }
-	unique_lock<mutex> guard(impl->lock);
-	impl->heavyweightCreations++;
-	impl->heavyweightCreationNs += durationNs;
-	impl->maxHeavyweightCreationNs = max(impl->maxHeavyweightCreationNs, durationNs);
-	bool shouldLog = impl->telemetryEnabled &&
-		(impl->heavyweightCreations & (impl->heavyweightCreations - 1)) == 0;
-	guard.unlock();
-	if (shouldLog) { logTelemetry(); }
+	if (impl && impl->telemetryEnabled) {
+		impl->cachedBindingHits.fetch_add(1, memory_order_relaxed);
+	}
+#endif
+}
+
+void MVKMetal4TextureViewPool::recordTextureViewRebind() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (impl && impl->telemetryEnabled) {
+		impl->baseRebinds.fetch_add(1, memory_order_relaxed);
+	}
+#endif
+}
+
+void MVKMetal4TextureViewPool::recordTextureViewBypass(MVKMetal4TextureViewClass viewClass) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !impl->telemetryEnabled) { return; }
+	impl->bypassedRequests.fetch_add(1, memory_order_relaxed);
+	switch (viewClass) {
+		case MVKMetal4TextureViewClass::DirectBase:
+			impl->directBaseBindings.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::MissingBacking:
+			impl->missingBackingBypasses.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::MultiPlane:
+			impl->multiPlaneBypasses.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::TwoDOfThreeD:
+			impl->twoDOfThreeDBypasses.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::BlockTexelAlias:
+			impl->blockTexelAliasBypasses.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::PoolFailure:
+			impl->poolFailureBypasses.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::Eligible:
+			break;
+	}
+#else
+	(void)viewClass;
+#endif
+}
+
+void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(
+	uint64_t durationNs,
+	MVKMetal4TextureViewClass viewClass,
+	VkImageUsageFlags usage) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !impl->telemetryEnabled) { return; }
+	uint64_t creationCount = impl->heavyweightCreations.fetch_add(1, memory_order_relaxed) + 1;
+	impl->heavyweightCreationNs.fetch_add(durationNs, memory_order_relaxed);
+	uint64_t recordedMaximum = impl->maxHeavyweightCreationNs.load(memory_order_relaxed);
+	while (recordedMaximum < durationNs &&
+		   !impl->maxHeavyweightCreationNs.compare_exchange_weak(
+			   recordedMaximum, durationNs, memory_order_relaxed, memory_order_relaxed)) {}
+
+	const VkImageUsageFlags attachmentUsage =
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+		VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+	switch (viewClass) {
+		case MVKMetal4TextureViewClass::Eligible:
+			if (mvkIsAnyFlagEnabled(usage, attachmentUsage)) {
+				impl->heavyEligibleAttachmentCapable.fetch_add(1, memory_order_relaxed);
+			} else {
+				impl->heavyEligibleShaderOnly.fetch_add(1, memory_order_relaxed);
+			}
+			break;
+		case MVKMetal4TextureViewClass::MultiPlane:
+			impl->heavyMultiPlane.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::TwoDOfThreeD:
+			impl->heavyTwoDOfThreeD.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::BlockTexelAlias:
+			impl->heavyBlockTexelAlias.fetch_add(1, memory_order_relaxed);
+			break;
+		case MVKMetal4TextureViewClass::DirectBase:
+		case MVKMetal4TextureViewClass::MissingBacking:
+		case MVKMetal4TextureViewClass::PoolFailure:
+			impl->heavyOther.fetch_add(1, memory_order_relaxed);
+			break;
+	}
+	if ((creationCount & (creationCount - 1)) == 0) { logTelemetry(); }
 #else
 	(void)durationNs;
+	(void)viewClass;
+	(void)usage;
 #endif
 }
 

@@ -657,6 +657,17 @@ public:
 #pragma mark -
 #pragma mark MVKMetal4TextureViewPool
 
+/** Classifies whether and why an image view can use a lightweight pool slot. */
+enum class MVKMetal4TextureViewClass : uint8_t {
+	Eligible,
+	DirectBase,
+	MissingBacking,
+	MultiPlane,
+	TwoDOfThreeD,
+	BlockTexelAlias,
+	PoolFailure,
+};
+
 /** Identifies one stable slot in a device-owned Metal 4 texture-view pool. */
 struct MVKMetal4TextureViewHandle {
 	uint32_t chunkIndex = UINT32_MAX;
@@ -680,8 +691,13 @@ public:
 											MTLTextureViewDescriptor* descriptor);
 #endif
 	void releaseTextureView(MVKMetal4TextureViewHandle handle);
-	void recordTextureViewBypass();
-	void recordHeavyweightTextureViewCreation(uint64_t durationNs);
+	void recordTextureViewLookup();
+	void recordTextureViewCacheHit();
+	void recordTextureViewRebind();
+	void recordTextureViewBypass(MVKMetal4TextureViewClass viewClass);
+	void recordHeavyweightTextureViewCreation(uint64_t durationNs,
+											  MVKMetal4TextureViewClass viewClass,
+											  VkImageUsageFlags usage);
 
 	struct Impl;
 

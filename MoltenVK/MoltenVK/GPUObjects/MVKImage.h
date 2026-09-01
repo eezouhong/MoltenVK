@@ -573,6 +573,7 @@ protected:
     id<MTLTexture> newMTLTexture();
     id<MTLTexture> newMTLTextureFromBaseMTLTexture(id<MTLTexture> baseMTLTexture);
     bool matchesMTLTextureViewBase(id<MTLTexture> mtlTexture);
+	MVKMetal4TextureViewClass getMetal4TextureViewClass();
 	bool isMetal4TextureViewPoolEligible();
     VkResult initSwizzledMTLPixelFormat(const VkImageViewCreateInfo* pCreateInfo);
     MVKImageViewPlane(MVKImageView* imageView, uint8_t planeIndex, MTLPixelFormat mtlPixFmt, const VkImageViewCreateInfo* pCreateInfo);

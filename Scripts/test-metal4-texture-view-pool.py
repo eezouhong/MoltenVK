@@ -105,6 +105,8 @@ def test_source_contract() -> None:
     require(device_h, "class MVKMetal4TextureViewPool", DEVICE_H)
     require(device_h, "MVKMetal4TextureViewHandle acquireTextureView", DEVICE_H)
     require(device_h, "void releaseTextureView", DEVICE_H)
+    require(device_h, "bool isTelemetryEnabled() const", DEVICE_H)
+    require(device_h, "void logTelemetryIfDue()", DEVICE_H)
     require(device_h, "recordTextureViewLookup", DEVICE_H)
     require(device_h, "recordTextureViewCacheHit", DEVICE_H)
     require(device_h, "recordTextureViewRebind", DEVICE_H)
@@ -118,6 +120,27 @@ def test_source_contract() -> None:
     require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", DEVICE_MM)
     require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", DEVICE_MM)
     require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
+    require(device_mm, "kMetal4TextureViewPoolTelemetryIntervalNs", DEVICE_MM)
+    require_pattern(
+        device_mm,
+        r"~MVKMetal4TextureViewPool\(\)\s*\{\s*logTelemetryIfDue\(\)",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"if\s*\(telemetryEnabled\)\s*\{[\s\S]*?Metal 4 texture view pool %s with %zu-slot chunks",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"uint64_t startNs\s*=\s*telemetryEnabled\s*\?\s*mvkGetTimestamp\(\)\s*:\s*0",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"shouldLog[\s\S]*?logTelemetryIfDue\(\)",
+        DEVICE_MM,
+    )
     for counter in (
         "bindingLookups",
         "cachedBindingHits",
@@ -151,9 +174,28 @@ def test_source_contract() -> None:
     )
     if not bypass_body or "impl->lock" in bypass_body.group(0):
         raise AssertionError(f"{DEVICE_MM}: high-frequency bypass telemetry must not take the pool mutex")
+    for helper in (
+        "recordTextureViewLookup",
+        "recordTextureViewCacheHit",
+        "recordTextureViewRebind",
+        "recordTextureViewBypass",
+        "recordHeavyweightTextureViewCreation",
+    ):
+        helper_body = re.search(
+            rf"(?:void|bool) MVKMetal4TextureViewPool::{helper}\([\s\S]*?\n#endif\n\}}",
+            device_mm,
+            re.DOTALL,
+        )
+        if not helper_body:
+            raise AssertionError(f"{DEVICE_MM}: cannot inspect telemetry helper: {helper}")
+        require(helper_body.group(0), "_impl.get()", DEVICE_MM)
+        if "auto impl = _impl;" in helper_body.group(0):
+            raise AssertionError(
+                f"{DEVICE_MM}: telemetry-off helper copies shared_ptr: {helper}"
+            )
     require_pattern(
         device_mm,
-        r"recordHeavyweightTextureViewCreation[\s\S]*?creationCount\s*&\s*\(creationCount\s*-\s*1\)[\s\S]*?logTelemetry\(\)",
+        r"recordHeavyweightTextureViewCreation[\s\S]*?creationCount\s*&\s*\(creationCount\s*-\s*1\)[\s\S]*?logTelemetryIfDue\(\)",
         DEVICE_MM,
     )
     require_pattern(
@@ -181,6 +223,21 @@ def test_source_contract() -> None:
     require_pattern(
         image_mm,
         r"recordHeavyweightTextureViewCreation\([^;]*getMetal4TextureViewClass\(\)[^;]*_imageView->_usage",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"bool telemetryEnabled\s*=\s*pool\s*&&\s*pool->isTelemetryEnabled\(\)",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"uint64_t textureViewStart\s*=\s*telemetryEnabled\s*\?\s*mvkGetTimestamp\(\)\s*:\s*0",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"if\s*\(telemetryEnabled\)\s*\{[\s\S]*?recordHeavyweightTextureViewCreation",
         IMAGE_MM,
     )
 

@@ -69,6 +69,8 @@ static const uint32_t kMaxTimeDomains = 2;
 #pragma mark -
 #pragma mark MVKMetal4TextureViewPool
 
+static constexpr uint64_t kMetal4TextureViewPoolTelemetryIntervalNs = NSEC_PER_SEC;
+
 struct MVKMetal4TextureViewPool::Impl {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	MVKDevice* device = nullptr;
@@ -192,28 +194,31 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 		}
 		if (tombstone) { tombstone.label = @"MoltenVK Metal 4 Texture View Pool Sentinel"; }
 
-		device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-						  "Metal 4 texture view pool %s with %zu-slot chunks and a %zu-slot maximum.",
-						  enabled ? "enabled" : "disabled for A/B telemetry",
-						  chunkSize,
-						  maximumSlots);
+		if (telemetryEnabled) {
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 texture view pool %s with %zu-slot chunks and a %zu-slot maximum.",
+							  enabled ? "enabled" : "disabled for A/B telemetry",
+							  chunkSize,
+							  maximumSlots);
+		}
 		return new MVKMetal4TextureViewPool(make_shared<Impl>(
 			device, mtlDevice, tombstone, chunkSize, maximumSlots,
-			enabled, telemetryEnabled));
+			enabled, telemetryEnabled), telemetryEnabled);
 	}
 #endif
 	return nullptr;
 }
 
 MVKMetal4TextureViewPool::~MVKMetal4TextureViewPool() {
-	logTelemetry();
+	logTelemetryIfDue();
 	_impl.reset();
 }
 
 void MVKMetal4TextureViewPool::logTelemetry() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (impl && impl->telemetryEnabled) {
+	if (!_telemetryEnabled) { return; }
+	auto* impl = _impl.get();
+	if (impl) {
 		unique_lock<mutex> guard(impl->lock);
 		uint64_t assignments = impl->assignments;
 		uint64_t eligibleRequests = impl->eligibleRequests;
@@ -287,9 +292,25 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 #endif
 }
 
+void MVKMetal4TextureViewPool::logTelemetryIfDue() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (!_telemetryEnabled) { return; }
+	uint64_t now = mvkGetTimestamp();
+	uint64_t last = _lastTelemetryLogTimestamp.load(memory_order_relaxed);
+	if (last && mvkGetElapsedNanoseconds(last) < kMetal4TextureViewPoolTelemetryIntervalNs) {
+		return;
+	}
+	if (!_lastTelemetryLogTimestamp.compare_exchange_strong(
+			last, now, memory_order_relaxed, memory_order_relaxed)) {
+		return;
+	}
+	logTelemetry();
+#endif
+}
+
 bool MVKMetal4TextureViewPool::isEnabled() const {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
+	auto* impl = _impl.get();
 	return impl && impl->enabled;
 #else
 	return false;
@@ -300,12 +321,13 @@ bool MVKMetal4TextureViewPool::isEnabled() const {
 MVKMetal4TextureViewHandle MVKMetal4TextureViewPool::acquireTextureView(
 	id<MTLTexture> texture,
 	MTLTextureViewDescriptor* descriptor) {
-	auto impl = _impl;
+	auto* impl = _impl.get();
 	if (!impl || !texture || !descriptor) { return {}; }
 
-	uint64_t startNs = mvkGetTimestamp();
+	bool telemetryEnabled = _telemetryEnabled;
+	uint64_t startNs = telemetryEnabled ? mvkGetTimestamp() : 0;
 	unique_lock<mutex> guard(impl->lock);
-	impl->eligibleRequests++;
+	if (telemetryEnabled) { impl->eligibleRequests++; }
 	MVKMetal4TextureViewHandle handle;
 	bool reused = false;
 	if (!impl->freeHandles.empty()) {
@@ -314,7 +336,7 @@ MVKMetal4TextureViewHandle MVKMetal4TextureViewPool::acquireTextureView(
 		reused = true;
 	} else {
 		if (impl->createdSlots >= impl->maximumSlots) {
-			impl->fallbacks++;
+			if (telemetryEnabled) { impl->fallbacks++; }
 			return {};
 		}
 		size_t linearIndex = impl->createdSlots;
@@ -330,7 +352,7 @@ MVKMetal4TextureViewHandle MVKMetal4TextureViewPool::acquireTextureView(
 				[impl->mtlDevice newTextureViewPoolWithDescriptor:poolDescriptor error:&error];
 			[poolDescriptor release];
 			if (!chunk) {
-				impl->fallbacks++;
+				if (telemetryEnabled) { impl->fallbacks++; }
 				return {};
 			}
 			impl->chunks.push_back(chunk);
@@ -349,29 +371,32 @@ MVKMetal4TextureViewHandle MVKMetal4TextureViewPool::acquireTextureView(
 		} else {
 			impl->createdSlots--;
 		}
-		impl->fallbacks++;
+		if (telemetryEnabled) { impl->fallbacks++; }
 		return {};
 	}
 
-	uint64_t durationNs = mvkGetElapsedNanoseconds(startNs);
-	impl->assignments++;
-	if (reused) { impl->reuses++; }
-	impl->liveSlots++;
-	impl->highWaterSlots = max(impl->highWaterSlots, impl->liveSlots);
-	impl->totalAssignmentNs += durationNs;
-	impl->maxAssignmentNs = max(impl->maxAssignmentNs, durationNs);
-	bool shouldLog = impl->telemetryEnabled &&
-		(impl->assignments & (impl->assignments - 1)) == 0;
+	bool shouldLog = false;
+	if (telemetryEnabled) {
+		uint64_t durationNs = mvkGetElapsedNanoseconds(startNs);
+		impl->assignments++;
+		if (reused) { impl->reuses++; }
+		impl->liveSlots++;
+		impl->highWaterSlots = max(impl->highWaterSlots, impl->liveSlots);
+		impl->totalAssignmentNs += durationNs;
+		impl->maxAssignmentNs = max(impl->maxAssignmentNs, durationNs);
+		shouldLog = (impl->assignments & (impl->assignments - 1)) == 0;
+	}
 	guard.unlock();
-	if (shouldLog) { logTelemetry(); }
+	if (shouldLog) { logTelemetryIfDue(); }
 	return handle;
 }
 #endif
 
 void MVKMetal4TextureViewPool::releaseTextureView(MVKMetal4TextureViewHandle handle) {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
+	auto* impl = _impl.get();
 	if (!impl || !handle.isValid()) { return; }
+	bool telemetryEnabled = _telemetryEnabled;
 	lock_guard<mutex> guard(impl->lock);
 	if (handle.chunkIndex >= impl->chunks.size() ||
 		handle.slotIndex >= impl->chunkSize) {
@@ -383,10 +408,12 @@ void MVKMetal4TextureViewPool::releaseTextureView(MVKMetal4TextureViewHandle han
 											atIndex:handle.slotIndex];
 		reset = true;
 	} @catch (NSException*) {
-		impl->resetFailures++;
+		if (telemetryEnabled) { impl->resetFailures++; }
 	}
-	if (impl->liveSlots) { impl->liveSlots--; }
-	impl->releases++;
+	if (telemetryEnabled) {
+		if (impl->liveSlots) { impl->liveSlots--; }
+		impl->releases++;
+	}
 	if (reset) {
 		handle.resourceID = {};
 		impl->freeHandles.push_back(handle);
@@ -398,8 +425,8 @@ void MVKMetal4TextureViewPool::releaseTextureView(MVKMetal4TextureViewHandle han
 
 void MVKMetal4TextureViewPool::recordTextureViewLookup() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (impl && impl->telemetryEnabled) {
+	auto* impl = _impl.get();
+	if (_telemetryEnabled && impl) {
 		impl->bindingLookups.fetch_add(1, memory_order_relaxed);
 	}
 #endif
@@ -407,8 +434,8 @@ void MVKMetal4TextureViewPool::recordTextureViewLookup() {
 
 void MVKMetal4TextureViewPool::recordTextureViewCacheHit() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (impl && impl->telemetryEnabled) {
+	auto* impl = _impl.get();
+	if (_telemetryEnabled && impl) {
 		impl->cachedBindingHits.fetch_add(1, memory_order_relaxed);
 	}
 #endif
@@ -416,8 +443,8 @@ void MVKMetal4TextureViewPool::recordTextureViewCacheHit() {
 
 void MVKMetal4TextureViewPool::recordTextureViewRebind() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (impl && impl->telemetryEnabled) {
+	auto* impl = _impl.get();
+	if (_telemetryEnabled && impl) {
 		impl->baseRebinds.fetch_add(1, memory_order_relaxed);
 	}
 #endif
@@ -425,8 +452,9 @@ void MVKMetal4TextureViewPool::recordTextureViewRebind() {
 
 void MVKMetal4TextureViewPool::recordTextureViewBypass(MVKMetal4TextureViewClass viewClass) {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (!impl || !impl->telemetryEnabled) { return; }
+	if (!_telemetryEnabled) { return; }
+	auto* impl = _impl.get();
+	if (!impl) { return; }
 	impl->bypassedRequests.fetch_add(1, memory_order_relaxed);
 	switch (viewClass) {
 		case MVKMetal4TextureViewClass::DirectBase:
@@ -460,8 +488,9 @@ void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(
 	MVKMetal4TextureViewClass viewClass,
 	VkImageUsageFlags usage) {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	auto impl = _impl;
-	if (!impl || !impl->telemetryEnabled) { return; }
+	if (!_telemetryEnabled) { return; }
+	auto* impl = _impl.get();
+	if (!impl) { return; }
 	uint64_t creationCount = impl->heavyweightCreations.fetch_add(1, memory_order_relaxed) + 1;
 	impl->heavyweightCreationNs.fetch_add(durationNs, memory_order_relaxed);
 	uint64_t recordedMaximum = impl->maxHeavyweightCreationNs.load(memory_order_relaxed);
@@ -500,7 +529,7 @@ void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(
 			impl->heavyOther.fetch_add(1, memory_order_relaxed);
 			break;
 	}
-	if ((creationCount & (creationCount - 1)) == 0) { logTelemetry(); }
+	if ((creationCount & (creationCount - 1)) == 0) { logTelemetryIfDue(); }
 #else
 	(void)durationNs;
 	(void)viewClass;

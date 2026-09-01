@@ -1928,17 +1928,18 @@ bool MVKImageViewPlane::isMetal4TextureViewPoolEligible() {
 MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
 	MVKMetal4TextureViewPool* pool = getDevice()->getMetal4TextureViewPool();
 	bool poolEnabled = pool && pool->isEnabled();
-	if (poolEnabled) { pool->recordTextureViewLookup(); }
+	bool telemetryEnabled = pool && pool->isTelemetryEnabled();
+	if (poolEnabled && telemetryEnabled) { pool->recordTextureViewLookup(); }
 	MVKMetal4TextureViewClass viewClass = getMetal4TextureViewClass();
 	id<MTLTexture> baseMTLTexture = _imageView->_image
 		? _imageView->_image->getMTLTexture(_planeIndex)
 		: nil;
 	if (!baseMTLTexture) {
-		if (poolEnabled) { pool->recordTextureViewBypass(MVKMetal4TextureViewClass::MissingBacking); }
+		if (telemetryEnabled) { pool->recordTextureViewBypass(MVKMetal4TextureViewClass::MissingBacking); }
 		return {};
 	}
 	if (viewClass == MVKMetal4TextureViewClass::DirectBase) {
-		if (poolEnabled) { pool->recordTextureViewBypass(viewClass); }
+		if (telemetryEnabled) { pool->recordTextureViewBypass(viewClass); }
 		return { baseMTLTexture.gpuResourceID, baseMTLTexture };
 	}
 
@@ -1946,11 +1947,11 @@ MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
 	if (poolEnabled && viewClass == MVKMetal4TextureViewClass::Eligible) {
 		lock_guard<mutex> lock(_imageView->_lock);
 		if (_metal4TextureViewHandle.isValid() && _metal4TextureViewBase == baseMTLTexture) {
-			pool->recordTextureViewCacheHit();
+			if (telemetryEnabled) { pool->recordTextureViewCacheHit(); }
 			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
 		if (_metal4TextureViewHandle.isValid()) {
-			pool->recordTextureViewRebind();
+			if (telemetryEnabled) { pool->recordTextureViewRebind(); }
 			pool->releaseTextureView(_metal4TextureViewHandle);
 			_metal4TextureViewHandle = {};
 			[_metal4TextureViewBase release];
@@ -1975,8 +1976,8 @@ MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
 			_metal4TextureViewBase = [baseMTLTexture retain];
 			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
-		pool->recordTextureViewBypass(MVKMetal4TextureViewClass::PoolFailure);
-	} else if (poolEnabled) {
+		if (telemetryEnabled) { pool->recordTextureViewBypass(MVKMetal4TextureViewClass::PoolFailure); }
+	} else if (telemetryEnabled) {
 		pool->recordTextureViewBypass(viewClass);
 	}
 #endif
@@ -2086,7 +2087,9 @@ id<MTLTexture> MVKImageViewPlane::newMTLTextureFromBaseMTLTexture(id<MTLTexture>
         mtlTex = aliasTex;
     }
 
-	uint64_t textureViewStart = mvkGetTimestamp();
+	auto* textureViewPool = getDevice()->getMetal4TextureViewPool();
+	bool telemetryEnabled = textureViewPool && textureViewPool->isTelemetryEnabled();
+	uint64_t textureViewStart = telemetryEnabled ? mvkGetTimestamp() : 0;
 	id<MTLTexture> texView = nil;
     if (_useNativeSwizzle) {
         texView = [mtlTex newTextureViewWithPixelFormat: _mtlPixFmt
@@ -2100,10 +2103,10 @@ id<MTLTexture> MVKImageViewPlane::newMTLTextureFromBaseMTLTexture(id<MTLTexture>
                                                  levels: levelRange
                                                  slices: sliceRange];    // retained
 	}
-	if (auto* pool = getDevice()->getMetal4TextureViewPool()) {
-		pool->recordHeavyweightTextureViewCreation(mvkGetElapsedNanoseconds(textureViewStart),
-											  getMetal4TextureViewClass(),
-											  _imageView->_usage);
+	if (telemetryEnabled) {
+		textureViewPool->recordHeavyweightTextureViewCreation(mvkGetElapsedNanoseconds(textureViewStart),
+													 getMetal4TextureViewClass(),
+													 _imageView->_usage);
 	}
 	[aliasTex release];
     return texView;

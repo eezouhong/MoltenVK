@@ -684,7 +684,9 @@ public:
 	static MVKMetal4TextureViewPool* create(MVKDevice* device);
 	~MVKMetal4TextureViewPool();
 	void logTelemetry();
+	void logTelemetryIfDue();
 	bool isEnabled() const;
+	bool isTelemetryEnabled() const { return _telemetryEnabled; }
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	MVKMetal4TextureViewHandle acquireTextureView(id<MTLTexture> texture,
@@ -702,8 +704,12 @@ public:
 	struct Impl;
 
 private:
-	explicit MVKMetal4TextureViewPool(std::shared_ptr<Impl> impl) : _impl(impl) {}
+	explicit MVKMetal4TextureViewPool(std::shared_ptr<Impl> impl, bool telemetryEnabled) :
+		_impl(std::move(impl)),
+		_telemetryEnabled(telemetryEnabled) {}
 	std::shared_ptr<Impl> _impl;
+	std::atomic<uint64_t> _lastTelemetryLogTimestamp = 0;
+	bool _telemetryEnabled;
 };
 
 /** Represents a Vulkan logical GPU device, associated with a physical device. */

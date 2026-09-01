@@ -704,11 +704,17 @@ public:
 	struct Impl;
 
 private:
+	bool hasUnloggedTelemetry() const;
 	explicit MVKMetal4TextureViewPool(std::shared_ptr<Impl> impl, bool telemetryEnabled) :
 		_impl(std::move(impl)),
 		_telemetryEnabled(telemetryEnabled) {}
 	std::shared_ptr<Impl> _impl;
 	std::atomic<uint64_t> _lastTelemetryLogTimestamp = 0;
+	std::atomic<uint64_t> _lastLoggedBindingLookups = 0;
+	std::atomic<uint64_t> _lastLoggedHeavyweightCreations = 0;
+	std::atomic<uint64_t> _lastLoggedAssignments = 0;
+	std::atomic<uint64_t> _lastLoggedReleases = 0;
+	std::atomic<uint64_t> _lastLoggedResetFailures = 0;
 	bool _telemetryEnabled;
 };
 

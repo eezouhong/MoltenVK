@@ -210,7 +210,7 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 }
 
 MVKMetal4TextureViewPool::~MVKMetal4TextureViewPool() {
-	logTelemetryIfDue();
+	if (hasUnloggedTelemetry()) { logTelemetry(); }
 	_impl.reset();
 }
 
@@ -288,6 +288,11 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 			highWaterSlots,
 			static_cast<double>(totalAssignmentNs) / 1e6,
 			static_cast<double>(maxAssignmentNs) / 1e6);
+		_lastLoggedBindingLookups.store(bindingLookups, memory_order_relaxed);
+		_lastLoggedHeavyweightCreations.store(heavyweightCreations, memory_order_relaxed);
+		_lastLoggedAssignments.store(assignments, memory_order_relaxed);
+		_lastLoggedReleases.store(releases, memory_order_relaxed);
+		_lastLoggedResetFailures.store(resetFailures, memory_order_relaxed);
 	}
 #endif
 }
@@ -305,6 +310,24 @@ void MVKMetal4TextureViewPool::logTelemetryIfDue() {
 		return;
 	}
 	logTelemetry();
+#endif
+}
+
+bool MVKMetal4TextureViewPool::hasUnloggedTelemetry() const {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (!_telemetryEnabled) { return false; }
+	auto* impl = _impl.get();
+	if (!impl) { return false; }
+	uint64_t bindingLookups = impl->bindingLookups.load(memory_order_relaxed);
+	uint64_t heavyweightCreations = impl->heavyweightCreations.load(memory_order_relaxed);
+	lock_guard<mutex> guard(impl->lock);
+	return bindingLookups != _lastLoggedBindingLookups.load(memory_order_relaxed) ||
+		heavyweightCreations != _lastLoggedHeavyweightCreations.load(memory_order_relaxed) ||
+		impl->assignments != _lastLoggedAssignments.load(memory_order_relaxed) ||
+		impl->releases != _lastLoggedReleases.load(memory_order_relaxed) ||
+		impl->resetFailures != _lastLoggedResetFailures.load(memory_order_relaxed);
+#else
+	return false;
 #endif
 }
 

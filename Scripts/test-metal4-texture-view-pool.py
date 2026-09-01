@@ -107,6 +107,7 @@ def test_source_contract() -> None:
     require(device_h, "void releaseTextureView", DEVICE_H)
     require(device_h, "bool isTelemetryEnabled() const", DEVICE_H)
     require(device_h, "void logTelemetryIfDue()", DEVICE_H)
+    require(device_h, "bool hasUnloggedTelemetry() const", DEVICE_H)
     require(device_h, "recordTextureViewLookup", DEVICE_H)
     require(device_h, "recordTextureViewCacheHit", DEVICE_H)
     require(device_h, "recordTextureViewRebind", DEVICE_H)
@@ -123,9 +124,18 @@ def test_source_contract() -> None:
     require(device_mm, "kMetal4TextureViewPoolTelemetryIntervalNs", DEVICE_MM)
     require_pattern(
         device_mm,
-        r"~MVKMetal4TextureViewPool\(\)\s*\{\s*logTelemetryIfDue\(\)",
+        r"~MVKMetal4TextureViewPool\(\)\s*\{\s*if\s*\(hasUnloggedTelemetry\(\)\)\s*\{\s*logTelemetry\(\)",
         DEVICE_MM,
     )
+    for last_counter in (
+        "_lastLoggedBindingLookups",
+        "_lastLoggedHeavyweightCreations",
+        "_lastLoggedAssignments",
+        "_lastLoggedReleases",
+        "_lastLoggedResetFailures",
+    ):
+        require(device_h, last_counter, DEVICE_H)
+        require(device_mm, last_counter, DEVICE_MM)
     require_pattern(
         device_mm,
         r"if\s*\(telemetryEnabled\)\s*\{[\s\S]*?Metal 4 texture view pool %s with %zu-slot chunks",

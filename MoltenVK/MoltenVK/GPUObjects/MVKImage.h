@@ -542,6 +542,11 @@ public:
 #pragma mark -
 #pragma mark MVKImageViewPlane
 
+struct MVKMetal4TextureViewBinding {
+	MTLResourceID resourceID = {};
+	id<MTLTexture> residencyTexture = nil;
+};
+
 class MVKImageViewPlane : public MVKBaseDeviceObject {
 
 	/** Returns the Vulkan API opaque object controlling this object. */
@@ -551,7 +556,11 @@ public:
     /** Returns the Metal texture underlying this image view. */
     id<MTLTexture> getMTLTexture();
 
+	/** Atomically resolves the GPU resource ID and the texture that owns its storage. */
+	MVKMetal4TextureViewBinding getMetal4TextureViewBinding();
+
     void releaseMTLTexture();
+	void releaseMetal4TextureView();
 
 	/** Returns the packed component swizzle of this image view. */
 	uint32_t getPackedSwizzle() { return _useShaderSwizzle ? mvkPackSwizzle(_componentSwizzle) : 0; }
@@ -564,12 +573,16 @@ protected:
     id<MTLTexture> newMTLTexture();
     id<MTLTexture> newMTLTextureFromBaseMTLTexture(id<MTLTexture> baseMTLTexture);
     bool matchesMTLTextureViewBase(id<MTLTexture> mtlTexture);
+	MVKMetal4TextureViewClass getMetal4TextureViewClass();
+	bool isMetal4TextureViewPoolEligible();
     VkResult initSwizzledMTLPixelFormat(const VkImageViewCreateInfo* pCreateInfo);
     MVKImageViewPlane(MVKImageView* imageView, uint8_t planeIndex, MTLPixelFormat mtlPixFmt, const VkImageViewCreateInfo* pCreateInfo);
 
     friend MVKImageView;
-    MVKImageView* _imageView;
+	MVKImageView* _imageView;
 	id<MTLTexture> _mtlTexture;
+	id<MTLTexture> _metal4TextureViewBase = nil;
+	MVKMetal4TextureViewHandle _metal4TextureViewHandle;
 	VkComponentMapping _componentSwizzle;
     MTLPixelFormat _mtlPixFmt;
 	uint8_t _planeIndex;
@@ -603,6 +616,11 @@ public:
 
 	/** Returns the Metal texture underlying this image view.  */
 	id<MTLTexture> getMTLTexture(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMTLTexture() : nil; }	// Guard against destroyed instance retained in a descriptor.
+
+	/** Atomically resolves the GPU resource ID and the texture that owns its storage. */
+	MVKMetal4TextureViewBinding getMetal4TextureViewBinding(uint8_t planeIndex = 0) {
+		return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewBinding() : MVKMetal4TextureViewBinding{};
+	}
 
 	/** Returns the Metal pixel format of this image view. */
 	MTLPixelFormat getMTLPixelFormat(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->_mtlPixFmt : MTLPixelFormatInvalid; }	// Guard against destroyed instance retained in a descriptor.

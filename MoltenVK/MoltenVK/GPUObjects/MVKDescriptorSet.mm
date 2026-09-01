@@ -888,6 +888,40 @@ static id<MTLTexture> getTexture(const void* src, MVKDescriptorUpdateSourceType 
 	}
 }
 
+/** Returns a texture resource ID, preferring a lightweight Metal 4 pooled view. */
+static MTLResourceID getTextureResourceID(const void* src,
+										  MVKDescriptorUpdateSourceType type,
+										  const MVKMetal4TextureViewBinding* pooledBinding) {
+	switch (type) {
+		case MVKDescriptorUpdateSourceType::Image: {
+			auto* img = reinterpret_cast<MVKImageView*>(static_cast<const VkDescriptorImageInfo*>(src)->imageView);
+			if (!img) { return {}; }
+			if (pooledBinding) { return pooledBinding->resourceID; }
+			id<MTLTexture> texture = img->getMTLTexture();
+			return texture ? texture.gpuResourceID : MTLResourceID{};
+		}
+		case MVKDescriptorUpdateSourceType::TexelBuffer: {
+			auto* img = *reinterpret_cast<MVKBufferView*const*>(src);
+			id<MTLTexture> texture = img ? img->getMTLTexture() : nil;
+			return texture ? texture.gpuResourceID : MTLResourceID{};
+		}
+		default:
+			assert(0);
+			return {};
+	}
+}
+
+static id<MTLTexture> getImageTextureForCPUStorage(const MVKDescriptorSetLayout* layout,
+													MVKImageView* imageView,
+													uint8_t planeIndex,
+													const MVKMetal4TextureViewBinding* pooledBinding) {
+	if (!imageView) { return nil; }
+	if (layout->argBufMode() == MVKArgumentBufferMode::Metal3 && pooledBinding && planeIndex == 0) {
+		return pooledBinding->residencyTexture;
+	}
+	return imageView->getMTLTexture(planeIndex);
+}
+
 /** Either a pointer, for MTLBuffers, or MTLResourceID, for samplers and textures. */
 union MVKGPUResource {
 	uint64_t gpuAddress;
@@ -901,10 +935,12 @@ template <MVKArgumentBufferMode Layout> struct MVKArgBufEncoder;
 /** Argument buffer encoder for Metal 3 encoding */
 template <> struct MVKArgBufEncoder<MVKArgumentBufferMode::Metal3> {
 	MVKGPUResource* dst;
-	MVKArgBufEncoder(id<MTLArgumentEncoder> enc, char* base): dst(reinterpret_cast<MVKGPUResource*>(base)) {}
+	MVKArgBufEncoder(id<MTLArgumentEncoder> enc, char* base, bool useTextureViewPool):
+		dst(reinterpret_cast<MVKGPUResource*>(base)) { (void)useTextureViewPool; }
 	void advance(size_t stride) { dst = reinterpret_cast<MVKGPUResource*>(reinterpret_cast<char*>(dst) + stride); }
 	void* constantData(size_t index) { return reinterpret_cast<char*>(dst) + index; }
 	void setTexture(id<MTLTexture> tex,       size_t index = 0) { dst[index].resource = tex.gpuResourceID; }
+	void setTextureResourceID(MTLResourceID resourceID, size_t index = 0) { dst[index].resource = resourceID; }
 	void setSampler(id<MTLSamplerState> samp, size_t index = 0) { dst[index].resource = samp.gpuResourceID; }
 	void setBuffer(id<MTLBuffer> buf, uint64_t offset, size_t index = 0) {
 		dst[index].gpuAddress = buf.gpuAddress + offset;
@@ -926,7 +962,9 @@ template <> struct MVKArgBufEncoder<MVKArgumentBufferMode::Metal3> {
 template <> struct MVKArgBufEncoder<MVKArgumentBufferMode::ArgEncoder> {
 	id<MTLArgumentEncoder> enc;
 	size_t base;
-	MVKArgBufEncoder(id<MTLArgumentEncoder> enc_, char* base): enc(enc_), base(0) {}
+	MVKArgBufEncoder(id<MTLArgumentEncoder> enc_, char* base, bool useTextureViewPool): enc(enc_), base(0) {
+		(void)useTextureViewPool;
+	}
 	void advance(size_t stride) { base += stride; }
 	void* constantData(uint32_t index) { return [enc constantDataAtIndex:base + index]; }
 	void setTexture(id<MTLTexture> tex,       size_t index = 0) { [enc setTexture:tex atIndex:base + index]; }
@@ -967,11 +1005,12 @@ static void writeDescriptorSetGPUBuffer(
 	const MVKDescriptorBinding& binding,
 	id<MTLArgumentEncoder> enc_, char* base, const uint32_t* auxOffsets,
 	const void* src, size_t srcStride, MVKDescriptorUpdateSourceType srcType,
-	uint32_t start, uint32_t count)
+	uint32_t start, uint32_t count,
+	const MVKMetal4TextureViewBinding* pooledBindings)
 {
 	constexpr size_t dstStride = descriptorGPUStride(ArgBufMode, Layout);
 	size_t startOffset = start * dstStride;
-	MVKArgBufEncoder<ArgBufMode> enc(enc_, base);
+	MVKArgBufEncoder<ArgBufMode> enc(enc_, base, pooledBindings != nullptr);
 	uint32_t baseOffset = ArgBufMode == MVKArgumentBufferMode::ArgEncoder ? binding.argBufID : binding.gpuOffset;
 
 	if (Layout == MVKDescriptorGPULayout::OutlinedData || Layout == MVKDescriptorGPULayout::InlineData) {
@@ -991,7 +1030,11 @@ static void writeDescriptorSetGPUBuffer(
 	for (uint32_t i = 0; i < count; i++) {
 		switch (Layout) {
 			case MVKDescriptorGPULayout::Texture:
-				enc.setTexture(getTexture(src, srcType));
+				if constexpr (ArgBufMode == MVKArgumentBufferMode::Metal3) {
+					enc.setTextureResourceID(getTextureResourceID(src, srcType, pooledBindings ? &pooledBindings[i] : nullptr));
+				} else {
+					enc.setTexture(getTexture(src, srcType));
+				}
 				break;
 
 			case MVKDescriptorGPULayout::Sampler:
@@ -1007,7 +1050,11 @@ static void writeDescriptorSetGPUBuffer(
 
 			case MVKDescriptorGPULayout::TexBufSoA:
 				if (id<MTLTexture> tex = getTexture(src, srcType)) {
-					enc.setTexture(tex);
+					if constexpr (ArgBufMode == MVKArgumentBufferMode::Metal3) {
+						enc.setTextureResourceID(getTextureResourceID(src, srcType, nullptr));
+					} else {
+						enc.setTexture(tex);
+					}
 					enc.setBuffer([tex buffer], [tex bufferOffset], binding.descriptorCount);
 				} else {
 					enc.setNullTexture();
@@ -1018,7 +1065,15 @@ static void writeDescriptorSetGPUBuffer(
 			case MVKDescriptorGPULayout::TexSampSoA: {
 				assert(srcType == MVKDescriptorUpdateSourceType::ImageSampler);
 				auto* info = static_cast<const VkDescriptorImageInfo*>(src);
-				enc.setTexture(reinterpret_cast<MVKImageView*>(info->imageView));
+				if constexpr (ArgBufMode == MVKArgumentBufferMode::Metal3) {
+					if (pooledBindings) {
+						enc.setTextureResourceID(pooledBindings[i].resourceID);
+					} else {
+						enc.setTexture(reinterpret_cast<MVKImageView*>(info->imageView));
+					}
+				} else {
+					enc.setTexture(reinterpret_cast<MVKImageView*>(info->imageView));
+				}
 				if (!binding.hasImmutableSamplers())
 					enc.setSampler(reinterpret_cast<MVKSampler*>(info->sampler), binding.descriptorCount);
 				break;
@@ -1086,13 +1141,14 @@ static void writeDescriptorSetGPUBuffer(
 	const MVKDescriptorBinding* binding, const MVKDescriptorSet* set,
 	const void* src, size_t srcStride, MVKDescriptorUpdateSourceType srcType,
 	id<MTLArgumentEncoder> enc,
-	uint32_t start, uint32_t count)
+	uint32_t start, uint32_t count,
+	const MVKMetal4TextureViewBinding* pooledBindings = nullptr)
 {
 	char* base = set->gpuBuffer;
 	const uint32_t* auxOffsets = set->auxIndices;
 	if (canUseFastPathUpdate(binding->gpuLayout, ArgBufMode)) {
 		switch (binding->gpuLayout) {
-#define DISPATCH(x) writeDescriptorSetGPUBuffer<ArgBufMode, MVKDescriptorGPULayout::x>(*binding, enc, base, auxOffsets, src, srcStride, srcType, start, count)
+#define DISPATCH(x) writeDescriptorSetGPUBuffer<ArgBufMode, MVKDescriptorGPULayout::x>(*binding, enc, base, auxOffsets, src, srcStride, srcType, start, count, pooledBindings)
 			case MVKDescriptorGPULayout::None:          break;
 			case MVKDescriptorGPULayout::Texture:       DISPATCH(Texture);       break;
 			case MVKDescriptorGPULayout::Sampler:       DISPATCH(Sampler);       break;
@@ -1122,7 +1178,7 @@ static void writeDescriptorSetGPUBuffer(
 		while (true) {
 			uint32_t numWrite = std::min(count, binding->descriptorCount - start);
 			switch (binding->gpuLayout) {
-#define DISPATCH(x) writeDescriptorSetGPUBuffer<ArgBufMode, MVKDescriptorGPULayout::x>(*binding, enc, base, auxOffsets, src, srcStride, srcType, start, numWrite)
+#define DISPATCH(x) writeDescriptorSetGPUBuffer<ArgBufMode, MVKDescriptorGPULayout::x>(*binding, enc, base, auxOffsets, src, srcStride, srcType, start, numWrite, pooledBindings)
 				case MVKDescriptorGPULayout::TexBufSoA:     DISPATCH(TexBufSoA);    break;
 				case MVKDescriptorGPULayout::TexSampSoA:    DISPATCH(TexSampSoA);   break;
 				case MVKDescriptorGPULayout::Tex2SampSoA:   DISPATCH(Tex2SampSoA);  break;
@@ -1147,6 +1203,7 @@ static void writeDescriptorSetGPUBuffer(
 			if (start + count <= binding->descriptorCount)
 				break;
 			src = static_cast<const char*>(src) + numWrite * srcStride;
+			if (pooledBindings) { pooledBindings += numWrite; }
 			count -= numWrite;
 			start = 0;
 			for (advanceBinding(&binding); !binding->descriptorCount; advanceBinding(&binding))
@@ -1161,7 +1218,8 @@ static void writeDescriptorSetCPUBuffer(
 	const MVKDescriptorBinding& binding,
 	char* dst,
 	const void* src, size_t srcStride, MVKDescriptorUpdateSourceType srcType,
-	uint32_t start, uint32_t count)
+	uint32_t start, uint32_t count,
+	const MVKMetal4TextureViewBinding* pooledBindings)
 {
 	MVKSampler*const* immutableSamplers = layout->getImmutableSampler(binding, start);
 	constexpr size_t dstStride = descriptorCPUSize(Layout);
@@ -1182,7 +1240,7 @@ static void writeDescriptorSetCPUBuffer(
 					case MVKDescriptorUpdateSourceType::ImageSampler: {
 						// OneID ImageSampler is image + constexpr sampler
 						auto* img = reinterpret_cast<MVKImageView*>(static_cast<const VkDescriptorImageInfo*>(src)->imageView);
-						*desc = img ? img->getMTLTexture() : nil;
+						*desc = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 						break;
 					}
 					case MVKDescriptorUpdateSourceType::Sampler: {
@@ -1210,10 +1268,10 @@ static void writeDescriptorSetCPUBuffer(
 						if (immutableSamplers) {
 							// Two planes
 							if (img) {
-								id<MTLTexture> tex = img->getMTLTexture(0);
+								id<MTLTexture> tex = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 								desc->a = tex;
 								if (immutableSamplers[i]->isYCBCR())
-									desc->b = img->getMTLTexture(1);
+									desc->b = getImageTextureForCPUStorage(layout, img, 1, pooledBindings ? &pooledBindings[i] : nullptr);
 								else
 									desc->meta.img = { static_cast<uint32_t>([tex height] * [tex bufferBytesPerRow]), img->getPackedSwizzle() };
 							} else {
@@ -1222,14 +1280,14 @@ static void writeDescriptorSetCPUBuffer(
 						} else {
 							// Texture, sampler
 							auto* samp = reinterpret_cast<MVKSampler*>(info->sampler);
-							desc->a = img  ? img->getMTLTexture()       : nil;
+							desc->a = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 							desc->b = samp ? samp->getMTLSamplerState() : nil;
 						}
 						break;
 					}
 					case MVKDescriptorUpdateSourceType::Image:
 						if (auto* img = reinterpret_cast<MVKImageView*>(static_cast<const VkDescriptorImageInfo*>(src)->imageView)) {
-							id<MTLTexture> tex = img->getMTLTexture();
+							id<MTLTexture> tex = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 							desc->a = tex;
 							desc->meta.img = { static_cast<uint32_t>([tex height] * [tex bufferBytesPerRow]), img->getPackedSwizzle() };
 						} else {
@@ -1250,11 +1308,11 @@ static void writeDescriptorSetCPUBuffer(
 				if (immutableSamplers) {
 					// Three planes
 					if (img) {
-						id<MTLTexture> tex = img->getMTLTexture(0);
+						id<MTLTexture> tex = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 						desc->a = tex;
 						if (immutableSamplers[i]->isYCBCR()) {
-							desc->b = img->getMTLTexture(1);
-							desc->c = img->getMTLTexture(2);
+							desc->b = getImageTextureForCPUStorage(layout, img, 1, pooledBindings ? &pooledBindings[i] : nullptr);
+							desc->c = getImageTextureForCPUStorage(layout, img, 2, pooledBindings ? &pooledBindings[i] : nullptr);
 						} else {
 							desc->b = nullptr;
 							desc->meta.img = { static_cast<uint32_t>([tex height] * [tex bufferBytesPerRow]), img->getPackedSwizzle() };
@@ -1266,7 +1324,7 @@ static void writeDescriptorSetCPUBuffer(
 					// Texture, sampler
 					auto* samp = reinterpret_cast<MVKSampler*>(info->sampler);
 					if (img) {
-						id<MTLTexture> tex = img->getMTLTexture();
+						id<MTLTexture> tex = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 						desc->a = tex;
 						desc->meta.img = { static_cast<uint32_t>([tex height] * [tex bufferBytesPerRow]), img->getPackedSwizzle() };
 					} else {
@@ -1298,7 +1356,7 @@ static void writeDescriptorSetCPUBuffer(
 					case MVKDescriptorUpdateSourceType::Image: {
 						auto* img = reinterpret_cast<MVKImageView*>(static_cast<const VkDescriptorImageInfo*>(src)->imageView);
 						if (img) {
-							id<MTLTexture> tex = img->getMTLTexture();
+							id<MTLTexture> tex = getImageTextureForCPUStorage(layout, img, 0, pooledBindings ? &pooledBindings[i] : nullptr);
 							desc->a = tex;
 							desc->b = [tex buffer];
 							desc->offset = [tex bufferOffset];
@@ -1342,12 +1400,13 @@ static void writeDescriptorSetCPUBufferDispatch(
 	const MVKDescriptorBinding& binding,
 	char* dst,
 	const void* src, size_t srcStride, MVKDescriptorUpdateSourceType srcType,
-	uint32_t start, uint32_t count)
+	uint32_t start, uint32_t count,
+	const MVKMetal4TextureViewBinding* pooledBindings)
 {
 	switch (binding.cpuLayout) {
 #define CASE(x) case MVKDescriptorCPULayout::x: \
 			writeDescriptorSetCPUBuffer<MVKDescriptorCPULayout::x>( \
-				layout, binding, dst, src, srcStride, srcType, start, count); \
+				layout, binding, dst, src, srcStride, srcType, start, count, pooledBindings); \
 			break;
 		case MVKDescriptorCPULayout::None: break;
 		CASE(OneID)
@@ -1367,7 +1426,26 @@ static void writeDescriptorSetBinding(
 	uint32_t start, uint32_t count)
 {
 	char* cpuBuffer = set->cpuBuffer + binding->cpuOffset;
-	writeDescriptorSetCPUBufferDispatch(layout, *binding, cpuBuffer, src, stride, type, start, count);
+	auto* textureViewPool = layout->getDevice()->getMetal4TextureViewPool();
+	bool useMetal4TextureViewPool =
+		layout->argBufMode() == MVKArgumentBufferMode::Metal3 &&
+		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA &&
+		textureViewPool && textureViewPool->isEnabled();
+	MVKSmallVector<MVKMetal4TextureViewBinding, 16> pooledBindingStorage;
+	const MVKMetal4TextureViewBinding* pooledBindings = nullptr;
+	if (useMetal4TextureViewPool &&
+		(type == MVKDescriptorUpdateSourceType::Image || type == MVKDescriptorUpdateSourceType::ImageSampler)) {
+		pooledBindingStorage.reserve(count);
+		const char* currentSource = static_cast<const char*>(src);
+		for (uint32_t i = 0; i < count; ++i, currentSource += stride) {
+			auto* info = reinterpret_cast<const VkDescriptorImageInfo*>(currentSource);
+			auto* imageView = reinterpret_cast<MVKImageView*>(info->imageView);
+			pooledBindingStorage.push_back(imageView ? imageView->getMetal4TextureViewBinding()
+												 : MVKMetal4TextureViewBinding{});
+		}
+		pooledBindings = pooledBindingStorage.data();
+	}
+	writeDescriptorSetCPUBufferDispatch(layout, *binding, cpuBuffer, src, stride, type, start, count, pooledBindings);
 	switch (layout->argBufMode()) {
 		case MVKArgumentBufferMode::Off:
 			break; // No GPU buffer
@@ -1375,7 +1453,7 @@ static void writeDescriptorSetBinding(
 			writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::ArgEncoder>(binding, set, src, stride, type, enc, start, count);
 			break;
 		case MVKArgumentBufferMode::Metal3:
-			writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::Metal3    >(binding, set, src, stride, type, enc, start, count);
+			writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::Metal3    >(binding, set, src, stride, type, enc, start, count, pooledBindings);
 			break;
 	}
 }
@@ -1829,7 +1907,7 @@ void mvkPushDescriptorSet(void* dst, MVKDescriptorSetLayout* layout, uint32_t wr
 
 		const MVKDescriptorBinding* binding = layout->getBinding(write.dstBinding);
 		char* target = static_cast<char*>(dst) + binding->cpuOffset;
-		writeDescriptorSetCPUBufferDispatch(layout, *binding, target, src, stride, type, write.dstArrayElement, write.descriptorCount);
+		writeDescriptorSetCPUBufferDispatch(layout, *binding, target, src, stride, type, write.dstArrayElement, write.descriptorCount, nullptr);
 	}
 }
 
@@ -1843,7 +1921,7 @@ void mvkPushDescriptorSetTemplate(void* dst, MVKDescriptorSetLayout* layout, MVK
 		const MVKDescriptorBinding* binding = layout->getBinding(pEntry->dstBinding);
 		MVKDescriptorUpdateSourceType type = getDescriptorUpdateSourceType(pEntry->descriptorType);
 		char* target = static_cast<char*>(dst) + binding->cpuOffset;
-		writeDescriptorSetCPUBufferDispatch(layout, *binding, target, pCurData, pEntry->stride, type, pEntry->dstArrayElement, pEntry->descriptorCount);
+		writeDescriptorSetCPUBufferDispatch(layout, *binding, target, pCurData, pEntry->stride, type, pEntry->dstArrayElement, pEntry->descriptorCount, nullptr);
 	}
 }
 

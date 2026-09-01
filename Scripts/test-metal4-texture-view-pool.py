@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""Static and model acceptance gate for the Metal 4 texture-view pool.
+
+The production implementation is Objective-C++ and needs the Xcode 26 Metal
+SDK. This test locks the ownership, fallback, and descriptor-binding boundary
+in every environment; device A/B remains the runtime source of truth.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEVICE_H = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDevice.h"
+DEVICE_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm"
+IMAGE_H = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKImage.h"
+IMAGE_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKImage.mm"
+DESCRIPTOR_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm"
+
+
+def require(text: str, needle: str, source: Path) -> None:
+    if needle not in text:
+        raise AssertionError(f"{source}: missing required invariant: {needle}")
+
+
+def require_pattern(text: str, pattern: str, source: Path) -> None:
+    if not re.search(pattern, text, re.DOTALL):
+        raise AssertionError(f"{source}: missing required pattern: {pattern}")
+
+
+@dataclass(frozen=True)
+class Handle:
+    chunk: int
+    slot: int
+
+
+class SegmentedPoolModel:
+    def __init__(self, chunk_size: int, maximum_slots: int) -> None:
+        assert chunk_size > 0
+        assert maximum_slots >= chunk_size
+        self.chunk_size = chunk_size
+        self.maximum_slots = maximum_slots
+        self.created_slots = 0
+        self.free: list[Handle] = []
+        self.live: set[Handle] = set()
+
+    def acquire(self) -> Handle | None:
+        if self.free:
+            handle = self.free.pop()
+        elif self.created_slots < self.maximum_slots:
+            linear = self.created_slots
+            self.created_slots += 1
+            handle = Handle(linear // self.chunk_size, linear % self.chunk_size)
+        else:
+            return None
+        assert handle not in self.live
+        self.live.add(handle)
+        return handle
+
+    def release(self, handle: Handle) -> None:
+        assert handle in self.live
+        self.live.remove(handle)
+        self.free.append(handle)
+
+
+def test_segmented_slot_lifetime_model() -> None:
+    pool = SegmentedPoolModel(chunk_size=2, maximum_slots=4)
+    first = pool.acquire()
+    second = pool.acquire()
+    third = pool.acquire()
+    fourth = pool.acquire()
+    assert [first, second, third, fourth] == [
+        Handle(0, 0),
+        Handle(0, 1),
+        Handle(1, 0),
+        Handle(1, 1),
+    ]
+    assert pool.acquire() is None
+
+    assert second is not None
+    pool.release(second)
+    assert pool.acquire() == second
+
+
+def test_source_contract() -> None:
+    device_h = DEVICE_H.read_text()
+    device_mm = DEVICE_MM.read_text()
+    image_h = IMAGE_H.read_text()
+    image_mm = IMAGE_MM.read_text()
+    descriptor_mm = DESCRIPTOR_MM.read_text()
+
+    require(device_h, "struct MVKMetal4TextureViewHandle", DEVICE_H)
+    require(device_h, "enum class MVKMetal4TextureViewClass", DEVICE_H)
+    for view_class in (
+        "DirectBase",
+        "Eligible",
+        "MultiPlane",
+        "TwoDOfThreeD",
+        "BlockTexelAlias",
+    ):
+        require(device_h, view_class, DEVICE_H)
+    require(device_h, "class MVKMetal4TextureViewPool", DEVICE_H)
+    require(device_h, "MVKMetal4TextureViewHandle acquireTextureView", DEVICE_H)
+    require(device_h, "void releaseTextureView", DEVICE_H)
+    require(device_h, "bool isTelemetryEnabled() const", DEVICE_H)
+    require(device_h, "void logTelemetryIfDue()", DEVICE_H)
+    require(device_h, "bool hasUnloggedTelemetry() const", DEVICE_H)
+    require(device_h, "recordTextureViewLookup", DEVICE_H)
+    require(device_h, "recordTextureViewCacheHit", DEVICE_H)
+    require(device_h, "recordTextureViewRebind", DEVICE_H)
+    require(device_h, "MVKMetal4TextureViewPool* getMetal4TextureViewPool()", DEVICE_H)
+
+    require(device_mm, "MTLResourceViewPoolDescriptor", DEVICE_MM)
+    require(device_mm, "newTextureViewPoolWithDescriptor", DEVICE_MM)
+    require(device_mm, "setTextureView:", DEVICE_MM)
+    require(device_mm, "descriptor:", DEVICE_MM)
+    require(device_mm, "atIndex:", DEVICE_MM)
+    require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", DEVICE_MM)
+    require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", DEVICE_MM)
+    require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
+    require(device_mm, "kMetal4TextureViewPoolTelemetryIntervalNs", DEVICE_MM)
+    require_pattern(
+        device_mm,
+        r"~MVKMetal4TextureViewPool\(\)\s*\{\s*if\s*\(hasUnloggedTelemetry\(\)\)\s*\{\s*logTelemetry\(\)",
+        DEVICE_MM,
+    )
+    for last_counter in (
+        "_lastLoggedBindingLookups",
+        "_lastLoggedHeavyweightCreations",
+        "_lastLoggedAssignments",
+        "_lastLoggedReleases",
+        "_lastLoggedResetFailures",
+    ):
+        require(device_h, last_counter, DEVICE_H)
+        require(device_mm, last_counter, DEVICE_MM)
+    require_pattern(
+        device_mm,
+        r"if\s*\(telemetryEnabled\)\s*\{[\s\S]*?Metal 4 texture view pool %s with %zu-slot chunks",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"uint64_t startNs\s*=\s*telemetryEnabled\s*\?\s*mvkGetTimestamp\(\)\s*:\s*0",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"shouldLog[\s\S]*?logTelemetryIfDue\(\)",
+        DEVICE_MM,
+    )
+    for counter in (
+        "bindingLookups",
+        "cachedBindingHits",
+        "baseRebinds",
+        "directBaseBindings",
+        "multiPlaneBypasses",
+        "twoDOfThreeDBypasses",
+        "blockTexelAliasBypasses",
+        "heavyEligibleShaderOnly",
+        "heavyEligibleAttachmentCapable",
+        "heavyTwoDOfThreeDShaderOnly",
+        "heavyTwoDOfThreeDAttachmentCapable",
+    ):
+        require(device_mm, f"atomic<uint64_t> {counter}", DEVICE_MM)
+        require(device_mm, counter, DEVICE_MM)
+    require(device_mm, "binding_lookups=%llu", DEVICE_MM)
+    require(device_mm, "cached_binding_hits=%llu", DEVICE_MM)
+    require(device_mm, "heavy_eligible_shader_only=%llu", DEVICE_MM)
+    require(device_mm, "heavy_eligible_attachment_capable=%llu", DEVICE_MM)
+    require(device_mm, "heavy_two_d_of_three_d_shader_only=%llu", DEVICE_MM)
+    require(device_mm, "heavy_two_d_of_three_d_attachment_capable=%llu", DEVICE_MM)
+    require_pattern(
+        device_mm,
+        r"recordTextureViewBypass\([^)]*MVKMetal4TextureViewClass[\s\S]*?fetch_add\(1,\s*memory_order_relaxed\)",
+        DEVICE_MM,
+    )
+    bypass_body = re.search(
+        r"void MVKMetal4TextureViewPool::recordTextureViewBypass\([^}]+\}",
+        device_mm,
+        re.DOTALL,
+    )
+    if not bypass_body or "impl->lock" in bypass_body.group(0):
+        raise AssertionError(f"{DEVICE_MM}: high-frequency bypass telemetry must not take the pool mutex")
+    for helper in (
+        "recordTextureViewLookup",
+        "recordTextureViewCacheHit",
+        "recordTextureViewRebind",
+        "recordTextureViewBypass",
+        "recordHeavyweightTextureViewCreation",
+    ):
+        helper_body = re.search(
+            rf"(?:void|bool) MVKMetal4TextureViewPool::{helper}\([\s\S]*?\n#endif\n\}}",
+            device_mm,
+            re.DOTALL,
+        )
+        if not helper_body:
+            raise AssertionError(f"{DEVICE_MM}: cannot inspect telemetry helper: {helper}")
+        require(helper_body.group(0), "_impl.get()", DEVICE_MM)
+        if "auto impl = _impl;" in helper_body.group(0):
+            raise AssertionError(
+                f"{DEVICE_MM}: telemetry-off helper copies shared_ptr: {helper}"
+            )
+    require_pattern(
+        device_mm,
+        r"recordHeavyweightTextureViewCreation[\s\S]*?creationCount\s*&\s*\(creationCount\s*-\s*1\)[\s\S]*?logTelemetryIfDue\(\)",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL",\s*0\.0\)',
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"if\s*\(!device\s*\|\|\s*\(!enabled\s*&&\s*!telemetryEnabled\)\)",
+        DEVICE_MM,
+    )
+
+    require(image_h, "struct MVKMetal4TextureViewBinding", IMAGE_H)
+    require(image_h, "getMetal4TextureViewBinding", IMAGE_H)
+    require(image_h, "getMetal4TextureViewClass", IMAGE_H)
+    require(image_mm, "MTLTextureViewDescriptor", IMAGE_MM)
+    require(image_mm, "releaseMetal4TextureView", IMAGE_MM)
+    require(image_mm, "isMetal4TextureViewPoolEligible", IMAGE_MM)
+    require(image_mm, "is2dViewOf3d", IMAGE_MM)
+    require(image_mm, "isBlockTexelView", IMAGE_MM)
+    require(image_mm, "recordTextureViewLookup", IMAGE_MM)
+    require(image_mm, "recordTextureViewCacheHit", IMAGE_MM)
+    require(image_mm, "recordTextureViewRebind", IMAGE_MM)
+    require_pattern(
+        image_mm,
+        r"recordHeavyweightTextureViewCreation\([^;]*getMetal4TextureViewClass\(\)[^;]*_imageView->_usage",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"bool telemetryEnabled\s*=\s*pool\s*&&\s*pool->isTelemetryEnabled\(\)",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"uint64_t textureViewStart\s*=\s*telemetryEnabled\s*\?\s*mvkGetTimestamp\(\)\s*:\s*0",
+        IMAGE_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"if\s*\(telemetryEnabled\)\s*\{[\s\S]*?recordHeavyweightTextureViewCreation",
+        IMAGE_MM,
+    )
+
+    require(descriptor_mm, "setTextureResourceID", DESCRIPTOR_MM)
+    require(descriptor_mm, "getMetal4TextureViewBinding", DESCRIPTOR_MM)
+    require(descriptor_mm, "pooledBindings", DESCRIPTOR_MM)
+    for duplicate_lookup in (
+        "getMetal4TextureViewResourceID",
+        "getMetal4TextureViewBaseTexture",
+    ):
+        if duplicate_lookup in descriptor_mm:
+            raise AssertionError(
+                f"{DESCRIPTOR_MM}: pooled descriptor binding is resolved more than once: {duplicate_lookup}"
+            )
+    require_pattern(
+        descriptor_mm,
+        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA[\s\S]*?textureViewPool\s*&&\s*textureViewPool->isEnabled\(\)",
+        DESCRIPTOR_MM,
+    )
+    if "useMetal4TextureViewPool = set->supportsMetal4ArgumentTable()" in descriptor_mm:
+        raise AssertionError(
+            f"{DESCRIPTOR_MM}: per-set pooled representations make descriptor copies unsafe"
+        )
+    require_pattern(
+        descriptor_mm,
+        r"mvkPushDescriptorSet[\s\S]*?writeDescriptorSetCPUBufferDispatch\([^;]*nullptr\)",
+        DESCRIPTOR_MM,
+    )
+    require_pattern(
+        image_mm,
+        r"poolEnabled\s*&&\s*viewClass\s*==\s*MVKMetal4TextureViewClass::Eligible",
+        IMAGE_MM,
+    )
+
+    combined = device_h + device_mm + image_h + image_mm + descriptor_mm
+    require(combined, "MVK_XCODE_26", ROOT)
+    for forbidden in (
+        "isMetal4CommandBackendEnabled",
+        "MTL4CommandQueue",
+        "MTL4CommandBuffer",
+        "MTL4RenderCommandEncoder",
+    ):
+        if forbidden in combined:
+            raise AssertionError(f"{ROOT}: texture-view pool depends on paused command backend: {forbidden}")
+
+
+def main() -> int:
+    test_segmented_slot_lifetime_model()
+    test_source_contract()
+    print("metal4 texture-view pool contract: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except AssertionError as error:
+        print(f"metal4 texture-view pool contract: FAIL: {error}")
+        raise SystemExit(1)

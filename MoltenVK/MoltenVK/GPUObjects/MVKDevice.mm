@@ -361,10 +361,14 @@ void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(uint64_t dur
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;
 	if (!impl) { return; }
-	lock_guard<mutex> guard(impl->lock);
+	unique_lock<mutex> guard(impl->lock);
 	impl->heavyweightCreations++;
 	impl->heavyweightCreationNs += durationNs;
 	impl->maxHeavyweightCreationNs = max(impl->maxHeavyweightCreationNs, durationNs);
+	bool shouldLog = impl->telemetryEnabled &&
+		(impl->heavyweightCreations & (impl->heavyweightCreations - 1)) == 0;
+	guard.unlock();
+	if (shouldLog) { logTelemetry(); }
 #else
 	(void)durationNs;
 #endif

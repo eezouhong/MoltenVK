@@ -108,6 +108,11 @@ def test_source_contract() -> None:
     require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
     require_pattern(
         device_mm,
+        r"recordHeavyweightTextureViewCreation[\s\S]*?heavyweightCreations\s*&\s*\(impl->heavyweightCreations\s*-\s*1\)[\s\S]*?logTelemetry\(\)",
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
         r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL",\s*0\.0\)',
         DEVICE_MM,
     )

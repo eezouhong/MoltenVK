@@ -1148,7 +1148,8 @@ static void writeDescriptorSetGPUBuffer(
 	const uint32_t* auxOffsets = set->auxIndices;
 	bool useMetal4TextureViewPool =
 		ArgBufMode == MVKArgumentBufferMode::Metal3 &&
-		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA;
+		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA &&
+		set->layout->getDevice()->getMetal4TextureViewPool() != nullptr;
 	if (canUseFastPathUpdate(binding->gpuLayout, ArgBufMode)) {
 		switch (binding->gpuLayout) {
 #define DISPATCH(x) writeDescriptorSetGPUBuffer<ArgBufMode, MVKDescriptorGPULayout::x>(*binding, enc, base, auxOffsets, src, srcStride, srcType, start, count, useMetal4TextureViewPool)
@@ -1430,7 +1431,8 @@ static void writeDescriptorSetBinding(
 	char* cpuBuffer = set->cpuBuffer + binding->cpuOffset;
 	bool useMetal4TextureViewPool =
 		layout->argBufMode() == MVKArgumentBufferMode::Metal3 &&
-		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA;
+		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA &&
+		layout->getDevice()->getMetal4TextureViewPool() != nullptr;
 	writeDescriptorSetCPUBufferDispatch(layout, *binding, cpuBuffer, src, stride, type, start, count, useMetal4TextureViewPool);
 	switch (layout->argBufMode()) {
 		case MVKArgumentBufferMode::Off:

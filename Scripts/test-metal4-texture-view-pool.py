@@ -125,7 +125,7 @@ def test_source_contract() -> None:
     require(descriptor_mm, "getMetal4TextureViewBaseTexture", DESCRIPTOR_MM)
     require_pattern(
         descriptor_mm,
-        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA",
+        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA[\s\S]*?getMetal4TextureViewPool\(\)",
         DESCRIPTOR_MM,
     )
     if "useMetal4TextureViewPool = set->supportsMetal4ArgumentTable()" in descriptor_mm:

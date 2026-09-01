@@ -8,8 +8,10 @@ does not create or depend on Metal 4 command queues, command buffers, command
 encoders, execution manifests, or residency sets.
 
 `MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL=1` enables the experiment. It is default
-off. OFF creates no service, takes no pool lock, and keeps the original RC6
-descriptor bytes and texture-view lifetime.
+off. With telemetry disabled, OFF creates no service, takes no pool lock, and
+keeps the original RC6 descriptor bytes and texture-view lifetime. A matched
+OFF measurement may create a counter-only telemetry service, but it never
+enters the pooled descriptor path or allocates pool chunks.
 
 ## Representation and lifetime
 
@@ -32,9 +34,11 @@ fall back to the original heavyweight view for that descriptor. No failure
 changes Vulkan-visible behavior.
 
 `MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY=1` enables low-frequency,
-power-of-two snapshots for ON test runs. It reports assignments, reuse,
-fallback, live/high-water slots, chunk count, assignment time, and remaining
-heavyweight creations. Production runs do not enable this telemetry.
+power-of-two snapshots. ON reports assignments, reuse, fallback,
+live/high-water slots, chunk count, assignment time, and remaining heavyweight
+creations. OFF uses the same service only to count heavyweight creations, so
+the A/B comparison has a symmetric baseline. Production runs do not enable
+this telemetry.
 
 ## Acceptance
 

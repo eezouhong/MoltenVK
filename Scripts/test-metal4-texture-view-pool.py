@@ -108,7 +108,12 @@ def test_source_contract() -> None:
     require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
     require_pattern(
         device_mm,
-        r'mvkGetEnvVarNumber\("MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL",\s*0\.0\)',
+        r'mvkGetEnvVarNumber\(\s*"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL",\s*0\.0\)',
+        DEVICE_MM,
+    )
+    require_pattern(
+        device_mm,
+        r"if\s*\(!device\s*\|\|\s*\(!enabled\s*&&\s*!telemetryEnabled\)\)",
         DEVICE_MM,
     )
 
@@ -133,7 +138,7 @@ def test_source_contract() -> None:
             )
     require_pattern(
         descriptor_mm,
-        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA[\s\S]*?getMetal4TextureViewPool\(\)",
+        r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA[\s\S]*?textureViewPool\s*&&\s*textureViewPool->isEnabled\(\)",
         DESCRIPTOR_MM,
     )
     if "useMetal4TextureViewPool = set->supportsMetal4ArgumentTable()" in descriptor_mm:

@@ -1426,10 +1426,11 @@ static void writeDescriptorSetBinding(
 	uint32_t start, uint32_t count)
 {
 	char* cpuBuffer = set->cpuBuffer + binding->cpuOffset;
+	auto* textureViewPool = layout->getDevice()->getMetal4TextureViewPool();
 	bool useMetal4TextureViewPool =
 		layout->argBufMode() == MVKArgumentBufferMode::Metal3 &&
 		binding->gpuLayout != MVKDescriptorGPULayout::TexBufSoA &&
-		layout->getDevice()->getMetal4TextureViewPool() != nullptr;
+		textureViewPool && textureViewPool->isEnabled();
 	MVKSmallVector<MVKMetal4TextureViewBinding, 16> pooledBindingStorage;
 	const MVKMetal4TextureViewBinding* pooledBindings = nullptr;
 	if (useMetal4TextureViewPool &&

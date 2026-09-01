@@ -120,21 +120,23 @@ struct MVKMetal4TextureViewPool::Impl {
 };
 
 MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
-	if (!device ||
-		mvkGetEnvVarNumber("MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", 0.0) == 0.0) {
-		return nullptr;
-	}
-	constexpr bool enabled = true;
+	const bool enabled = mvkGetEnvVarNumber(
+		"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", 0.0) != 0.0;
+	const bool telemetryEnabled = mvkGetEnvVarNumber(
+		"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", 0.0) != 0.0;
+	if (!device || (!enabled && !telemetryEnabled)) { return nullptr; }
 
 #if MVK_USE_METAL_PRIVATE_API
-	device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
-					  "Metal 4 texture view pool disabled in Metal private-API builds.");
-	return nullptr;
+	if (enabled) {
+		device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 texture view pool disabled in Metal private-API builds.");
+		return nullptr;
+	}
 #endif
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	if (device->getMVKConfig().useMetalPrivateAPI ||
-		!device->getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4 ||
+	if ((enabled && device->getMVKConfig().useMetalPrivateAPI) ||
+		(enabled && !device->getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4) ||
 		!mvkOSVersionIsAtLeast(26.0)) {
 		return nullptr;
 	}
@@ -179,8 +181,6 @@ MVKMetal4TextureViewPool* MVKMetal4TextureViewPool::create(MVKDevice* device) {
 						  enabled ? "enabled" : "disabled for A/B telemetry",
 						  chunkSize,
 						  maximumSlots);
-		bool telemetryEnabled = mvkGetEnvVarNumber(
-			"MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", 0.0) != 0.0;
 		return new MVKMetal4TextureViewPool(make_shared<Impl>(
 			device, mtlDevice, tombstone, chunkSize, maximumSlots,
 			enabled, telemetryEnabled));

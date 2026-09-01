@@ -78,3 +78,17 @@ limit for this architecture. It services roughly 10% of descriptor lookups via
 cached pool IDs. Further attachment coverage requires a different render-pass
 architecture and is not a Texture View Pool expansion. Keep this pool default
 off behind its own APP switch and do not weaken the existing exclusions.
+
+## APP switch checkpoint
+
+APP branch `codex/metal4-texture-view-pool-ui` at `83ec997c44` adds one
+independent, default-off `Metal 4 Texture View Pool (Experimental)` switch on
+top of master `6cceb0b8ee`. It writes
+`MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL=0|1`, is available only on an iOS 26+
+Metal 4 device with the recommended MoltenVK variant, and does not require the
+Metal 4 compiler switch. Selecting an unsupported MoltenVK variant clears the
+stored pool request.
+
+The APP device Debug build and runtime/localization contracts passed. The APP
+dependency manifest remains unchanged until the backend RC6 branch has a
+published artifact; neither branch has been merged or pushed by this work.

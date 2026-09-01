@@ -128,6 +128,8 @@ def test_source_contract() -> None:
         "blockTexelAliasBypasses",
         "heavyEligibleShaderOnly",
         "heavyEligibleAttachmentCapable",
+        "heavyTwoDOfThreeDShaderOnly",
+        "heavyTwoDOfThreeDAttachmentCapable",
     ):
         require(device_mm, f"atomic<uint64_t> {counter}", DEVICE_MM)
         require(device_mm, counter, DEVICE_MM)
@@ -135,6 +137,8 @@ def test_source_contract() -> None:
     require(device_mm, "cached_binding_hits=%llu", DEVICE_MM)
     require(device_mm, "heavy_eligible_shader_only=%llu", DEVICE_MM)
     require(device_mm, "heavy_eligible_attachment_capable=%llu", DEVICE_MM)
+    require(device_mm, "heavy_two_d_of_three_d_shader_only=%llu", DEVICE_MM)
+    require(device_mm, "heavy_two_d_of_three_d_attachment_capable=%llu", DEVICE_MM)
     require_pattern(
         device_mm,
         r"recordTextureViewBypass\([^)]*MVKMetal4TextureViewClass[\s\S]*?fetch_add\(1,\s*memory_order_relaxed\)",

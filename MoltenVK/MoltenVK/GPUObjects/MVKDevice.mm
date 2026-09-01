@@ -104,7 +104,8 @@ struct MVKMetal4TextureViewPool::Impl {
 	atomic<uint64_t> heavyEligibleShaderOnly = 0;
 	atomic<uint64_t> heavyEligibleAttachmentCapable = 0;
 	atomic<uint64_t> heavyMultiPlane = 0;
-	atomic<uint64_t> heavyTwoDOfThreeD = 0;
+	atomic<uint64_t> heavyTwoDOfThreeDShaderOnly = 0;
+	atomic<uint64_t> heavyTwoDOfThreeDAttachmentCapable = 0;
 	atomic<uint64_t> heavyBlockTexelAlias = 0;
 	atomic<uint64_t> heavyOther = 0;
 	uint64_t totalAssignmentNs = 0;
@@ -236,7 +237,8 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 		uint64_t heavyEligibleShaderOnly = impl->heavyEligibleShaderOnly.load(memory_order_relaxed);
 		uint64_t heavyEligibleAttachmentCapable = impl->heavyEligibleAttachmentCapable.load(memory_order_relaxed);
 		uint64_t heavyMultiPlane = impl->heavyMultiPlane.load(memory_order_relaxed);
-		uint64_t heavyTwoDOfThreeD = impl->heavyTwoDOfThreeD.load(memory_order_relaxed);
+		uint64_t heavyTwoDOfThreeDShaderOnly = impl->heavyTwoDOfThreeDShaderOnly.load(memory_order_relaxed);
+		uint64_t heavyTwoDOfThreeDAttachmentCapable = impl->heavyTwoDOfThreeDAttachmentCapable.load(memory_order_relaxed);
 		uint64_t heavyBlockTexelAlias = impl->heavyBlockTexelAlias.load(memory_order_relaxed);
 		uint64_t heavyOther = impl->heavyOther.load(memory_order_relaxed);
 		size_t chunkCount = impl->chunks.size();
@@ -248,7 +250,7 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 		guard.unlock();
 		impl->device->reportMessage(
 			MVK_CONFIG_LOG_LEVEL_INFO,
-			"Metal 4 texture view pool telemetry: binding_lookups=%llu, cached_binding_hits=%llu, base_rebinds=%llu, eligible_requests=%llu, bypassed_requests=%llu, direct_base_bindings=%llu, missing_backing_bypasses=%llu, multi_plane_bypasses=%llu, two_d_of_three_d_bypasses=%llu, block_texel_alias_bypasses=%llu, pool_failure_bypasses=%llu, assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, heavyweight_creations=%llu, heavy_eligible_shader_only=%llu, heavy_eligible_attachment_capable=%llu, heavy_multi_plane=%llu, heavy_two_d_of_three_d=%llu, heavy_block_texel_alias=%llu, heavy_other=%llu, heavyweight_creation_ms=%.3f, max_heavyweight_creation_ms=%.3f, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
+			"Metal 4 texture view pool telemetry: binding_lookups=%llu, cached_binding_hits=%llu, base_rebinds=%llu, eligible_requests=%llu, bypassed_requests=%llu, direct_base_bindings=%llu, missing_backing_bypasses=%llu, multi_plane_bypasses=%llu, two_d_of_three_d_bypasses=%llu, block_texel_alias_bypasses=%llu, pool_failure_bypasses=%llu, assignments=%llu, reuses=%llu, releases=%llu, fallbacks=%llu, reset_failures=%llu, heavyweight_creations=%llu, heavy_eligible_shader_only=%llu, heavy_eligible_attachment_capable=%llu, heavy_multi_plane=%llu, heavy_two_d_of_three_d_shader_only=%llu, heavy_two_d_of_three_d_attachment_capable=%llu, heavy_block_texel_alias=%llu, heavy_other=%llu, heavyweight_creation_ms=%.3f, max_heavyweight_creation_ms=%.3f, chunks=%zu, created_slots=%zu, live_slots=%zu, high_water_slots=%zu, total_assignment_ms=%.3f, max_assignment_ms=%.3f.",
 			(unsigned long long)bindingLookups,
 			(unsigned long long)cachedBindingHits,
 			(unsigned long long)baseRebinds,
@@ -269,7 +271,8 @@ void MVKMetal4TextureViewPool::logTelemetry() {
 			(unsigned long long)heavyEligibleShaderOnly,
 			(unsigned long long)heavyEligibleAttachmentCapable,
 			(unsigned long long)heavyMultiPlane,
-			(unsigned long long)heavyTwoDOfThreeD,
+			(unsigned long long)heavyTwoDOfThreeDShaderOnly,
+			(unsigned long long)heavyTwoDOfThreeDAttachmentCapable,
 			(unsigned long long)heavyBlockTexelAlias,
 			(unsigned long long)heavyOther,
 			static_cast<double>(heavyweightCreationNs) / 1e6,
@@ -482,7 +485,11 @@ void MVKMetal4TextureViewPool::recordHeavyweightTextureViewCreation(
 			impl->heavyMultiPlane.fetch_add(1, memory_order_relaxed);
 			break;
 		case MVKMetal4TextureViewClass::TwoDOfThreeD:
-			impl->heavyTwoDOfThreeD.fetch_add(1, memory_order_relaxed);
+			if (mvkIsAnyFlagEnabled(usage, attachmentUsage)) {
+				impl->heavyTwoDOfThreeDAttachmentCapable.fetch_add(1, memory_order_relaxed);
+			} else {
+				impl->heavyTwoDOfThreeDShaderOnly.fetch_add(1, memory_order_relaxed);
+			}
 			break;
 		case MVKMetal4TextureViewClass::BlockTexelAlias:
 			impl->heavyBlockTexelAlias.fetch_add(1, memory_order_relaxed);

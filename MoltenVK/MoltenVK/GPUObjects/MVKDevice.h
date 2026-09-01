@@ -38,6 +38,7 @@
 class MVKInstance;
 class MVKDevice;
 class MVKMetal4CompilerService;
+class MVKMetal4TextureViewPool;
 class MVKShaderLibraryRepository;
 class MVKQueue;
 class MVKQueueFamily;
@@ -652,6 +653,40 @@ public:
 	}
 };
 
+
+#pragma mark -
+#pragma mark MVKMetal4TextureViewPool
+
+/** Identifies one stable slot in a device-owned Metal 4 texture-view pool. */
+struct MVKMetal4TextureViewHandle {
+	uint32_t chunkIndex = UINT32_MAX;
+	uint32_t slotIndex = UINT32_MAX;
+	MTLResourceID resourceID = {};
+
+	bool isValid() const { return chunkIndex != UINT32_MAX && slotIndex != UINT32_MAX; }
+};
+
+/** Device-owned pool of lightweight Metal 4 texture views. */
+class MVKMetal4TextureViewPool {
+
+public:
+	static MVKMetal4TextureViewPool* create(MVKDevice* device);
+	~MVKMetal4TextureViewPool();
+	void logTelemetry();
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MVKMetal4TextureViewHandle acquireTextureView(id<MTLTexture> texture,
+											MTLTextureViewDescriptor* descriptor);
+#endif
+	void releaseTextureView(MVKMetal4TextureViewHandle handle);
+
+	struct Impl;
+
+private:
+	explicit MVKMetal4TextureViewPool(std::shared_ptr<Impl> impl) : _impl(impl) {}
+	std::shared_ptr<Impl> _impl;
+};
+
 /** Represents a Vulkan logical GPU device, associated with a physical device. */
 class MVKDevice : public MVKDispatchableVulkanAPIObject {
 
@@ -679,6 +714,9 @@ public:
 
 	/** Returns the optional, device-owned public Metal 4 compiler service. */
 	MVKMetal4CompilerService* getMetal4CompilerService() const { return _metal4CompilerService; }
+
+	/** Returns the optional device-owned lightweight texture-view pool. */
+	MVKMetal4TextureViewPool* getMetal4TextureViewPool() const { return _metal4TextureViewPool; }
 
 	/** Returns the optional device-wide physical shader-library repository. */
 	MVKShaderLibraryRepository* getShaderLibraryRepository() const { return _shaderLibraryRepository; }
@@ -1110,6 +1148,7 @@ protected:
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;
 	MVKMetal4CompilerService* _metal4CompilerService = nullptr;
+	MVKMetal4TextureViewPool* _metal4TextureViewPool = nullptr;
 	MVKShaderLibraryRepository* _shaderLibraryRepository = nullptr;
 	MVKSmallVector<MVKSmallVector<MVKQueue*, kMVKQueueCountPerQueueFamily>, kMVKQueueFamilyCount> _queuesByQueueFamilyIndex;
 	MVKSmallVector<MVKResource*> _resources;

@@ -50,3 +50,31 @@ Before attempting that representation, split 2D-of-3D creations into
 shader-only and attachment-capable usage. Only a high-volume shader-only bucket
 is a candidate for the next checkpoint. Metal render attachments continue to
 require a real `MTLTexture` and remain outside the pool.
+
+## 2D-of-3D split result
+
+The follow-up warm probe at `72af2173094ec20a91c9fa7ae7159578badfd35e`
+reached the same tutorial endpoint and passed four-frame Luna/high validation.
+Its final snapshot reported:
+
+- binding lookups: 8,540,386;
+- cached pooled binding hits: 852,899;
+- assignments: 512;
+- direct-base bindings: 7,686,975;
+- heavyweight creations: 139,599;
+- 2D-of-3D shader-only creations: 0;
+- 2D-of-3D attachment-capable creations: 139,110;
+- ordinary attachment-capable eligible creations: 489;
+- fallbacks and reset failures: 0.
+
+The entire high-volume 2D-of-3D bucket is attachment-capable. A Metal render
+pass requires a real `MTLTexture`; assigning an additional pool slot would not
+remove the heavyweight attachment view. It would retain an extra heap alias and
+pool representation, increasing memory and lifetime complexity without
+eliminating the existing creation.
+
+Therefore the current single-plane descriptor coverage is the generic safe
+limit for this architecture. It services roughly 10% of descriptor lookups via
+cached pool IDs. Further attachment coverage requires a different render-pass
+architecture and is not a Texture View Pool expansion. Keep this pool default
+off behind its own APP switch and do not weaken the existing exclusions.

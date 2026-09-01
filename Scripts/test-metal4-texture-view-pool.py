@@ -112,8 +112,8 @@ def test_source_contract() -> None:
         DEVICE_MM,
     )
 
-    require(image_h, "getMetal4TextureViewResourceID", IMAGE_H)
-    require(image_h, "getMetal4TextureViewBaseTexture", IMAGE_H)
+    require(image_h, "struct MVKMetal4TextureViewBinding", IMAGE_H)
+    require(image_h, "getMetal4TextureViewBinding", IMAGE_H)
     require(image_mm, "MTLTextureViewDescriptor", IMAGE_MM)
     require(image_mm, "releaseMetal4TextureView", IMAGE_MM)
     require(image_mm, "isMetal4TextureViewPoolEligible", IMAGE_MM)
@@ -121,8 +121,16 @@ def test_source_contract() -> None:
     require(image_mm, "isBlockTexelView", IMAGE_MM)
 
     require(descriptor_mm, "setTextureResourceID", DESCRIPTOR_MM)
-    require(descriptor_mm, "getMetal4TextureViewResourceID", DESCRIPTOR_MM)
-    require(descriptor_mm, "getMetal4TextureViewBaseTexture", DESCRIPTOR_MM)
+    require(descriptor_mm, "getMetal4TextureViewBinding", DESCRIPTOR_MM)
+    require(descriptor_mm, "pooledBindings", DESCRIPTOR_MM)
+    for duplicate_lookup in (
+        "getMetal4TextureViewResourceID",
+        "getMetal4TextureViewBaseTexture",
+    ):
+        if duplicate_lookup in descriptor_mm:
+            raise AssertionError(
+                f"{DESCRIPTOR_MM}: pooled descriptor binding is resolved more than once: {duplicate_lookup}"
+            )
     require_pattern(
         descriptor_mm,
         r"useMetal4TextureViewPool\s*=\s*[\s\S]*?MVKArgumentBufferMode::Metal3\s*&&[\s\S]*?gpuLayout\s*!=\s*MVKDescriptorGPULayout::TexBufSoA[\s\S]*?getMetal4TextureViewPool\(\)",
@@ -134,7 +142,7 @@ def test_source_contract() -> None:
         )
     require_pattern(
         descriptor_mm,
-        r"mvkPushDescriptorSet[\s\S]*?writeDescriptorSetCPUBufferDispatch\([^;]*false\)",
+        r"mvkPushDescriptorSet[\s\S]*?writeDescriptorSetCPUBufferDispatch\([^;]*nullptr\)",
         DESCRIPTOR_MM,
     )
     require_pattern(

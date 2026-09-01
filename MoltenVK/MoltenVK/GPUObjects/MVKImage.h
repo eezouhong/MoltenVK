@@ -542,6 +542,11 @@ public:
 #pragma mark -
 #pragma mark MVKImageViewPlane
 
+struct MVKMetal4TextureViewBinding {
+	MTLResourceID resourceID = {};
+	id<MTLTexture> residencyTexture = nil;
+};
+
 class MVKImageViewPlane : public MVKBaseDeviceObject {
 
 	/** Returns the Vulkan API opaque object controlling this object. */
@@ -551,11 +556,8 @@ public:
     /** Returns the Metal texture underlying this image view. */
     id<MTLTexture> getMTLTexture();
 
-	/** Returns the lightweight Metal 4 view ID, or the compatible heavyweight ID fallback. */
-	MTLResourceID getMetal4TextureViewResourceID();
-
-	/** Returns the Metal resource that owns the storage addressed by the Metal 4 view ID. */
-	id<MTLTexture> getMetal4TextureViewBaseTexture();
+	/** Atomically resolves the GPU resource ID and the texture that owns its storage. */
+	MVKMetal4TextureViewBinding getMetal4TextureViewBinding();
 
     void releaseMTLTexture();
 	void releaseMetal4TextureView();
@@ -614,11 +616,10 @@ public:
 	/** Returns the Metal texture underlying this image view.  */
 	id<MTLTexture> getMTLTexture(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMTLTexture() : nil; }	// Guard against destroyed instance retained in a descriptor.
 
-	/** Returns a Metal 4 texture-view-pool resource ID, with heavyweight fallback. */
-	MTLResourceID getMetal4TextureViewResourceID(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewResourceID() : MTLResourceID{}; }
-
-	/** Returns the resource that must remain resident for the Metal 4 texture-view ID. */
-	id<MTLTexture> getMetal4TextureViewBaseTexture(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewBaseTexture() : nil; }
+	/** Atomically resolves the GPU resource ID and the texture that owns its storage. */
+	MVKMetal4TextureViewBinding getMetal4TextureViewBinding(uint8_t planeIndex = 0) {
+		return planeIndex < _planes.size() ? _planes[planeIndex]->getMetal4TextureViewBinding() : MVKMetal4TextureViewBinding{};
+	}
 
 	/** Returns the Metal pixel format of this image view. */
 	MTLPixelFormat getMTLPixelFormat(uint8_t planeIndex = 0) { return planeIndex < _planes.size() ? _planes[planeIndex]->_mtlPixFmt : MTLPixelFormatInvalid; }	// Guard against destroyed instance retained in a descriptor.

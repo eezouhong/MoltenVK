@@ -1920,7 +1920,7 @@ bool MVKImageViewPlane::isMetal4TextureViewPoolEligible() {
 	return !isBlockTexelView;
 }
 
-MTLResourceID MVKImageViewPlane::getMetal4TextureViewResourceID() {
+MVKMetal4TextureViewBinding MVKImageViewPlane::getMetal4TextureViewBinding() {
 	id<MTLTexture> baseMTLTexture = _imageView->_image
 		? _imageView->_image->getMTLTexture(_planeIndex)
 		: nil;
@@ -1928,14 +1928,14 @@ MTLResourceID MVKImageViewPlane::getMetal4TextureViewResourceID() {
 	MVKMetal4TextureViewPool* pool = getDevice()->getMetal4TextureViewPool();
 	if (!_useMTLTextureView) {
 		if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
-		return baseMTLTexture.gpuResourceID;
+		return { baseMTLTexture.gpuResourceID, baseMTLTexture };
 	}
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (pool && pool->isEnabled() && isMetal4TextureViewPoolEligible()) {
 		lock_guard<mutex> lock(_imageView->_lock);
 		if (_metal4TextureViewHandle.isValid() && _metal4TextureViewBase == baseMTLTexture) {
-			return _metal4TextureViewHandle.resourceID;
+			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
 		if (_metal4TextureViewHandle.isValid()) {
 			pool->releaseTextureView(_metal4TextureViewHandle);
@@ -1960,27 +1960,15 @@ MTLResourceID MVKImageViewPlane::getMetal4TextureViewResourceID() {
 		[descriptor release];
 		if (_metal4TextureViewHandle.isValid()) {
 			_metal4TextureViewBase = [baseMTLTexture retain];
-			return _metal4TextureViewHandle.resourceID;
+			return { _metal4TextureViewHandle.resourceID, _metal4TextureViewBase };
 		}
 	}
 	if (pool && pool->isEnabled()) { pool->recordTextureViewBypass(); }
 #endif
 
 	id<MTLTexture> texture = getMTLTexture();
-	return texture ? texture.gpuResourceID : MTLResourceID{};
-}
-
-id<MTLTexture> MVKImageViewPlane::getMetal4TextureViewBaseTexture() {
-	if (!_useMTLTextureView) {
-		return _imageView->_image ? _imageView->_image->getMTLTexture(_planeIndex) : nil;
-	}
-#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
-	{
-		lock_guard<mutex> lock(_imageView->_lock);
-		if (_metal4TextureViewHandle.isValid()) { return _metal4TextureViewBase; }
-	}
-#endif
-	return getMTLTexture();
+	return texture ? MVKMetal4TextureViewBinding{ texture.gpuResourceID, texture }
+				   : MVKMetal4TextureViewBinding{};
 }
 
 bool MVKImageViewPlane::matchesMTLTextureViewBase(id<MTLTexture> mtlTexture) {

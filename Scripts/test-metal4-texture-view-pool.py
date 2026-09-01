@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,11 @@ DESCRIPTOR_MM = ROOT / "MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm"
 def require(text: str, needle: str, source: Path) -> None:
     if needle not in text:
         raise AssertionError(f"{source}: missing required invariant: {needle}")
+
+
+def require_pattern(text: str, pattern: str, source: Path) -> None:
+    if not re.search(pattern, text, re.DOTALL):
+        raise AssertionError(f"{source}: missing required pattern: {pattern}")
 
 
 @dataclass(frozen=True)
@@ -97,8 +103,14 @@ def test_source_contract() -> None:
     require(device_mm, "setTextureView:", DEVICE_MM)
     require(device_mm, "descriptor:", DEVICE_MM)
     require(device_mm, "atIndex:", DEVICE_MM)
-    require(device_mm, "MVK_METAL4_TEXTURE_VIEW_POOL", DEVICE_MM)
-    require(device_mm, "Metal 4 texture view pool summary:", DEVICE_MM)
+    require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL", DEVICE_MM)
+    require(device_mm, "MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL_TELEMETRY", DEVICE_MM)
+    require(device_mm, "Metal 4 texture view pool telemetry:", DEVICE_MM)
+    require_pattern(
+        device_mm,
+        r'mvkGetEnvVarNumber\("MVK_CONFIG_METAL4_TEXTURE_VIEW_POOL",\s*0\.0\)',
+        DEVICE_MM,
+    )
 
     require(image_h, "getMetal4TextureViewResourceID", IMAGE_H)
     require(image_h, "getMetal4TextureViewBaseTexture", IMAGE_H)
@@ -111,10 +123,22 @@ def test_source_contract() -> None:
     require(descriptor_mm, "setTextureResourceID", DESCRIPTOR_MM)
     require(descriptor_mm, "getMetal4TextureViewResourceID", DESCRIPTOR_MM)
     require(descriptor_mm, "getMetal4TextureViewBaseTexture", DESCRIPTOR_MM)
+    require_pattern(
+        descriptor_mm,
+        r"MVKArgumentBufferMode::Metal3[\s\S]*?MVKDescriptorGPULayout::TexBufSoA",
+        DESCRIPTOR_MM,
+    )
 
     combined = device_h + device_mm + image_h + image_mm + descriptor_mm
     require(combined, "MVK_XCODE_26", ROOT)
-    require(combined, "isMetal4CommandBackendEnabled", ROOT)
+    for forbidden in (
+        "isMetal4CommandBackendEnabled",
+        "MTL4CommandQueue",
+        "MTL4CommandBuffer",
+        "MTL4RenderCommandEncoder",
+    ):
+        if forbidden in combined:
+            raise AssertionError(f"{ROOT}: texture-view pool depends on paused command backend: {forbidden}")
 
 
 def main() -> int:

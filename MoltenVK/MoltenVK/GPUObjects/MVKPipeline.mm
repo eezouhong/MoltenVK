@@ -4766,6 +4766,22 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfigu
 													 MVKPipeline* pipeline,
 													 VkPipelineCreationFeedback* pShaderFeedback,
 													 uint64_t startTime) {
+    if (getDevice()->getShaderLibraryRepository() && shaderModule->getKey().codeSize != 0) {
+        MVKShaderLibraryCache* cache;
+        {
+            lock_guard<mutex> lock(_shaderCacheLock);
+            cache = getShaderLibraryCache(shaderModule->getKey());
+        }
+        // Vulkan requires the cache/module to outlive this synchronous call.
+        // No worker or raw cache pointer is retained after it returns.
+        auto* shLib = cache->getShaderLibraryConcurrent(pContext, shaderModule,
+            pipeline, pShaderFeedback, startTime, _shaderCacheLock,
+            [this] { markDirty(); });
+        if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
+            pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
+        }
+        return shLib;
+    }
 	if (_isExternallySynchronized) {
 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
 	} else {
@@ -5077,6 +5093,31 @@ void MVKPipelineCache::markDirty() {
 }
 
 VkResult MVKPipelineCache::mergePipelineCaches(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) {
+    if (getDevice()->getShaderLibraryRepository()) {
+        for (uint32_t index = 0; index < srcCacheCount; ++index) {
+            auto* source = (MVKPipelineCache*)pSrcCaches[index];
+            // Retained logical snapshots keep canonical entries alive after
+            // dropping the source lock. Never hold two cache-view locks: a
+            // concurrent reverse merge must not invert the lock ordering.
+            vector<pair<MVKShaderModuleKey, unique_ptr<MVKShaderLibraryCache>>> snapshot;
+            {
+                lock_guard<mutex> lock(source->_shaderCacheLock);
+                for (const auto& item : source->_shaderCache) {
+                    auto copy = make_unique<MVKShaderLibraryCache>(this, item.first);
+                    copy->merge(item.second);
+                    snapshot.emplace_back(item.first, std::move(copy));
+                }
+            }
+            {
+                lock_guard<mutex> lock(_shaderCacheLock);
+                for (const auto& item : snapshot) {
+                    getShaderLibraryCache(item.first)->merge(item.second.get());
+                }
+                markDirty();
+            }
+        }
+        return VK_SUCCESS;
+    }
 	if (!_isMergeInternallySynchronized) {
 		return mergePipelineCachesImpl(srcCacheCount, pSrcCaches);
 	} else {

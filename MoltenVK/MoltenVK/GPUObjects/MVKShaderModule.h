@@ -22,6 +22,8 @@
 #include "MVKSync.h"
 #include "MVKCodec.h"
 #include "MVKSmallVector.h"
+#include "MVKShaderLibraryWork.h"
+#include <functional>
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <atomic>
 #include <mutex>
@@ -308,7 +310,19 @@ public:
 									   bool* pCacheRepresentationChanged,
 									   bool* pWasCacheHit,
 									   VkPipelineCreationFeedback* pShaderFeedback,
-									   uint64_t startTime = 0);
+									   uint64_t startTime = 0,
+                                       bool allowCompile = true);
+
+
+    /** Shared-repository path. viewLock protects only the logical cache view;
+     * conversion/compilation happens in an unpublished, independently owned view.
+     * onChanged runs with viewLock held and must not acquire a creation gate.
+     */
+    MVKShaderLibrary* getShaderLibraryConcurrent(
+        mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+        MVKShaderModule* shaderModule, MVKPipeline* pipeline,
+        VkPipelineCreationFeedback* pShaderFeedback, uint64_t startTime,
+        std::mutex& viewLock, const std::function<void()>& onChanged);
 
 	/** Adds this logical view's known bytes to a pipeline-cache snapshot. */
 	void accumulateMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) const;
@@ -414,6 +428,9 @@ protected:
 	void propagateDebugName() override {}
 
 private:
+    friend class MVKShaderLibraryCache;
+    MVKShaderLibraryWork<MVKShaderModuleKey> _creationWork;
+
 	struct Entry {
 		mvk::SPIRVToMSLConversionConfiguration shaderConfig;
 		MVKShaderLibrary* library;

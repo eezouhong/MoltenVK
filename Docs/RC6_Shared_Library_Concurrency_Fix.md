@@ -119,9 +119,42 @@ with the iOS SDK. The existing CMake iOS configuration stops at its AppKit looku
 translation-unit compilation is not a linked iOS package or device test. No
 phone is installed, operated or benchmarked by this repair.
 
-A concentrated game check against the new native revision is recorded
-separately once completed. Native controlled tests establish removal of the
-specific lock dependency; they do not establish the cause of all prior
-59-second versus 6-second Metal library task totals, or resolve the phone's
-14/24 FPS split. Apple compiler/driver cache and host state remain separate
-variables; no driver/user cache is cleared.
+### Concentrated game check completed
+
+Tested native commit `6d0471c6f4b62b0de4bc8591d71f53b01dfdb0a0`, dylib SHA-256
+`2ab5b519a85866d059620671871000043e5e231a73952d2e0189cbe1ad69c59b`.
+The task-owned host temporarily pinned this actual candidate commit; the
+revision check remained enabled. This was explicitly an experimental dependency
+integration, **not unchanged-master parity**. All 31 managed-module hashes stayed
+unchanged. The original host source pin and original f74 dylib were restored
+after both owned processes exited.
+
+TOTK Kakariko, identical input save bytes, shader/streaming/MSL persistence OFF:
+
+| Candidate run | Async ON | Async OFF |
+|---|---:|---:|
+| Short route / accepted input records | 60 seconds / 6 | 60 seconds / 6 |
+| Normal process exit code | 0 | 0 |
+| Vulkan pipeline creates | 1,971 | 1,879 |
+| Vulkan create cumulative call time | 37.963 s | 36.438 s |
+| Consumer pipeline blocking cumulative | 16.571 s | 16.740 s |
+| Metal library tasks / successful tasks | 1,657 / 1,657 | 1,477 / 1,477 |
+| Metal library task cumulative | 8.857 s | 9.881 s |
+| Pipeline failures / device loss / Vulkan timeout | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Startup and route-end screenshots were inspected: no obvious persistent black
+screen or large missing geometry. This is checkpoint inspection, not exhaustive
+frame-by-frame visual equivalence. The telemetry flags confirm all three app
+caches were OFF. No unhandled exception or disposed-object exception was found.
+These totals include startup/load and are not matched-input performance A/B:
+**do not compare them with the old 130-second outlier to claim a speedup**.
+
+The CMake provenance rule now derives the full commit from its actual source
+directory (matching Xcode's existing full-revision convention). Previously it
+asked for a short revision in the invocation's unspecified working directory.
+Non-Git sources are explicitly marked unknown, never assigned a fake commit.
+
+Native controlled tests establish removal of the specific lock dependency;
+they do not establish the cause of all prior 59-second versus 6-second Metal
+library task totals, or resolve the phone's 14/24 FPS split. Apple compiler/driver
+cache and host state remain separate variables; no driver/user cache is cleared.

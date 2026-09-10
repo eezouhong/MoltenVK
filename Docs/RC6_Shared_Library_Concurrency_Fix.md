@@ -158,3 +158,21 @@ Native controlled tests establish removal of the specific lock dependency;
 they do not establish the cause of all prior 59-second versus 6-second Metal
 library task totals, or resolve the phone's 14/24 FPS split. Apple compiler/driver
 cache and host state remain separate variables; no driver/user cache is cleared.
+
+## No-merge PR138 + PR7 diagnostic follow-up
+
+Internal `MVKShaderLibraryWork` timing now uses the existing performance-tracking
+gate. The normal disabled path reads no clocks and updates no counters. One
+teardown summary separates initial lookup, module-gate acquisition, recheck,
+and the build/publish callback; these are nested inside the total call wall
+sum, not additive to it. `build_publish_ns` includes conversion and publication,
+not just Metal compiler time. Actual outcome/partition/exception and concurrent
+accounting tests now run 13 cases under TSAN/ASAN/UBSAN.
+
+Three sequential cache-off TOTK runs (ON, ON restart, OFF) completed normally
+with no recorded pipeline failure/device loss/timeout. Lookup plus recheck
+sums were 5.290/5.326/5.350 seconds; module gate acquisition sums were
+0.949/0.773/1.441 seconds. These diagnostic runs do not establish a speedup
+versus a prior revision or resolve phone FPS variance. Investigate the remaining
+lookup/matching/publication path before changing any worker or skip policy.
+The tested native revision is 5d8973160; both PRs remain unmerged.

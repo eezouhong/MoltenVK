@@ -389,6 +389,63 @@ void churn() {
     }
     require(repo.entries.empty(), "scratch/view ownership leaked");
 }
+void timingCountsAndPartition() {
+    MVKShaderLibraryWork<int> work;
+    work.enableTiming(true);
+    int value = 7;
+    auto missing = []() -> int * { return nullptr; };
+    auto ready = [&]() -> int * { return &value; };
+    require(work.run(1, true, ready, ready) == &value, "ready hit changed");
+    require(!work.run(1, false, missing, ready), "no-compile miss changed");
+    require(work.run(1, true, missing, ready) == &value, "build changed");
+    require(!work.run(2, true, missing, missing), "failed build changed");
+    try {
+        work.run(3, true, missing, []() -> int * { throw runtime_error("expected"); });
+    } catch (const runtime_error &) {
+    }
+    auto t = work.timing();
+    require(t.calls == 5 && t.readyHits == 1 && t.noCompileMisses == 1 && t.buildCalls == 3 &&
+                t.buildFailures == 1 && t.exceptions == 1,
+            "timing classifications changed");
+    require(t.totalNs >= t.lookupNs + t.gateNs + t.recheckNs + t.buildNs,
+            "stage durations overlap within a call");
+    require(t.maximumCallNs <= t.totalNs, "maximum exceeds cumulative time");
+}
+void disabledTimingKeepsCountersEmpty() {
+    MVKShaderLibraryWork<int> work;
+    int value = 2;
+    for (int i = 0; i < 100; ++i) {
+        require(work.run(
+                    i, true, []() -> int * { return nullptr; }, [&] { return &value; }) == &value,
+                "unobserved build changed");
+    }
+    auto t = work.timing();
+    require(t.calls == 0 && t.buildCalls == 0 && t.totalNs == 0 && t.maximumCallNs == 0,
+            "disabled timing collected observations");
+}
+void concurrentTimingAccounting() {
+    MVKShaderLibraryWork<int> work;
+    work.enableTiming(true);
+    int value = 3;
+    vector<future<void>> requests;
+    for (int thread = 0; thread < 8; ++thread) {
+        requests.push_back(async(launch::async, [&, thread] {
+            for (int i = 0; i < 50; ++i) {
+                auto result = work.run(
+                    thread, true, []() -> int * { return nullptr; }, [&] { return &value; });
+                require(result == &value, "parallel observed result changed");
+            }
+        }));
+    }
+    for (auto &request : requests) {
+        request.get();
+    }
+    auto t = work.timing();
+    require(t.calls == 400 && t.buildCalls == 400 && t.exceptions == 0,
+            "parallel observations lost or duplicated");
+    require(t.totalNs >= t.lookupNs + t.gateNs + t.recheckNs + t.buildNs,
+            "parallel stage attribution exceeds per-call wall sum");
+}
 int main() {
     int failures = 0;
     vector<pair<string, function<void()>>> tests = {
@@ -401,7 +458,10 @@ int main() {
         {"DeferredFailureRetainsInputForRetry", deferredFailure},
         {"ExportDuringMissRemainsAvailable", exportDuringBuild},
         {"ExceptionReleasesCreationGate", failureReleases},
-        {"GateChurnAndViewOwnership", churn}};
+        {"GateChurnAndViewOwnership", churn},
+        {"TimingCountsAndPartition", timingCountsAndPartition},
+        {"DisabledTimingKeepsCountersEmpty", disabledTimingKeepsCountersEmpty},
+        {"ConcurrentTimingAccounting", concurrentTimingAccounting}};
     for (auto &t : tests) {
         try {
             t.second();

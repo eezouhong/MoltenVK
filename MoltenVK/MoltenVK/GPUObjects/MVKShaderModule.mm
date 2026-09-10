@@ -830,9 +830,26 @@ MVKShaderLibraryRepository::MVKShaderLibraryRepository(
 	size_t residentLimit) :
 	MVKVulkanAPIDeviceObject(device),
 	_residentLimit(residentLimit),
-	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {}
+	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {
+    _creationWork.enableTiming(getMVKConfig().performanceTracking);
+}
 
 MVKShaderLibraryRepository::~MVKShaderLibraryRepository() {
+    if (_creationWork.timingEnabled()) {
+        auto t = _creationWork.timing();
+        reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+            "Shared library work summary: calls=%llu, ready_hits=%llu, no_compile_misses=%llu, "
+            "recheck_hits=%llu, builds=%llu, build_failures=%llu, exceptions=%llu, "
+            "total_ns=%llu, lookup_ns=%llu, module_gate_ns=%llu, recheck_ns=%llu, "
+            "build_publish_ns=%llu, maximum_call_ns=%llu.",
+            (unsigned long long)t.calls, (unsigned long long)t.readyHits,
+            (unsigned long long)t.noCompileMisses, (unsigned long long)t.recheckHits,
+            (unsigned long long)t.buildCalls, (unsigned long long)t.buildFailures,
+            (unsigned long long)t.exceptions, (unsigned long long)t.totalNs,
+            (unsigned long long)t.lookupNs, (unsigned long long)t.gateNs,
+            (unsigned long long)t.recheckNs, (unsigned long long)t.buildNs,
+            (unsigned long long)t.maximumCallNs);
+    }
 	vector<MVKShaderLibrary*> libraries;
 	{
 		lock_guard<mutex> lock(_lock);

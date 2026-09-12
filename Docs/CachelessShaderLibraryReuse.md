@@ -86,3 +86,23 @@ GPFifo Dispose records its remaining guest queue rather than draining it; this
 is not the native compilation queue. It is retained as a separate shutdown
 observation, not relabelled zero or claimed fixed by library reuse. No iPhone
 installation or device-wide lifecycle acceptance was performed.
+
+## Cache lookup timing correction
+
+The final publication lookup calls `findShaderLibrary` without a timestamp.
+The optional argument previously remained zero, so performance tracking measured
+from the clock origin and reported system uptime as cache lookup latency. Start
+a local lookup interval when that argument is omitted; explicit caller timing
+and cache/locking behavior are unchanged.
+
+`--cacheless-reuse --check-timings` verifies that the recorded maximum cache
+lookup fits within the measured subprocess lifetime. Before this correction it
+reported 63,940,781.990ms during a 481.942ms process and failed. The corrected
+build reports 0.435ms during a 587.339ms process, with all sharing checks and
+80 GPU values still passing. This repairs a diagnostic value, not a measured
+64-million-millisecond runtime stall.
+
+The timing test used a fresh CMake configure from `e1f126e3497c4c09269015b1018368f9db1825d3`
+plus this timing patch. Its library SHA256 is
+`20ad7f03b6f19d098a90f3105c98794ba815f83c9a3ed10e6981a538850db18e`.
+The game comparison above retains its original library and cache identity.

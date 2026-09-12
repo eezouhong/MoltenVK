@@ -1400,8 +1400,13 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 // Finds and returns a shader library matching the shader config, or returns nullptr if it doesn't exist.
 // If a match is found, the shader config is aligned with the shader config of the matching library.
 MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
-														   VkPipelineCreationFeedback* pShaderFeedback,
-														   uint64_t startTime) {
+												   VkPipelineCreationFeedback* pShaderFeedback,
+												   uint64_t startTime) {
+	// An omitted timestamp starts a local lookup measurement. Treating zero
+	// as a real clock origin records system uptime as cache retrieval latency.
+	if (!startTime) {
+		startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
+	}
 	for (auto& slPair : _shaderLibraries) {
 		if (slPair.first.matches(*pShaderConfig)) {
 			pShaderConfig->alignWith(slPair.first);

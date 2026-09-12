@@ -1615,6 +1615,19 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 		MVKPipelineCache* pipelineCache = pipeline->getPipelineCache();
 		if (pipelineCache) {
 			mvkLib = pipelineCache->getShaderLibrary(pShaderConfig, this, pipeline, pShaderFeedback, startTime);
+		} else if (_shaderLibraryCache.supportsDeferredShaderLibraryImport()) {
+			// A cacheless pipeline can still reuse the device's physical library.
+			// Keep this module's logical view alive without holding _accessLock
+			// through conversion/Metal compilation or waiting for another build.
+			mvkLib = _shaderLibraryCache.getShaderLibraryConcurrent(
+				pShaderConfig, this, pipeline, pShaderFeedback, startTime,
+				_accessLock, [] {});
+			if (pShaderFeedback) {
+				// Device-internal reuse is not a hit in an application-supplied
+				// VkPipelineCache: this call has no such cache.
+				mvkDisableFlags(pShaderFeedback->flags,
+					VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+			}
 		} else {
 			lock_guard<mutex> lock(_accessLock);
 			mvkLib = _shaderLibraryCache.getShaderLibrary(
@@ -1769,6 +1782,12 @@ MVKShaderModule::MVKShaderModule(MVKDevice* device,
 	}
 
 	_key = MVKShaderModuleKey(codeSize, codeHash);
+	if (magicNum == kMVKMagicNumberSPIRVCode) {
+		// The key is only known after decoding/hash construction above. The
+		// private view is still empty and this module has not been published.
+		_shaderLibraryCache._shaderModuleKey = _key;
+		_shaderLibraryCache._repository = getDevice()->getShaderLibraryRepository();
+	}
 }
 
 MVKShaderModule::~MVKShaderModule() {

@@ -46,6 +46,7 @@ struct Context {
     vector<VkPipelineCache> caches;
     vector<VkPipeline> pipelines;
     bool cacheControl = false;
+    bool creationFeedback = false;
     void *mapped = nullptr;
     ~Context() {
         if (device) {
@@ -125,6 +126,10 @@ struct Context {
                 enabled.push_back(VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME);
                 cacheControl = true;
             }
+            if (!strcmp(e.extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME)) {
+                enabled.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
+                creationFeedback = true;
+            }
         }
         VkPhysicalDevicePipelineCreationCacheControlFeatures feat{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES};
@@ -185,10 +190,19 @@ struct Context {
         return result;
     }
     VkResult create(VkShaderModule module, VkPipelineCache cache, uint32_t seed, VkPipeline *result,
-                    VkPipelineCreateFlags flags = 0) {
+                    VkPipelineCreateFlags flags = 0,
+                    VkPipelineCreationFeedback *stageFeedback = nullptr) {
         VkSpecializationMapEntry e{0, 0, 4};
         VkSpecializationInfo spec{1, &e, 4, &seed};
         VkComputePipelineCreateInfo p{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        VkPipelineCreationFeedback overall{};
+        VkPipelineCreationFeedbackCreateInfo feedback{VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO};
+        if (stageFeedback) {
+            feedback.pPipelineCreationFeedback = &overall;
+            feedback.pipelineStageCreationFeedbackCount = 1;
+            feedback.pPipelineStageCreationFeedbacks = stageFeedback;
+            p.pNext = &feedback;
+        }
         p.flags = flags;
         p.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         p.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -294,13 +308,108 @@ struct Context {
             require(((uint32_t *)mapped)[i] == expected[i], "GPU readback mismatch");
     }
 };
+static int testCachelessReuse(Context &c, char **argv, bool repositoryEnabled) {
+    require(c.cacheControl, "cache control required for cacheless reuse test");
+    require(c.creationFeedback, "creation feedback required for cacheless reuse test");
+    VkPipeline absent{};
+    require(c.create(c.modules[3], VK_NULL_HANDLE, 17, &absent,
+                VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT) == VK_PIPELINE_COMPILE_REQUIRED,
+            "fresh cacheless module must not compile when compilation is prohibited");
+    require(absent == VK_NULL_HANDLE, "compile-required returned a pipeline");
+    cout << "FreshCachelessCompileRequired PASS\n";
+    vector<uint32_t> expected;
+    bool sharingCorrect = true;
+    auto keep = [&](VkPipeline p, unsigned moduleId) {
+        c.pipelines.push_back(p);
+        for (unsigned j = 0; j < 4; ++j)
+            expected.push_back(moduleId * 10000 + 17 + j);
+    };
+    auto attemptReuse = [&](VkShaderModule module, VkPipelineCache cache, unsigned id,
+                            const char *label) {
+        VkPipeline pipeline{};
+        VkPipelineCreationFeedback feedback{};
+        VkResult result = c.create(module, cache, 17, &pipeline,
+            VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT, &feedback);
+        bool reused = result == VK_SUCCESS;
+        require(reused || result == VK_PIPELINE_COMPILE_REQUIRED, "unexpected reuse failure");
+        if (cache == VK_NULL_HANDLE)
+            require(!(feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT),
+                    "cacheless creation incorrectly reports an application cache hit");
+        sharingCorrect &= reused == repositoryEnabled;
+        cout << label << " reused=" << reused << " expected=" << repositoryEnabled << '\n';
+        if (!reused)
+            check(c.create(module, cache, 17, &pipeline), "fallback creation after reuse probe");
+        keep(pipeline, id);
+    };
+
+    auto shared = c.cache();
+    VkPipeline first{};
+    check(c.create(c.modules[0], shared, 17, &first), "cached seed");
+    keep(first, 0);
+    auto before = c.exportCache(shared);
+    // A different VkShaderModule object with identical bytes must reuse the
+    // existing device library even when the caller cannot acquire its Vk cache.
+    attemptReuse(c.module(argv[1]), VK_NULL_HANDLE, 0, "CachedToCacheless");
+    require(c.exportCache(shared) == before, "cacheless reuse changed source cache membership");
+
+    VkPipeline uncached{};
+    check(c.create(c.modules[1], VK_NULL_HANDLE, 17, &uncached), "cacheless seed");
+    keep(uncached, 1);
+    attemptReuse(c.module(argv[2]), c.cache(), 1, "CachelessToCached");
+
+    // Different native modules containing the same new SPIR-V contend for the
+    // same device library. No VkPipelineCache is present in any of these calls.
+    VkShaderModule duplicate = c.module(argv[3]);
+    vector<future<VkPipeline>> tasks;
+    atomic<bool> go{false};
+    for (int i = 0; i < 8; ++i)
+        tasks.push_back(async(launch::async, [&, i] {
+            while (!go.load()) this_thread::yield();
+            VkPipeline p{};
+            check(c.create(i % 2 ? duplicate : c.modules[2], VK_NULL_HANDLE, 17, &p),
+                  "concurrent cacheless create");
+            return p;
+        }));
+    go = true;
+    for (auto &t : tasks) keep(t.get(), 2);
+    cout << "ConcurrentCachelessCreation PASS\n";
+
+    tasks.clear();
+    go = false;
+    VkPipelineCache mixedCache = c.cache();
+    for (int i = 0; i < 8; ++i)
+        tasks.push_back(async(launch::async, [&, i] {
+            while (!go.load()) this_thread::yield();
+            VkPipeline p{};
+            check(c.create(c.modules[3], i % 2 ? mixedCache : VK_NULL_HANDLE, 17, &p),
+                  "mixed cached/cacheless create");
+            return p;
+        }));
+    go = true;
+    for (auto &t : tasks) keep(t.get(), 3);
+    cout << "ConcurrentMixedCacheCreation PASS\n";
+
+    // Exercise the reverse ownership direction: original logical Vk cache and
+    // all source modules can die before pipelines execute on the GPU.
+    for (auto cache : c.caches) vkDestroyPipelineCache(c.device, cache, nullptr);
+    c.caches.clear();
+    for (auto module : c.modules) vkDestroyShaderModule(c.device, module, nullptr);
+    c.modules.clear();
+    c.execute(expected);
+    cout << "CachelessGpuReadbackAfterOwnersDestroyed PASS words=" << expected.size() << '\n';
+    cout << "ExpectedLibraryCompiles=" << (repositoryEnabled ? 4 : 8) << '\n';
+    require(sharingCorrect, "cacheless path did not share existing device library");
+    return 0;
+}
 int main(int argc, char **argv) {
     try {
-        require(argc == 5, "expected four SPIR-V modules");
+        require(argc == 5 || argc == 6, "expected four SPIR-V modules and optional cacheless mode");
         Context c;
         c.init();
         for (int i = 1; i < 5; ++i)
             c.module(argv[i]);
+        if (argc == 6)
+            return testCachelessReuse(c, argv, string(argv[5]) == "cacheless-repository-on");
         auto shared = c.cache();
         auto other = c.cache();
         if (c.cacheControl) {

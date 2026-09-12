@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -27,6 +28,7 @@ def main():
     p.add_argument('--glslc',default='glslc')
     p.add_argument('--repository',choices=['on','off'],default='on')
     p.add_argument('--resident-limit',type=int,default=0)
+    p.add_argument('--cacheless-reuse',action='store_true')
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args()
     library=a.library.resolve(strict=True)
@@ -46,12 +48,25 @@ def main():
         cmd=['clang++','-std=c++17','-O1','-g','-pthread','-I',str(a.headers),str(ROOT/'Scripts/test-shared-library-vulkan.cpp'),str(library),'-Wl,-rpath,'+str(library.parent),'-o',str(executable)]
         build=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
         if build.returncode:raise RuntimeError(build.stdout+build.stderr)
-        run=subprocess.run([str(executable),*[str(s) for s in shaders]],env=env,capture_output=True,text=True,timeout=60)
+        argv=[str(executable),*[str(s) for s in shaders]]
+        if a.cacheless_reuse:
+            argv.append('cacheless-repository-'+a.repository)
+        run=subprocess.run(argv,env=env,capture_output=True,text=True,timeout=60)
     result={'library':str(library),'librarySha256':hashlib.sha256(library.read_bytes()).hexdigest(),
+            'cachelessReuse':a.cacheless_reuse,'argv':argv,
+            'harnessSha256':hashlib.sha256((ROOT/'Scripts/test-shared-library-vulkan.cpp').read_bytes()).hexdigest(),
             'settings':settings,'exitCode':run.returncode,'stdout':run.stdout,'stderr':run.stderr,
             'scope':'real Vulkan/Metal parallel compute pipeline creation, cache roundtrip and GPU readback on macOS'}
+    if a.cacheless_reuse:
+        summaries=[l for l in run.stderr.splitlines() if 'Metal 4 unified compiler summary:' in l]
+        values=re.findall(r'library_attempts=(\d+)',summaries[-1]) if summaries else []
+        actual=int(values[0]) if values else None
+        expected=4 if a.repository=='on' else 8
+        result['libraryCompiles']={'actual':actual,'expected':expected,'passed':actual==expected}
+        if actual!=expected and result['exitCode']==0:
+            result['exitCode']=1
     a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps({**result,'stderr':'\n'.join(run.stderr.splitlines()[-8:])},indent=2))
-    return run.returncode
+    return result['exitCode']
 
 if __name__=='__main__':raise SystemExit(main())

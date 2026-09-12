@@ -830,9 +830,26 @@ MVKShaderLibraryRepository::MVKShaderLibraryRepository(
 	size_t residentLimit) :
 	MVKVulkanAPIDeviceObject(device),
 	_residentLimit(residentLimit),
-	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {}
+	_residentTrimHighWater(getSharedShaderLibraryTrimHighWater(residentLimit)) {
+    _creationWork.enableTiming(getMVKConfig().performanceTracking);
+}
 
 MVKShaderLibraryRepository::~MVKShaderLibraryRepository() {
+    if (_creationWork.timingEnabled()) {
+        auto t = _creationWork.timing();
+        reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+            "Shared library work summary: calls=%llu, ready_hits=%llu, no_compile_misses=%llu, "
+            "recheck_hits=%llu, builds=%llu, build_failures=%llu, exceptions=%llu, "
+            "total_ns=%llu, lookup_ns=%llu, module_gate_ns=%llu, recheck_ns=%llu, "
+            "build_publish_ns=%llu, maximum_call_ns=%llu.",
+            (unsigned long long)t.calls, (unsigned long long)t.readyHits,
+            (unsigned long long)t.noCompileMisses, (unsigned long long)t.recheckHits,
+            (unsigned long long)t.buildCalls, (unsigned long long)t.buildFailures,
+            (unsigned long long)t.exceptions, (unsigned long long)t.totalNs,
+            (unsigned long long)t.lookupNs, (unsigned long long)t.gateNs,
+            (unsigned long long)t.recheckNs, (unsigned long long)t.buildNs,
+            (unsigned long long)t.maximumCallNs);
+    }
 	vector<MVKShaderLibrary*> libraries;
 	{
 		lock_guard<mutex> lock(_lock);
@@ -1267,7 +1284,8 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 														  bool* pCacheRepresentationChanged,
 														  bool* pWasCacheHit,
 														  VkPipelineCreationFeedback* pShaderFeedback,
-														  uint64_t startTime) {
+														  uint64_t startTime,
+                                                      bool allowCompile) {
 	bool cacheRepresentationChanged = false;
 	bool wasCacheHit = false;
 	MVKShaderLibrary* shLib = findShaderLibrary(pShaderConfig, pShaderFeedback, startTime);
@@ -1286,7 +1304,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			}
 		}
 	}
-	if (!shLib && !pipeline->shouldFailOnPipelineCompileRequired()) {
+	if (!shLib && allowCompile && !pipeline->shouldFailOnPipelineCompileRequired()) {
 		shLib = materializeDeferredShaderLibrary(
 			pShaderConfig,
 			pipeline,
@@ -1297,7 +1315,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			wasCacheHit = true;
 		}
 	}
-	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
+	if ( !shLib && allowCompile && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
 		if (shaderModule->convert(pShaderConfig, conversionResult)) {
 			shLib = addShaderLibrary(pShaderConfig, conversionResult);
@@ -1316,11 +1334,79 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	return shLib;
 }
 
+
+MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
+    SPIRVToMSLConversionConfiguration* pShaderConfig,
+    MVKShaderModule* shaderModule, MVKPipeline* pipeline,
+    VkPipelineCreationFeedback* pShaderFeedback, uint64_t startTime,
+    mutex& viewLock, const std::function<void()>& onChanged) {
+    assert(_repository);
+
+    auto lookup = [&]() -> MVKShaderLibrary* {
+        lock_guard<mutex> lock(viewLock);
+        bool changed = false, hit = false;
+        auto* library = getShaderLibrary(pShaderConfig, shaderModule, pipeline,
+            &changed, &hit, pShaderFeedback, startTime, false);
+        if (changed) { onChanged(); }
+        if (hit && pShaderFeedback) {
+            mvkEnableFlags(pShaderFeedback->flags,
+                VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+        }
+        return library;
+    };
+
+    return _repository->_creationWork.run(_shaderModuleKey,
+        !pipeline->shouldFailOnPipelineCompileRequired(), lookup, [&]() -> MVKShaderLibrary* {
+            // The temporary view holds a real repository membership. It keeps
+            // the canonical result alive until the destination owns its own
+            // membership, and releases it on every return/exception path.
+            // Failures belong to this request's pipeline, not the shared cache.
+            MVKShaderLibraryCache pending(pipeline, _shaderModuleKey);
+            bool fromDeferred = false;
+            {
+                lock_guard<mutex> lock(viewLock);
+                for (const auto& deferred : _deferredShaderLibraries) {
+                    if (deferred.shaderConfig.matches(*pShaderConfig)) {
+                        pending.addDeferredShaderLibrary(&deferred.shaderConfig,
+                            deferred.resultInfo, deferred.compressedMSL);
+                        fromDeferred = true;
+                        break;
+                    }
+                }
+                // Leave the destination's deferred record intact until success:
+                // concurrent export/merge sees valid data, and failures can retry.
+            }
+
+            bool changed = false, hit = false;
+            auto* library = pending.getShaderLibrary(pShaderConfig, shaderModule,
+                pipeline, &changed, &hit, pShaderFeedback, startTime);
+            if (!library) { return nullptr; }
+
+            {
+                lock_guard<mutex> lock(viewLock);
+                if (adoptShaderLibraryMembership(*pShaderConfig, library)) { onChanged(); }
+                // Adoption/import may have published first. The view's exact
+                // matching rules, not the module gate, select the final result.
+                library = findShaderLibrary(pShaderConfig);
+            }
+            if (library && (fromDeferred || hit) && pShaderFeedback) {
+                mvkEnableFlags(pShaderFeedback->flags,
+                    VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+            }
+            return library;
+        });
+}
+
 // Finds and returns a shader library matching the shader config, or returns nullptr if it doesn't exist.
 // If a match is found, the shader config is aligned with the shader config of the matching library.
 MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
-														   VkPipelineCreationFeedback* pShaderFeedback,
-														   uint64_t startTime) {
+												   VkPipelineCreationFeedback* pShaderFeedback,
+												   uint64_t startTime) {
+	// An omitted timestamp starts a local lookup measurement. Treating zero
+	// as a real clock origin records system uptime as cache retrieval latency.
+	if (!startTime) {
+		startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
+	}
 	for (auto& slPair : _shaderLibraries) {
 		if (slPair.first.matches(*pShaderConfig)) {
 			pShaderConfig->alignWith(slPair.first);
@@ -1534,6 +1620,19 @@ MVKMTLFunction MVKShaderModule::getMTLFunction(SPIRVToMSLConversionConfiguration
 		MVKPipelineCache* pipelineCache = pipeline->getPipelineCache();
 		if (pipelineCache) {
 			mvkLib = pipelineCache->getShaderLibrary(pShaderConfig, this, pipeline, pShaderFeedback, startTime);
+		} else if (_shaderLibraryCache.supportsDeferredShaderLibraryImport()) {
+			// A cacheless pipeline can still reuse the device's physical library.
+			// Keep this module's logical view alive without holding _accessLock
+			// through conversion/Metal compilation or waiting for another build.
+			mvkLib = _shaderLibraryCache.getShaderLibraryConcurrent(
+				pShaderConfig, this, pipeline, pShaderFeedback, startTime,
+				_accessLock, [] {});
+			if (pShaderFeedback) {
+				// Device-internal reuse is not a hit in an application-supplied
+				// VkPipelineCache: this call has no such cache.
+				mvkDisableFlags(pShaderFeedback->flags,
+					VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+			}
 		} else {
 			lock_guard<mutex> lock(_accessLock);
 			mvkLib = _shaderLibraryCache.getShaderLibrary(
@@ -1688,6 +1787,12 @@ MVKShaderModule::MVKShaderModule(MVKDevice* device,
 	}
 
 	_key = MVKShaderModuleKey(codeSize, codeHash);
+	if (magicNum == kMVKMagicNumberSPIRVCode) {
+		// The key is only known after decoding/hash construction above. The
+		// private view is still empty and this module has not been published.
+		_shaderLibraryCache._shaderModuleKey = _key;
+		_shaderLibraryCache._repository = getDevice()->getShaderLibraryRepository();
+	}
 }
 
 MVKShaderModule::~MVKShaderModule() {

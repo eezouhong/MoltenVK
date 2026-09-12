@@ -22,6 +22,7 @@
 #include "FileSupport.h"
 #include "SPIRVSupport.h"
 #include <fstream>
+#include "SPIRVToMSLAlignment.h"
 
 using namespace mvk;
 using namespace std;
@@ -220,29 +221,9 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConversionConfiguration::matches(const SPIRVToM
 
 
 MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(const SPIRVToMSLConversionConfiguration& srcContext) {
-
-	for (auto& si : shaderInputs) {
-		si.outIsUsedByShader = false;
-		for (auto& srcSI : srcContext.shaderInputs) {
-			if (si.matches(srcSI)) { si.outIsUsedByShader = srcSI.outIsUsedByShader; }
-		}
-	}
-
-	for (auto& so : shaderOutputs) {
-		so.outIsUsedByShader = false;
-		for (auto& srcSO : srcContext.shaderOutputs) {
-			if (so.matches(srcSO)) { so.outIsUsedByShader = srcSO.outIsUsedByShader; }
-		}
-	}
-
-    for (auto& rb : resourceBindings) {
-        rb.outIsUsedByShader = false;
-        for (auto& srcRB : srcContext.resourceBindings) {
-			if (rb.matches(srcRB)) {
-				rb.outIsUsedByShader = srcRB.outIsUsedByShader;
-			}
-        }
-    }
+	alignShaderUsage(shaderInputs, srcContext.shaderInputs, InterfaceUsageHash{});
+	alignShaderUsage(shaderOutputs, srcContext.shaderOutputs, InterfaceUsageHash{});
+	alignShaderUsage(resourceBindings, srcContext.resourceBindings, ResourceUsageHash{});
 }
 
 

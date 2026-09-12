@@ -27,11 +27,17 @@ target_include_directories(MoltenVK
 find_package(Git)
 if(GIT_FOUND)
 	execute_process(
-		COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+		COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 		OUTPUT_VARIABLE MVK_GIT_REV
+		RESULT_VARIABLE MVK_GIT_RESULT
 		ERROR_QUIET
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
+	if(NOT MVK_GIT_RESULT EQUAL 0 OR NOT MVK_GIT_REV)
+		set(MVK_GIT_REV "unknown")
+		message(WARNING "MoltenVK source revision unavailable; no commit identity is claimed")
+	endif()
 	configure_file(
 		"${CMAKE_CURRENT_SOURCE_DIR}/../Templates/cmake/mvkGitRevDerived.h.in"
 		"${CMAKE_CURRENT_BINARY_DIR}/mvkGitRevDerived.h"

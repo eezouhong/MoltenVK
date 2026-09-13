@@ -46,6 +46,31 @@ def main() -> int:
             "VkResult MVKPipelineCache::mergePipelineCachesImpl(",
             "\n\n#pragma mark Cereal archive definitions",
         ),
+        "// @PRODUCTION_SHADER_CACHE_BEHAVIOR@": function(
+            shader,
+            "MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(",
+            "\nMVKShaderLibraryCache::~MVKShaderLibraryCache()",
+        ),
+        "// @PRODUCTION_PIPELINE_CACHE_BEHAVIOR@": function(
+            pipeline,
+            "MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(",
+            "\n// Returns a shader library cache",
+        ),
+        "// @PRODUCTION_BEHAVIOR_MARKS@": function(
+            pipeline,
+            "void MVKPipelineCache::markDirty()",
+            "\nVkResult MVKPipelineCache::mergePipelineCaches(",
+        ),
+        "// @PRODUCTION_RELEASE_CONTRIBUTIONS@": function(
+            pipeline,
+            "void MVKPipeline::releaseShaderLibraryContributions(",
+            "\nMVKPipeline::MVKPipeline(",
+        ),
+        "// @PRODUCTION_ADOPT_CONTRIBUTIONS@": function(
+            pipeline,
+            "VkResult MVKPipeline::adoptShaderLibrariesInto(",
+            "\nvoid MVKPipeline::discardShaderLibraryContributions(",
+        ),
     }
     source = TEMPLATE.read_text()
     for marker, body in bodies.items():

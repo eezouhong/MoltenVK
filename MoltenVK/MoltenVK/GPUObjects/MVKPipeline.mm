@@ -2444,13 +2444,18 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 	} else if (!getDevice()->getShaderLibraryRepository()) {
 		result = VK_ERROR_FEATURE_NOT_PRESENT;
 	} else {
-		for (const auto& contribution : contributions) {
-			if (destinationPipelineCache->adoptShaderLibraryMembership(
-					contribution.shaderModuleKey,
-					contribution.shaderConfig,
-					contribution.shaderLibrary)) {
-				adoptedCount++;
+		try {
+			for (const auto& contribution : contributions) {
+				if (destinationPipelineCache->adoptShaderLibraryMembership(
+						contribution.shaderModuleKey,
+						contribution.shaderConfig,
+						contribution.shaderLibrary)) {
+					adoptedCount++;
+				}
 			}
+		} catch (...) {
+			releaseShaderLibraryContributions(contributions);
+			throw;
 		}
 	}
 	releaseShaderLibraryContributions(contributions);

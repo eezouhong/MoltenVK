@@ -1308,7 +1308,12 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
 		if (shaderModule->convert(pShaderConfig, conversionResult)) {
-			shLib = addShaderLibrary(pShaderConfig, conversionResult);
+			try {
+				shLib = addShaderLibrary(pShaderConfig, conversionResult);
+			} catch (...) {
+				logicalContentChanged = true;
+				throw;
+			}
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
@@ -1497,13 +1502,30 @@ bool MVKShaderLibraryCache::hasShaderLibrary(
 	return false;
 }
 
+void MVKShaderLibraryCache::addShaderLibraryMembership(
+	const SPIRVToMSLConversionConfiguration& shaderConfig,
+	MVKShaderLibrary* shaderLibrary) {
+
+	if (!shaderLibrary) { return; }
+	try {
+		_shaderLibraries.emplace_back(shaderConfig, shaderLibrary);
+	} catch (...) {
+		if (_repository) {
+			_repository->release(_shaderModuleKey, shaderConfig, shaderLibrary);
+		} else {
+			shaderLibrary->release();
+		}
+		throw;
+	}
+}
+
 // Adds and returns a new shader library configured from the specified conversion configuration.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResult& conversionResult) {
 	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
 	if (_repository) {
 		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
-			_shaderLibraries.emplace_back(alignedConfig, existing);
+			addShaderLibraryMembership(alignedConfig, existing);
 			return existing;
 		}
 	}
@@ -1518,7 +1540,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 		priorConfigurationResult == VK_SUCCESS) {
 		_owner->clearConfigurationResult();
 	}
-	if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }
+	addShaderLibraryMembership(alignedConfig, shLib);
 	return shLib;
 }
 
@@ -1529,7 +1551,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
 	if (_repository) {
 		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
-			_shaderLibraries.emplace_back(alignedConfig, existing);
+			addShaderLibraryMembership(alignedConfig, existing);
 			return existing;
 		}
 	}
@@ -1544,7 +1566,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 		priorConfigurationResult == VK_SUCCESS) {
 		_owner->clearConfigurationResult();
 	}
-	if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }
+	addShaderLibraryMembership(alignedConfig, shLib);
 	return shLib;
 }
 

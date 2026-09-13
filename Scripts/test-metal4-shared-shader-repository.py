@@ -591,9 +591,19 @@ def test_source_policy() -> None:
         "if (!result && candidate && candidate->isResident())",
         SHADER_MM,
     )
-    assert shader_mm.count(
-        "if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }"
-    ) == 2
+    add_membership_start = shader_mm.index(
+        "void MVKShaderLibraryCache::addShaderLibraryMembership("
+    )
+    first_add_overload = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(",
+        add_membership_start,
+    )
+    add_membership_body = shader_mm[add_membership_start:first_add_overload]
+    require(add_membership_body, "_shaderLibraries.emplace_back(", SHADER_MM)
+    require(add_membership_body, "_repository->release(", SHADER_MM)
+    require(add_membership_body, "shaderLibrary->release();", SHADER_MM)
+    assert shader_mm.count("addShaderLibraryMembership(alignedConfig, existing);") == 2
+    assert shader_mm.count("addShaderLibraryMembership(alignedConfig, shLib);") == 2
     merge_cache_start = shader_mm.index("bool MVKShaderLibraryCache::merge(")
     merge_cache_end = shader_mm.index(
         "MVKShaderLibraryCache::~MVKShaderLibraryCache()", merge_cache_start
@@ -952,6 +962,20 @@ def test_source_policy() -> None:
     assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
     assert "swap(_shaderLibraryContributions)" in pipeline_adoption_body
     assert "releaseShaderLibraryContributions" in pipeline_adoption_body
+    adoption_try = pipeline_adoption_body.index("try {")
+    adoption_call = pipeline_adoption_body.index(
+        "destinationPipelineCache->adoptShaderLibraryMembership("
+    )
+    adoption_catch = pipeline_adoption_body.index("catch (...) {")
+    exceptional_release = pipeline_adoption_body.index(
+        "releaseShaderLibraryContributions(contributions);", adoption_catch
+    )
+    adoption_rethrow = pipeline_adoption_body.index("throw;", exceptional_release)
+    normal_release = pipeline_adoption_body.index(
+        "releaseShaderLibraryContributions(contributions);", adoption_rethrow
+    )
+    assert adoption_try < adoption_call < adoption_catch
+    assert adoption_catch < exceptional_release < adoption_rethrow < normal_release
     assert "getShaderLibraryRepository()" in pipeline_adoption_body
     assert "VK_ERROR_FEATURE_NOT_PRESENT" in pipeline_adoption_body
     assert "mergePipelineCaches" not in pipeline_adoption_body

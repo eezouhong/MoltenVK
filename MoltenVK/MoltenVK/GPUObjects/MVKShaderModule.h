@@ -366,6 +366,9 @@ protected:
 		MVKShaderLibrary* replacement,
 		bool* pLogicalContentChanged);
 	bool hasShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration& shaderConfig) const;
+	void addShaderLibraryMembership(
+		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+		MVKShaderLibrary* shaderLibrary);
 	bool supportsDeferredShaderLibraryImport() const { return _repository != nullptr; }
 	bool merge(MVKShaderLibraryCache* other,
 		bool* pLogicalContentChanged = nullptr);

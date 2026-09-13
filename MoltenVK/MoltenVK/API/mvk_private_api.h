@@ -44,7 +44,7 @@ typedef unsigned long MTLArgumentBuffersTier;
  */
 
 
-#define MVK_PRIVATE_API_VERSION   47
+#define MVK_PRIVATE_API_VERSION   48
 
 
 #pragma mark -
@@ -404,6 +404,7 @@ typedef uint64_t MVKPipelineCacheShaderLibraryCaptureToken;
 typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignored, MVKConfiguration* pConfiguration, size_t* pConfigurationSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMutationGenerationMVK)(VkPipelineCache pipelineCache, uint64_t* pGeneration);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
 typedef VkResult (VKAPI_PTR *PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK)(MVKPipelineCacheShaderLibraryCaptureToken captureToken);
@@ -484,6 +485,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMemoryStatisticsMVK(
     VkPipelineCache                            pipelineCache,
     MVKPipelineCacheMemoryStatistics*          pStats,
     size_t*                                    pStatsSize);
+
+/** Returns the logical persistent-content generation of one pipeline-cache view. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMutationGenerationMVK(
+    VkPipelineCache                            pipelineCache,
+    uint64_t*                                  pGeneration);
 
 /** Returns a nonblocking snapshot of the device-wide shared shader repository. */
 VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(

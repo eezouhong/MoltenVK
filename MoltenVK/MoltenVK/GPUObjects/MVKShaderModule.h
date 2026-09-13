@@ -284,6 +284,15 @@ struct MVKDeferredShaderLibrary {
 	MVKCompressor<std::string> compressedMSL;
 };
 
+/** Returns whether two shader-library records serialize to identical persistent contents. */
+bool mvkAreShaderLibraryPersistenceEqual(
+	const mvk::SPIRVToMSLConversionConfiguration& lhsConfig,
+	const mvk::SPIRVToMSLConversionResultInfo& lhsResultInfo,
+	const MVKCompressor<std::string>& lhsCompressedMSL,
+	const mvk::SPIRVToMSLConversionConfiguration& rhsConfig,
+	const mvk::SPIRVToMSLConversionResultInfo& rhsResultInfo,
+	const MVKCompressor<std::string>& rhsCompressedMSL);
+
 /** Represents a cache of shader libraries for one shader module. */
 class MVKShaderLibraryCache : public MVKBaseDeviceObject {
 
@@ -301,11 +310,13 @@ public:
 	 * If pCacheRepresentationChanged is not nil, this function will set it to true
 	 * when the serializable contents of this cache view changed. If pWasCacheHit is
 	 * not nil, this function will set it to true when an existing or deferred
-	 * shader library satisfied the request.
+	 * shader library satisfied the request. If pLogicalContentChanged is not nil,
+	 * it is set only when the logical persistent contents changed.
 	 */
 	MVKShaderLibrary* getShaderLibrary(mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 									   MVKShaderModule* shaderModule, MVKPipeline* pipeline,
 									   bool* pCacheRepresentationChanged,
+									   bool* pLogicalContentChanged,
 									   bool* pWasCacheHit,
 									   VkPipelineCreationFeedback* pShaderFeedback,
 									   uint64_t startTime = 0);
@@ -316,7 +327,8 @@ public:
 	/** Adds one exact library membership without compiling or merging caches. */
 	bool adoptShaderLibraryMembership(
 		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
-		MVKShaderLibrary* shaderLibrary);
+		MVKShaderLibrary* shaderLibrary,
+		bool* pLogicalContentChanged = nullptr);
 
 	MVKShaderLibraryCache(MVKVulkanAPIDeviceObject* owner,
 						  MVKShaderModuleKey shaderModuleKey = {});
@@ -343,13 +355,20 @@ protected:
 		mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
 		MVKPipeline* pipeline,
 		VkPipelineCreationFeedback* pShaderFeedback,
-		uint64_t startTime);
+		uint64_t startTime,
+		bool* pLogicalContentChanged);
 	bool takeDeferredShaderLibrary(
 		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
 		MVKDeferredShaderLibrary* pDeferred = nullptr);
+	bool takeDeferredShaderLibraryForReplacement(
+		const mvk::SPIRVToMSLConversionConfiguration& lookupConfig,
+		const mvk::SPIRVToMSLConversionConfiguration& replacementConfig,
+		MVKShaderLibrary* replacement,
+		bool* pLogicalContentChanged);
 	bool hasShaderLibrary(const mvk::SPIRVToMSLConversionConfiguration& shaderConfig) const;
 	bool supportsDeferredShaderLibraryImport() const { return _repository != nullptr; }
-	void merge(MVKShaderLibraryCache* other);
+	bool merge(MVKShaderLibraryCache* other,
+		bool* pLogicalContentChanged = nullptr);
 
 	MVKVulkanAPIDeviceObject* _owner;
 	MVKShaderModuleKey _shaderModuleKey;

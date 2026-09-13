@@ -29,9 +29,10 @@
 #include "MVKInlineArray.h"
 #include <MoltenVKShaderConverter/SPIRVReflection.h>
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
+#include <atomic>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
-#include <memory>
 #include <ostream>
 #include <string>
 
@@ -612,6 +613,11 @@ public:
 	/** Returns a nonblocking logical memory snapshot for this cache view. */
 	void getMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats);
 
+	/** Returns the logical persistent-content generation for this cache view. */
+	uint64_t getMutationGeneration() const {
+		return _mutationGeneration.load(std::memory_order_relaxed);
+	}
+
 	/**
 	 * Return a shader library for the shader conversion configuration, from the
 	 * pipeline's pipeline cache, or compiled from source in the shader module.
@@ -651,9 +657,11 @@ protected:
 	VkResult writeDataImpl(size_t* pDataSize, void* pData);
 	VkResult mergePipelineCachesImpl(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches);
 	void markDirty();
+	void markContentChanged();
 
 	std::unordered_map<MVKShaderModuleKey, MVKShaderLibraryCache*> _shaderCache;
 	size_t _dataSize = 0;
+	std::atomic<uint64_t> _mutationGeneration{0};
 	std::mutex _shaderCacheLock;
 	bool _isExternallySynchronized = false;
 	bool _isMergeInternallySynchronized = false;

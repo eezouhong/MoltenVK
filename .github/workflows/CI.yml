@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate ownership, cache-view, memory, and reclaim invariants
         run: python3 Scripts/test-metal4-shared-shader-repository.py
+      - name: Validate pipeline-cache mutation generation behavior
+        run: python3 Scripts/test-pipeline-cache-mutation-generation.py
 
   build:
     strategy:
@@ -86,6 +88,16 @@ jobs:
       - name: Fetch Dependencies
         if: steps.cache-dependencies.outputs.cache-hit != 'true'
         run: ./fetchDependencies -v --${{ matrix.platform }}
+
+      - name: Validate pipeline-cache persistence comparison
+        if: matrix.platform == 'macos' && matrix.private_api == false
+        run: |
+          for mode in normal bad-alloc cereal-exception no-cereal; do
+            python3 Scripts/test-pipeline-cache-persistence-comparison.py \
+              --spirv-cross External/SPIRV-Cross \
+              --cereal External/cereal \
+              --mode "${mode}"
+          done
 
       - name: Output Dependency Build Logs on Failure
         if: failure()

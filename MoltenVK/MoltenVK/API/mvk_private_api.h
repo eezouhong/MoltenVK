@@ -486,7 +486,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMemoryStatisticsMVK(
     MVKPipelineCacheMemoryStatistics*          pStats,
     size_t*                                    pStatsSize);
 
-/** Returns the logical persistent-content generation of one pipeline-cache view. */
+/**
+ * Returns a change token for the logical persistent contents of one pipeline-cache view.
+ * The token may advance conservatively and wraps as an unsigned 64-bit value. Consumers
+ * must detect changes with != instead of ordering comparisons. This token does not publish
+ * or synchronize access to the cache contents.
+ */
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMutationGenerationMVK(
     VkPipelineCache                            pipelineCache,
     uint64_t*                                  pGeneration);

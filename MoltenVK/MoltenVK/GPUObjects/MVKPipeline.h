@@ -613,7 +613,11 @@ public:
 	/** Returns a nonblocking logical memory snapshot for this cache view. */
 	void getMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats);
 
-	/** Returns the logical persistent-content generation for this cache view. */
+	/**
+	 * Returns a change token for this view's logical persistent contents. The token may
+	 * advance conservatively and wrap; compare snapshots with !=. This relaxed load does
+	 * not publish or synchronize access to the cache contents.
+	 */
 	uint64_t getMutationGeneration() const {
 		return _mutationGeneration.load(std::memory_order_relaxed);
 	}

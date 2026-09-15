@@ -2444,13 +2444,18 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 	} else if (!getDevice()->getShaderLibraryRepository()) {
 		result = VK_ERROR_FEATURE_NOT_PRESENT;
 	} else {
-		for (const auto& contribution : contributions) {
-			if (destinationPipelineCache->adoptShaderLibraryMembership(
-					contribution.shaderModuleKey,
-					contribution.shaderConfig,
-					contribution.shaderLibrary)) {
-				adoptedCount++;
+		try {
+			for (const auto& contribution : contributions) {
+				if (destinationPipelineCache->adoptShaderLibraryMembership(
+						contribution.shaderModuleKey,
+						contribution.shaderConfig,
+						contribution.shaderLibrary)) {
+					adoptedCount++;
+				}
 			}
+		} catch (...) {
+			releaseShaderLibraryContributions(contributions);
+			throw;
 		}
 	}
 	releaseShaderLibraryContributions(contributions);
@@ -4780,20 +4785,30 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 														 VkPipelineCreationFeedback* pShaderFeedback,
 														 uint64_t startTime) {
 	bool cacheRepresentationChanged = false;
+	bool logicalContentChanged = false;
 	bool wasCacheHit = false;
 	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
-	MVKShaderLibrary* shLib = slCache->getShaderLibrary(
-		pContext,
-		shaderModule,
-		pipeline,
-		&cacheRepresentationChanged,
-		&wasCacheHit,
-		pShaderFeedback,
-		startTime);
+	MVKShaderLibrary* shLib = nullptr;
+	try {
+		shLib = slCache->getShaderLibrary(
+			pContext,
+			shaderModule,
+			pipeline,
+			&cacheRepresentationChanged,
+			&logicalContentChanged,
+			&wasCacheHit,
+			pShaderFeedback,
+			startTime);
+	} catch (...) {
+		if (logicalContentChanged) { markContentChanged(); }
+		else if (cacheRepresentationChanged) { markDirty(); }
+		throw;
+	}
+	if (logicalContentChanged) { markContentChanged(); }
+	else if (cacheRepresentationChanged) { markDirty(); }
 	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
 		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
 	}
-	if (cacheRepresentationChanged) { markDirty(); }
 	if (wasCacheHit && pShaderFeedback) {
 		mvkEnableFlags(
 			pShaderFeedback->flags,
@@ -4809,8 +4824,19 @@ bool MVKPipelineCache::adoptShaderLibraryMembership(
 
 	lock_guard<mutex> lock(_shaderCacheLock);
 	MVKShaderLibraryCache* shaderCache = getShaderLibraryCache(shaderModuleKey);
-	bool adopted = shaderCache->adoptShaderLibraryMembership(shaderConfig, shaderLibrary);
-	if (adopted) { markDirty(); }
+	bool logicalContentChanged = false;
+	bool adopted = false;
+	try {
+		adopted = shaderCache->adoptShaderLibraryMembership(
+			shaderConfig,
+			shaderLibrary,
+			&logicalContentChanged);
+	} catch (...) {
+		if (logicalContentChanged) { markContentChanged(); }
+		throw;
+	}
+	if (logicalContentChanged) { markContentChanged(); }
+	else if (adopted) { markDirty(); }
 	return adopted;
 }
 
@@ -5076,6 +5102,11 @@ void MVKPipelineCache::markDirty() {
 	_dataSize = 0;
 }
 
+void MVKPipelineCache::markContentChanged() {
+	markDirty();
+	_mutationGeneration.fetch_add(1, memory_order_relaxed);
+}
+
 VkResult MVKPipelineCache::mergePipelineCaches(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) {
 	if (!_isMergeInternallySynchronized) {
 		return mergePipelineCachesImpl(srcCacheCount, pSrcCaches);
@@ -5086,13 +5117,22 @@ VkResult MVKPipelineCache::mergePipelineCaches(uint32_t srcCacheCount, const VkP
 }
 
 VkResult MVKPipelineCache::mergePipelineCachesImpl(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) {
-	for (uint32_t srcIdx = 0; srcIdx < srcCacheCount; srcIdx++) {
-		MVKPipelineCache* srcPLC = (MVKPipelineCache*)pSrcCaches[srcIdx];
-		for (auto& srcPair : srcPLC->_shaderCache) {
-			getShaderLibraryCache(srcPair.first)->merge(srcPair.second);
+	bool logicalContentChanged = false;
+	try {
+		for (uint32_t srcIdx = 0; srcIdx < srcCacheCount; srcIdx++) {
+			MVKPipelineCache* srcPLC = (MVKPipelineCache*)pSrcCaches[srcIdx];
+			for (auto& srcPair : srcPLC->_shaderCache) {
+				bool sourceChanged = getShaderLibraryCache(srcPair.first)->merge(
+					srcPair.second,
+					&logicalContentChanged);
+				logicalContentChanged |= sourceChanged;
+			}
 		}
+	} catch (...) {
+		if (logicalContentChanged) { markContentChanged(); }
+		throw;
 	}
-	markDirty();
+	if (logicalContentChanged) { markContentChanged(); }
 
 	return VK_SUCCESS;
 }
@@ -5330,6 +5370,39 @@ void serialize(Archive & archive, MVKCompressor<C>& comp) {
 	archive(comp._compressed,
 			comp._uncompressedSize,
 			comp._algorithm);
+}
+
+bool mvkAreShaderLibraryPersistenceEqual(
+	const SPIRVToMSLConversionConfiguration& lhsConfig,
+	const SPIRVToMSLConversionResultInfo& lhsResultInfo,
+	const MVKCompressor<std::string>& lhsCompressedMSL,
+	const SPIRVToMSLConversionConfiguration& rhsConfig,
+	const SPIRVToMSLConversionResultInfo& rhsResultInfo,
+	const MVKCompressor<std::string>& rhsCompressedMSL) {
+
+	if (lhsCompressedMSL._uncompressedSize != rhsCompressedMSL._uncompressedSize ||
+		lhsCompressedMSL._algorithm != rhsCompressedMSL._algorithm ||
+		lhsCompressedMSL._compressed != rhsCompressedMSL._compressed) {
+		return false;
+	}
+
+#if MVK_USE_CEREAL
+	try {
+		auto serializeMetadata = [](SPIRVToMSLConversionConfiguration config,
+								 SPIRVToMSLConversionResultInfo resultInfo) {
+			ostringstream stream(ios::out | ios::binary);
+			cereal::BinaryOutputArchive writer(stream);
+			writer(config, resultInfo);
+			return stream.str();
+		};
+		return serializeMetadata(lhsConfig, lhsResultInfo) ==
+			serializeMetadata(rhsConfig, rhsResultInfo);
+	} catch (...) {
+		return false;
+	}
+#else
+	return false;
+#endif
 }
 
 

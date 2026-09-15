@@ -108,6 +108,15 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPipelineCacheMemoryStatisticsMVK(
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPipelineCacheMutationGenerationMVK(
+	VkPipelineCache                           pipelineCache,
+	uint64_t*                                 pGeneration) {
+
+	if (!pipelineCache || !pGeneration) { return VK_ERROR_INITIALIZATION_FAILED; }
+	*pGeneration = ((MVKPipelineCache*)pipelineCache)->getMutationGeneration();
+	return VK_SUCCESS;
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
     VkDevice                                  device,
     MVKMetal4ShaderLibraryRepositoryStatistics* pStats,

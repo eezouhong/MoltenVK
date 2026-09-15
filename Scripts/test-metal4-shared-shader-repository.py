@@ -402,6 +402,7 @@ def test_source_policy() -> None:
         "slCache->addShaderLibrary("
     )
     assert "new MVKShaderLibrary" not in read_body
+    assert "markContentChanged" not in read_body
 
     get_library_start = shader_mm.index(
         "MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary("
@@ -421,11 +422,17 @@ def test_source_policy() -> None:
     assert get_library_body.index("deferredLookupConfig") < repository_lookup
     require(
         get_library_body,
-        "takeDeferredShaderLibrary(deferredLookupConfig)",
+        "takeDeferredShaderLibraryForReplacement(",
         SHADER_MM,
     )
+    assert get_library_body.index("deferredLookupConfig") < get_library_body.index(
+        "takeDeferredShaderLibraryForReplacement("
+    )
     require(get_library_body, "cacheRepresentationChanged = true;", SHADER_MM)
+    require(get_library_body, "logicalContentChanged |= shLib != nullptr;", SHADER_MM)
     require(get_library_body, "wasCacheHit = true;", SHADER_MM)
+    require(get_library_body, "catch (...) {", SHADER_MM)
+    require(get_library_body, "*pLogicalContentChanged = logicalContentChanged;", SHADER_MM)
     deferred_materialization = get_library_body.index(
         "materializeDeferredShaderLibrary("
     )
@@ -449,19 +456,45 @@ def test_source_policy() -> None:
     assert "if (!candidateResident && priorConfigurationResult == VK_SUCCESS)" in materialize_body
     assert "_owner->clearConfigurationResult();" in materialize_body
     require(materialize_body, "if (!shLib) {", SHADER_MM)
+    require(materialize_body, "*pLogicalContentChanged = true;", SHADER_MM)
+    assert materialize_body.index("new MVKShaderLibrary(") < materialize_body.index(
+        "takeDeferredShaderLibrary(*pShaderConfig)"
+    )
+    assert materialize_body.index("*pLogicalContentChanged = true;") < materialize_body.index(
+        "takeDeferredShaderLibrary(*pShaderConfig)"
+    )
+    require(materialize_body, "takeDeferredShaderLibraryForReplacement(", SHADER_MM)
     assert "addDeferredShaderLibrary(" not in materialize_body
 
     take_deferred_start = shader_mm.index(
         "bool MVKShaderLibraryCache::takeDeferredShaderLibrary("
     )
-    take_deferred_end = shader_mm.index(
-        "MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(",
+    replacement_start = shader_mm.index(
+        "bool MVKShaderLibraryCache::takeDeferredShaderLibraryForReplacement(",
         take_deferred_start,
     )
-    take_deferred_body = shader_mm[take_deferred_start:take_deferred_end]
-    assert "alignWith" not in take_deferred_body
+    take_deferred_end = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(",
+        replacement_start,
+    )
+    raw_take_deferred_body = shader_mm[take_deferred_start:replacement_start]
+    replacement_body = shader_mm[replacement_start:take_deferred_end]
+    assert "alignWith" not in raw_take_deferred_body
+    assert "MVKDeferredShaderLibrary* deferred =" in replacement_body
+    assert "mvkAreShaderLibraryPersistenceEqual(" in replacement_body
+    assert replacement_body.index("_shaderLibraries.emplace_back(") < replacement_body.index(
+        "_deferredShaderLibraries.erase("
+    )
+    assert replacement_body.index("*pLogicalContentChanged = true;") < replacement_body.index(
+        "_deferredShaderLibraries.erase("
+    )
+    assert "_repository->release(" in replacement_body
+    require(pipeline_mm, "bool mvkAreShaderLibraryPersistenceEqual(", PIPELINE_MM)
+    require(pipeline_mm, "lhsCompressedMSL._compressed != rhsCompressedMSL._compressed", PIPELINE_MM)
+    require(pipeline_mm, "cereal::BinaryOutputArchive writer(stream);", PIPELINE_MM)
     require(shader_h, "const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,", SHADER_H)
     require(shader_h, "bool* pCacheRepresentationChanged", SHADER_H)
+    require(shader_h, "bool* pLogicalContentChanged", SHADER_H)
     require(shader_h, "bool* pWasCacheHit", SHADER_H)
 
     # Serialization and merge must retain deferred logical membership without
@@ -499,7 +532,23 @@ def test_source_policy() -> None:
     require(private_api_h, "MVKPipelineCacheMemoryStatistics", PRIVATE_API_H)
     require(private_api_h, "MVKMetal4ShaderLibraryRepositoryStatistics", PRIVATE_API_H)
     require(private_api_h, "vkGetPipelineCacheMemoryStatisticsMVK", PRIVATE_API_H)
+    require(private_api_h, "vkGetPipelineCacheMutationGenerationMVK", PRIVATE_API_H)
     require(private_api_h, "vkGetMetal4ShaderLibraryRepositoryStatisticsMVK", PRIVATE_API_H)
+    require(api_mm, "vkGetPipelineCacheMutationGenerationMVK", API_MM)
+    require(pipeline_h, "getMutationGeneration() const", PIPELINE_H)
+    require(pipeline_h, "std::atomic<uint64_t> _mutationGeneration", PIPELINE_H)
+    require(pipeline_mm, "void MVKPipelineCache::markContentChanged()", PIPELINE_MM)
+    mark_dirty_start = pipeline_mm.index("void MVKPipelineCache::markDirty()")
+    mark_content_start = pipeline_mm.index("void MVKPipelineCache::markContentChanged()")
+    merge_start = pipeline_mm.index("VkResult MVKPipelineCache::mergePipelineCaches(")
+    mark_dirty_body = pipeline_mm[mark_dirty_start:mark_content_start]
+    mark_content_body = pipeline_mm[mark_content_start:merge_start]
+    assert "_mutationGeneration" not in mark_dirty_body
+    assert "_mutationGeneration.fetch_add" in mark_content_body
+    require(shader_h, "bool merge(MVKShaderLibraryCache* other,", SHADER_H)
+    require(shader_h, "bool* pLogicalContentChanged = nullptr", SHADER_H)
+    require(pipeline_mm, "logicalContentChanged", PIPELINE_MM)
+    require(pipeline_mm, "catch (...) {", PIPELINE_MM)
     assert private_api_h.index("snapshotSkippedShaderLibraryCount") < private_api_h.index("costAwareCandidateCount")
     assert private_api_h.index("costAwareCandidateCount") < private_api_h.index("unknownRehydrateCostCandidateCount")
     require(shader_h, "tryGetMemorySnapshot", SHADER_H)
@@ -542,14 +591,27 @@ def test_source_policy() -> None:
         "if (!result && candidate && candidate->isResident())",
         SHADER_MM,
     )
-    assert shader_mm.count(
-        "if (shLib) { _shaderLibraries.emplace_back(alignedConfig, shLib); }"
-    ) == 2
-    require(
-        shader_mm,
-        "if (shared) { _shaderLibraries.emplace_back(alignedConfig, shared); }",
-        SHADER_MM,
+    add_membership_start = shader_mm.index(
+        "void MVKShaderLibraryCache::addShaderLibraryMembership("
     )
+    first_add_overload = shader_mm.index(
+        "MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(",
+        add_membership_start,
+    )
+    add_membership_body = shader_mm[add_membership_start:first_add_overload]
+    require(add_membership_body, "_shaderLibraries.emplace_back(", SHADER_MM)
+    require(add_membership_body, "_repository->release(", SHADER_MM)
+    require(add_membership_body, "shaderLibrary->release();", SHADER_MM)
+    assert shader_mm.count("addShaderLibraryMembership(alignedConfig, existing);") == 2
+    assert shader_mm.count("addShaderLibraryMembership(alignedConfig, shLib);") == 2
+    merge_cache_start = shader_mm.index("bool MVKShaderLibraryCache::merge(")
+    merge_cache_end = shader_mm.index(
+        "MVKShaderLibraryCache::~MVKShaderLibraryCache()", merge_cache_start
+    )
+    merge_cache_body = shader_mm[merge_cache_start:merge_cache_end]
+    require(merge_cache_body, "if (shared) {", SHADER_MM)
+    require(merge_cache_body, "_shaderLibraries.emplace_back(alignedConfig, shared);", SHADER_MM)
+    require(merge_cache_body, "_repository->release(_shaderModuleKey, alignedConfig, shared);", SHADER_MM)
     require(
         shader_mm,
         "cacheRepresentationChanged = shLib != nullptr;",
@@ -795,7 +857,7 @@ def test_source_policy() -> None:
         "vkAdoptPipelineCacheShaderLibrariesMVK(",
         PRIVATE_API_H,
     )
-    require(private_api_h, "#define MVK_PRIVATE_API_VERSION   47", PRIVATE_API_H)
+    require(private_api_h, "#define MVK_PRIVATE_API_VERSION   48", PRIVATE_API_H)
     require(private_api_h, "MVKPipelineCacheShaderLibraryCaptureToken", PRIVATE_API_H)
     require(private_api_h, "vkBeginPipelineCacheShaderLibraryCaptureMVK(", PRIVATE_API_H)
     require(private_api_h, "vkCancelPipelineCacheShaderLibraryCaptureMVK(", PRIVATE_API_H)
@@ -900,6 +962,20 @@ def test_source_policy() -> None:
     assert "pAdoptedShaderLibraryCount" in pipeline_adoption_body
     assert "swap(_shaderLibraryContributions)" in pipeline_adoption_body
     assert "releaseShaderLibraryContributions" in pipeline_adoption_body
+    adoption_try = pipeline_adoption_body.index("try {")
+    adoption_call = pipeline_adoption_body.index(
+        "destinationPipelineCache->adoptShaderLibraryMembership("
+    )
+    adoption_catch = pipeline_adoption_body.index("catch (...) {")
+    exceptional_release = pipeline_adoption_body.index(
+        "releaseShaderLibraryContributions(contributions);", adoption_catch
+    )
+    adoption_rethrow = pipeline_adoption_body.index("throw;", exceptional_release)
+    normal_release = pipeline_adoption_body.index(
+        "releaseShaderLibraryContributions(contributions);", adoption_rethrow
+    )
+    assert adoption_try < adoption_call < adoption_catch
+    assert adoption_catch < exceptional_release < adoption_rethrow < normal_release
     assert "getShaderLibraryRepository()" in pipeline_adoption_body
     assert "VK_ERROR_FEATURE_NOT_PRESENT" in pipeline_adoption_body
     assert "mergePipelineCaches" not in pipeline_adoption_body
@@ -949,6 +1025,8 @@ def test_source_policy() -> None:
     assert "getShaderLibraryCache(shaderModuleKey)" in cache_adoption_body
     assert "adoptShaderLibraryMembership(" in cache_adoption_body
     assert "markDirty();" in cache_adoption_body
+    assert "catch (...) {" in cache_adoption_body
+    assert "if (logicalContentChanged) { markContentChanged(); }" in cache_adoption_body
     assert "mergePipelineCaches" not in cache_adoption_body
     assert "createPipelines" not in cache_adoption_body
 
@@ -960,8 +1038,11 @@ def test_source_policy() -> None:
     ]
     assert "if (!_repository) { return false; }" in shader_cache_adoption_body
     assert "new MVKShaderLibrary(*shaderLibrary)" not in shader_cache_adoption_body
-    assert "takeDeferredShaderLibrary(shaderConfig);" in shader_cache_adoption_body
-    assert "takeDeferredShaderLibrary(&alignedConfig)" not in shader_cache_adoption_body
+    assert "takeDeferredShaderLibraryForReplacement(" in shader_cache_adoption_body
+    assert "shaderConfig," in shader_cache_adoption_body
+    assert "alignedConfig," in shader_cache_adoption_body
+    assert "shared," in shader_cache_adoption_body
+    assert "pReplacementContentChanged" in shader_cache_adoption_body
     assert "return true;" in shader_cache_adoption_body
 
     pipeline_cache_get_start = pipeline_mm.index(
@@ -976,8 +1057,17 @@ def test_source_policy() -> None:
     ]
     require(
         pipeline_cache_get_body,
-        "if (cacheRepresentationChanged) { markDirty(); }",
+        "if (logicalContentChanged) { markContentChanged(); }",
         PIPELINE_MM,
+    )
+    require(
+        pipeline_cache_get_body,
+        "else if (cacheRepresentationChanged) { markDirty(); }",
+        PIPELINE_MM,
+    )
+    require(pipeline_cache_get_body, "catch (...) {", PIPELINE_MM)
+    assert pipeline_cache_get_body.index("markContentChanged();") < pipeline_cache_get_body.index(
+        "pipeline->recordShaderLibraryContribution("
     )
     require(
         pipeline_cache_get_body,

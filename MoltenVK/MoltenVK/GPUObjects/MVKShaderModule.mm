@@ -1285,7 +1285,8 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 												  bool* pLogicalContentChanged,
 												  bool* pWasCacheHit,
 												  VkPipelineCreationFeedback* pShaderFeedback,
-												  uint64_t startTime) {
+												  uint64_t startTime,
+												  bool allowCompile) {
 	bool cacheRepresentationChanged = false;
 	bool logicalContentChanged = false;
 	bool wasCacheHit = false;
@@ -1310,7 +1311,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			}
 		}
 	}
-	if (!shLib && !pipeline->shouldFailOnPipelineCompileRequired()) {
+	if (!shLib && allowCompile && !pipeline->shouldFailOnPipelineCompileRequired()) {
 		shLib = materializeDeferredShaderLibrary(
 			pShaderConfig,
 			pipeline,
@@ -1322,7 +1323,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 			wasCacheHit = true;
 		}
 	}
-	if ( !shLib && !pipeline->shouldFailOnPipelineCompileRequired() ) {
+	if ( !shLib && allowCompile && !pipeline->shouldFailOnPipelineCompileRequired() ) {
 		SPIRVToMSLConversionResult conversionResult;
 		if (shaderModule->convert(pShaderConfig, conversionResult)) {
 			try {
@@ -1361,11 +1362,124 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(SPIRVToMSLConversionCo
 	return shLib;
 }
 
+MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
+	SPIRVToMSLConversionConfiguration* pShaderConfig,
+	MVKShaderModule* shaderModule, MVKPipeline* pipeline,
+	VkPipelineCreationFeedback* pShaderFeedback,
+	uint64_t startTime,
+	mutex& viewLock,
+	const std::function<void(bool)>& onChanged) {
+	assert(_repository);
+
+	auto reportChange = [&](bool cacheRepresentationChanged, bool logicalContentChanged) {
+		if (logicalContentChanged) { onChanged(true); }
+		else if (cacheRepresentationChanged) { onChanged(false); }
+	};
+
+	auto lookup = [&]() -> MVKShaderLibrary* {
+		lock_guard<mutex> lock(viewLock);
+		bool cacheRepresentationChanged = false;
+		bool logicalContentChanged = false;
+		bool wasCacheHit = false;
+		MVKShaderLibrary* library = nullptr;
+		try {
+			library = getShaderLibrary(
+				pShaderConfig,
+				shaderModule,
+				pipeline,
+				&cacheRepresentationChanged,
+				&logicalContentChanged,
+				&wasCacheHit,
+				pShaderFeedback,
+				startTime,
+				false);
+		} catch (...) {
+			reportChange(cacheRepresentationChanged, logicalContentChanged);
+			throw;
+		}
+		reportChange(cacheRepresentationChanged, logicalContentChanged);
+		if (wasCacheHit && pShaderFeedback) {
+			mvkEnableFlags(
+				pShaderFeedback->flags,
+				VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+		}
+		return library;
+	};
+
+	return _repository->_creationWork.run(
+		_shaderModuleKey,
+		!pipeline->shouldFailOnPipelineCompileRequired(),
+		lookup,
+		[&]() -> MVKShaderLibrary* {
+			// Copy any deferred persistent record while the logical view is stable,
+			// but leave the destination untouched until creation has succeeded.
+			MVKShaderLibraryCache pending(pipeline, _shaderModuleKey);
+			bool fromDeferred = false;
+			{
+				lock_guard<mutex> lock(viewLock);
+				for (const auto& deferred : _deferredShaderLibraries) {
+					if (deferred.shaderConfig.matches(*pShaderConfig)) {
+						pending.addDeferredShaderLibrary(
+							&deferred.shaderConfig,
+							deferred.resultInfo,
+							deferred.compressedMSL);
+						fromDeferred = true;
+						break;
+					}
+				}
+			}
+
+			bool wasCacheHit = false;
+			MVKShaderLibrary* library = pending.getShaderLibrary(
+				pShaderConfig,
+				shaderModule,
+				pipeline,
+				nullptr,
+				nullptr,
+				&wasCacheHit,
+				pShaderFeedback,
+				startTime,
+				true);
+			if (!library) { return nullptr; }
+
+			{
+				lock_guard<mutex> lock(viewLock);
+				bool logicalContentChanged = false;
+				bool adopted = false;
+				try {
+					adopted = adoptShaderLibraryMembership(
+						*pShaderConfig,
+						library,
+						&logicalContentChanged);
+				} catch (...) {
+					if (logicalContentChanged) { onChanged(true); }
+					throw;
+				}
+				reportChange(adopted, logicalContentChanged);
+				// Another logical publication can win before this gate publishes.
+				// Exact matching rules select the destination's final membership.
+				library = findShaderLibrary(pShaderConfig);
+			}
+
+			if (library && (fromDeferred || wasCacheHit) && pShaderFeedback) {
+				mvkEnableFlags(
+					pShaderFeedback->flags,
+					VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
+			}
+			return library;
+		});
+}
+
 // Finds and returns a shader library matching the shader config, or returns nullptr if it doesn't exist.
 // If a match is found, the shader config is aligned with the shader config of the matching library.
 MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionConfiguration* pShaderConfig,
 														   VkPipelineCreationFeedback* pShaderFeedback,
 														   uint64_t startTime) {
+	// An omitted timestamp starts a local lookup measurement. Treating zero as
+	// a real clock origin records system uptime as cache retrieval latency.
+	if (!startTime) {
+		startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
+	}
 	for (auto& slPair : _shaderLibraries) {
 		if (slPair.first.matches(*pShaderConfig)) {
 			pShaderConfig->alignWith(slPair.first);

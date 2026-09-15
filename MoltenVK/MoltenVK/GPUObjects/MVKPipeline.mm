@@ -4929,6 +4929,31 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfigu
 													 MVKPipeline* pipeline,
 													 VkPipelineCreationFeedback* pShaderFeedback,
 													 uint64_t startTime) {
+	if (getDevice()->getShaderLibraryRepository() && shaderModule->getKey().codeSize != 0) {
+		MVKShaderLibraryCache* shaderCache;
+		{
+			lock_guard<mutex> lock(_shaderCacheLock);
+			shaderCache = getShaderLibraryCache(shaderModule->getKey());
+		}
+
+		MVKShaderLibrary* shaderLibrary = shaderCache->getShaderLibraryConcurrent(
+			pContext,
+			shaderModule,
+			pipeline,
+			pShaderFeedback,
+			startTime,
+			_shaderCacheLock,
+			[this](bool logicalContentChanged) {
+				if (logicalContentChanged) { markContentChanged(); }
+				else { markDirty(); }
+			});
+		if (shaderLibrary && pipeline->shouldRecordShaderLibraryContributions()) {
+			pipeline->recordShaderLibraryContribution(
+				shaderModule->getKey(), *pContext, shaderLibrary);
+		}
+		return shaderLibrary;
+	}
+
 	if (_isExternallySynchronized) {
 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
 	} else {

@@ -397,7 +397,8 @@ public:
 
 	MVKShaderLibrary* acquire(MVKShaderModuleKey shaderModuleKey,
 							  mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
-							  MVKShaderLibrary* candidate = nullptr);
+							  MVKShaderLibrary* candidate = nullptr,
+							  bool alignOutsideRepositoryLock = false);
 
 	void release(MVKShaderModuleKey shaderModuleKey,
 					 const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,

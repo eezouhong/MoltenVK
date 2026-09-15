@@ -1083,7 +1083,8 @@ void MVKShaderLibraryRepository::trimToResidentLimit(MVKShaderLibrary* protected
 MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 	MVKShaderModuleKey shaderModuleKey,
 	SPIRVToMSLConversionConfiguration* pShaderConfig,
-	MVKShaderLibrary* candidate) {
+	MVKShaderLibrary* candidate,
+	bool alignOutsideRepositoryLock) {
 
 	if (!pShaderConfig) {
 		if (candidate) { candidate->release(); }
@@ -1095,13 +1096,23 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 	bool publishedCandidate = false;
 	bool shouldAdoptCandidatePayload = false;
 	bool adoptedCandidatePayload = false;
+	bool alignmentDeferred = false;
+	SPIRVToMSLConversionConfiguration canonicalConfig;
 	{
 		lock_guard<mutex> lock(_lock);
 		auto moduleIt = _entries.find(shaderModuleKey);
 		if (moduleIt != _entries.end()) {
 			for (Entry& entry : moduleIt->second) {
 				if (entry.shaderConfig.matches(*pShaderConfig)) {
-					pShaderConfig->alignWith(entry.shaderConfig);
+					if (alignOutsideRepositoryLock) {
+						// Preserve the exact canonical selection and alignment rules.
+						// Copy before acquiring membership, so allocation failure cannot
+						// leak a reference. No Entry pointer escapes the repository lock.
+						canonicalConfig = entry.shaderConfig;
+						alignmentDeferred = true;
+					} else {
+						pShaderConfig->alignWith(entry.shaderConfig);
+					}
 					entry.membershipCount++;
 					entry.library->retain();
 					result = entry.library;
@@ -1146,6 +1157,12 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 			rejectedCandidate = nullptr;
 			publishedCandidate = true;
 		}
+	}
+
+	if (alignmentDeferred) {
+		// Adoption is already off the foreground path. Its quadratic alignment
+		// must not serialize unrelated foreground lookups through the device lock.
+		pShaderConfig->alignWith(canonicalConfig);
 	}
 
 	if (shouldAdoptCandidatePayload && result && candidate) {
@@ -1584,7 +1601,8 @@ bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
 	}
 
 	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
-	MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
+	MVKShaderLibrary* shared = _repository->acquire(
+		_shaderModuleKey, &alignedConfig, nullptr, true);
 	if (!shared) { return false; }
 	bool logicalContentChanged = true;
 	bool* pReplacementContentChanged = pLogicalContentChanged

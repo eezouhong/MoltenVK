@@ -19,6 +19,8 @@ jobs:
         run: python3 Scripts/test-metal4-shared-shader-repository.py
       - name: Validate pipeline-cache mutation generation behavior
         run: python3 Scripts/test-pipeline-cache-mutation-generation.py
+      - name: Validate adoption alignment repository lock boundary
+        run: python3 Scripts/test-adoption-repository-lock.py
 
   build:
     strategy:

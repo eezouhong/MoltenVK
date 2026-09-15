@@ -68,7 +68,13 @@ struct DeferredLibrary {
 };
 
 struct Repository {
-    ShaderLibrary* acquire(ShaderModuleKey, ShaderConfig*) { return nullptr; }
+    ShaderLibrary* acquire(
+        ShaderModuleKey,
+        ShaderConfig*,
+        ShaderLibrary* = nullptr,
+        bool = false) {
+        return nullptr;
+    }
     void release(ShaderModuleKey, const ShaderConfig&, ShaderLibrary*) {}
 };
 
@@ -332,7 +338,8 @@ class Repository {
     ShaderLibrary* acquire(
         ShaderModuleKey key,
         ShaderConfig* config,
-        ShaderLibrary* candidate = nullptr) {
+        ShaderLibrary* candidate = nullptr,
+        bool = false) {
         if (!config) {
             if (candidate) candidate->release();
             return nullptr;

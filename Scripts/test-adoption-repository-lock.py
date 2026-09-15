@@ -6,6 +6,7 @@ this is not a replacement for native builds or Debug2 cold/warm runs.
 from pathlib import Path
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 
@@ -16,6 +17,16 @@ def body(text, begin, end):
 shader = (ROOT/'MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm').read_text()
 converter = (ROOT/'MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp').read_text()
 acquire = body(shader, 'MVKShaderLibrary* MVKShaderLibraryRepository::acquire(', '\nvoid MVKShaderLibraryRepository::release(')
+adoption = body(
+    shader,
+    'bool MVKShaderLibraryCache::adoptShaderLibraryMembership(',
+    '\nbool MVKShaderLibraryCache::merge(',
+)
+normalized_adoption = re.sub(r'\s+', ' ', adoption)
+assert (
+    '_repository->acquire( _shaderModuleKey, &alignedConfig, nullptr, true);'
+    in normalized_adoption
+), 'production adoption must request alignment outside the repository lock'
 # The clean release source intentionally uses std::lock_guard rather than the
 # diagnostics-only traced lock wrapper. Substitute an equivalent harness lock
 # so the test can observe lock ownership without changing production code.
@@ -178,4 +189,8 @@ with tempfile.TemporaryDirectory(prefix='mvk-adoption-lock-') as tmp:
     cpp=Path(tmp)/'test.cpp'; exe=Path(tmp)/'test'; cpp.write_text(source)
     subprocess.run(['clang++','-std=c++17','-O1','-pthread','-fsanitize=address,undefined',str(cpp),'-o',str(exe)], check=True, timeout=40)
     subprocess.run([str(exe)], check=True, timeout=20)
-print(json.dumps(dict(acquireSha256=hashlib.sha256(acquire.encode()).hexdigest(), alignmentSha256=hashlib.sha256(align.encode()).hexdigest())))
+print(json.dumps(dict(
+    acquireSha256=hashlib.sha256(acquire.encode()).hexdigest(),
+    adoptionWiringSha256=hashlib.sha256(adoption.encode()).hexdigest(),
+    alignmentSha256=hashlib.sha256(align.encode()).hexdigest(),
+)))

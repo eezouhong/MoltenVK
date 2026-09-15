@@ -14,6 +14,9 @@
 using namespace std;
 using namespace std::chrono_literals;
 
+static uint64_t mvkGetTimestamp() { return 1; }
+static uint64_t getPerformanceTimestamp() { return 1; }
+
 enum VkResult {
     VK_SUCCESS = 0,
     VK_ERROR_INITIALIZATION_FAILED = -3,
@@ -58,7 +61,9 @@ struct ShaderLibrary {
     Owner* _owner = nullptr;
     int _shaderConversionResultInfo = 0;
     int _compressedMSL = 0;
-    void release() { delete this; }
+    int refs = 1;
+    void retain() { refs++; }
+    void release() { if (--refs == 0) delete this; }
 };
 
 struct DeferredLibrary {
@@ -517,7 +522,8 @@ class MVKShaderLibraryCache {
         bool* pLogicalContentChanged,
         bool* pWasCacheHit,
         VkPipelineCreationFeedback* pShaderFeedback,
-        uint64_t startTime = 0);
+        uint64_t startTime = 0,
+        bool allowCompile = true);
     MVKShaderLibrary* findShaderLibrary(
         ShaderConfig* pShaderConfig,
         VkPipelineCreationFeedback* pShaderFeedback = nullptr,

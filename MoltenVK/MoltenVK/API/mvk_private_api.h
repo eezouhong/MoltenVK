@@ -350,7 +350,7 @@ typedef struct {
     uint64_t skippedShaderLibraryCount;
 } MVKPipelineCacheMemoryStatistics;
 
-/** Classifies the caller's reason for one diagnostic Metal 4 compiler scope. */
+/** Classifies the caller's reason for one same-thread Metal 4 compiler work scope. */
 typedef enum {
     MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN = 0,
     MVK_METAL4_COMPILER_WORK_ORIGIN_FOREGROUND = 1,
@@ -359,9 +359,11 @@ typedef enum {
 } MVKMetal4CompilerWorkOrigin;
 
 /**
- * Same-thread diagnostic attribution for one Vulkan pipeline creation call.
- * This is observability-only: it does not alter compiler admission, ordering,
- * fallback, timeout, or task concurrency.
+ * Same-thread attribution for one Vulkan pipeline creation call.
+ * The origin may also be used by the bounded Metal 4 compiler gate to let
+ * foreground/unknown work take newly available capacity before optional
+ * startup-precompile or background-warmup work. It does not change the
+ * configured task cap, fallback, timeout, or native task execution semantics.
  */
 typedef struct {
     VkBool32 available;
@@ -531,13 +533,17 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMutationGenerationMVK(
     VkPipelineCache                            pipelineCache,
     uint64_t*                                  pGeneration);
 
-/** Begins one same-thread, observability-only Metal 4 compiler attribution scope. */
+/**
+ * Begins one same-thread Metal 4 compiler work scope with caller-origin classification.
+ * A zero requestId keeps only the origin active for scheduling and disables detailed
+ * per-scope work statistics. Nonzero request IDs retain the diagnostic attribution data.
+ */
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginMetal4CompilerWorkMVK(
     VkDevice                                   device,
     MVKMetal4CompilerWorkOrigin                origin,
     uint64_t                                   requestId);
 
-/** Ends the matching same-thread attribution scope and returns its measured work. */
+/** Ends the matching same-thread work scope and returns statistics when they were requested. */
 VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
     VkDevice                                   device,
     uint64_t                                   requestId,

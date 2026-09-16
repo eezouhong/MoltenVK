@@ -350,6 +350,39 @@ typedef struct {
     uint64_t skippedShaderLibraryCount;
 } MVKPipelineCacheMemoryStatistics;
 
+/** Classifies the caller's reason for one diagnostic Metal 4 compiler scope. */
+typedef enum {
+    MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN = 0,
+    MVK_METAL4_COMPILER_WORK_ORIGIN_FOREGROUND = 1,
+    MVK_METAL4_COMPILER_WORK_ORIGIN_STARTUP_PRECOMPILE = 2,
+    MVK_METAL4_COMPILER_WORK_ORIGIN_BACKGROUND_WARMUP = 3,
+} MVKMetal4CompilerWorkOrigin;
+
+/**
+ * Same-thread diagnostic attribution for one Vulkan pipeline creation call.
+ * This is observability-only: it does not alter compiler admission, ordering,
+ * fallback, timeout, or task concurrency.
+ */
+typedef struct {
+    VkBool32 available;
+    uint32_t origin;
+    uint64_t requestId;
+    uint64_t slotWaitCount;
+    uint64_t slotWaitNanoseconds;
+    uint64_t slotWaitMaximumNanoseconds;
+    uint64_t compilerTaskCount;
+    uint64_t compilerTaskNanoseconds;
+    uint64_t compilerTaskMaximumNanoseconds;
+    uint64_t libraryTaskCount;
+    uint64_t libraryTaskNanoseconds;
+    uint64_t renderTaskCount;
+    uint64_t renderTaskNanoseconds;
+    uint64_t computeTaskCount;
+    uint64_t computeTaskNanoseconds;
+    uint64_t legacyTaskCount;
+    uint64_t legacyTaskNanoseconds;
+} MVKMetal4CompilerWorkStatistics;
+
 /**
  * Device-wide physical payload owned by the Metal 4 shared shader-library repository.
  *
@@ -405,6 +438,8 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetMoltenVKConfigurationMVK)(VkInstance ignor
 typedef VkResult (VKAPI_PTR *PFN_vkGetPerformanceStatisticsMVK)(VkDevice device, MVKPerformanceStatistics* pPerf, size_t* pPerfSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipelineCache pipelineCache, MVKPipelineCacheMemoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMutationGenerationMVK)(VkPipelineCache pipelineCache, uint64_t* pGeneration);
+typedef VkResult (VKAPI_PTR *PFN_vkBeginMetal4CompilerWorkMVK)(VkDevice device, MVKMetal4CompilerWorkOrigin origin, uint64_t requestId);
+typedef VkResult (VKAPI_PTR *PFN_vkEndMetal4CompilerWorkMVK)(VkDevice device, uint64_t requestId, MVKMetal4CompilerWorkStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
 typedef VkResult (VKAPI_PTR *PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK)(MVKPipelineCacheShaderLibraryCaptureToken captureToken);
@@ -495,6 +530,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMemoryStatisticsMVK(
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheMutationGenerationMVK(
     VkPipelineCache                            pipelineCache,
     uint64_t*                                  pGeneration);
+
+/** Begins one same-thread, observability-only Metal 4 compiler attribution scope. */
+VKAPI_ATTR VkResult VKAPI_CALL vkBeginMetal4CompilerWorkMVK(
+    VkDevice                                   device,
+    MVKMetal4CompilerWorkOrigin                origin,
+    uint64_t                                   requestId);
+
+/** Ends the matching same-thread attribution scope and returns its measured work. */
+VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
+    VkDevice                                   device,
+    uint64_t                                   requestId,
+    MVKMetal4CompilerWorkStatistics*           pStats,
+    size_t*                                    pStatsSize);
 
 /** Returns a nonblocking snapshot of the device-wide shared shader repository. */
 VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(

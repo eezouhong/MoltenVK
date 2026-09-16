@@ -105,6 +105,20 @@ jobs:
         if: failure()
         run: cat dependenciesbuild.log
 
+      - name: Validate shader configuration alignment semantics and comparison bound
+        if: matrix.platform == 'macos' && matrix.private_api == false
+        run: |
+          git fetch --no-tags --depth=1 origin 3e5dd95c299f680a4ce605f67580e584594c2c22
+          python3 Scripts/test-shader-config-alignment.py --spirv-cross External/SPIRV-Cross --sanitizer address --output alignment-regression.json
+
+      - name: Upload alignment regression evidence
+        if: always() && matrix.platform == 'macos' && matrix.private_api == false
+        uses: actions/upload-artifact@v4
+        with:
+          name: shader-config-alignment-regression
+          path: alignment-regression.json
+          if-no-files-found: warn
+
       - name: Build MoltenVK
         run: make ${BUILD_ARGUMENTS}
 

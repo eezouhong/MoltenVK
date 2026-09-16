@@ -68,6 +68,21 @@ struct Binding {
         return key == b.key;
     }
 };
+// The production alignWith() now delegates to a helper declared in a separate
+// header. This lock-scope harness deliberately supplies only the semantic
+// nested-loop helper: the optimized helper itself is covered by the dedicated
+// alignment equivalence/sanitizer test, while this test stays independent.
+struct InterfaceUsageHash {};
+struct ResourceUsageHash {};
+template <class T, class Hash>
+void alignShaderUsage(vector<T>& destination, const vector<T>& source, Hash) {
+    for (auto& item : destination) {
+        item.outIsUsedByShader = false;
+        for (const auto& candidate : source) {
+            if (item.matches(candidate)) item.outIsUsedByShader = candidate.outIsUsedByShader;
+        }
+    }
+}
 struct SPIRVToMSLConversionConfiguration {
     int variant = 0;
     vector<Binding> shaderInputs, shaderOutputs, resourceBindings;

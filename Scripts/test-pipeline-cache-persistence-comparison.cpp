@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Compiles the actual persistent metadata serializers and comparison body.
 #include "SPIRVToMSLConverter.h"
+#include "SPIRVToMSLAlignment.h"
 #include <cereal/archives/binary.hpp>
 #include <cereal/types/map.hpp>
 #include <cereal/types/string.hpp>

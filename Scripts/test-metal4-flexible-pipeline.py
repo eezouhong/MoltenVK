@@ -178,8 +178,46 @@ def main() -> int:
         r"compilerSlotWaitersHighWater.*?compilerSlotReady\.wait_for",
         "Metal 4 slot waiters are not measured at the production gate",
     )
+    require(
+        pipeline_mm,
+        r"isOptionalMetal4CompilerWork.*?STARTUP_PRECOMPILE.*?BACKGROUND_WARMUP",
+        "optional compiler work classification must cover startup precompile and background warmup",
+    )
+    reject(
+        pipeline_mm,
+        r"isOptionalMetal4CompilerWork.*?RUNTIME_DEMAND",
+        "current-frame runtime demand must never be classified as optional Metal 4 work",
+    )
+    require(
+        pipeline_mm,
+        r"optionalWork.*?foregroundCompilerSlotWaiters.*?compilerSlotReady\.wait_for.*?"
+        r"!optionalWork\s*\|\|\s*impl->foregroundCompilerSlotWaiters\s*==\s*0",
+        "optional Metal 4 work must yield compiler-slot admission while preferred work is waiting",
+    )
+    require(
+        pipeline_mm,
+        r"foregroundCompilerSlotWaiters\s*==\s*0.*?compilerTasksInFlight\s*<\s*impl->compilerTaskMax.*?"
+        r"compilerSlotReady\.notify_all",
+        "the last preferred waiter must wake optional work when spare compiler capacity remains",
+    )
+    require(
+        pipeline_mm,
+        r"stats\.available\s*=\s*requestId\s*!=\s*0\s*\?\s*VK_TRUE\s*:\s*VK_FALSE",
+        "request-id zero must keep the scheduling origin scope without enabling detailed attribution",
+    )
+    require(
+        pipeline_mm,
+        r"getMetal4DiagnosticWork.*?stats\.available.*?return\s+nullptr",
+        "origin-only scopes must not accumulate per-scope diagnostic statistics",
+    )
+    require(
+        private_api_h,
+        r"zero requestId.*?origin.*?scheduling.*?disables detailed",
+        "the private API contract must document request-id zero origin-only scopes",
+    )
     for token in (
         "MVKMetal4CompilerWorkOrigin",
+        "MVK_METAL4_COMPILER_WORK_ORIGIN_RUNTIME_DEMAND",
         "MVKMetal4CompilerWorkStatistics",
         "PFN_vkBeginMetal4CompilerWorkMVK",
         "PFN_vkEndMetal4CompilerWorkMVK",

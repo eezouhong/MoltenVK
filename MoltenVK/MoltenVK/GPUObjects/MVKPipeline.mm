@@ -199,6 +199,11 @@ struct MVKMetal4CompilerService::Impl {
 	size_t compilerTasksInFlight = 0;
 	size_t compilerSlotWaiters = 0;
 	size_t compilerSlotWaitersHighWater = 0;
+	size_t foregroundCompilerSlotWaiters = 0;
+	size_t foregroundCompilerSlotWaitersHighWater = 0;
+	size_t optionalCompilerSlotWaiters = 0;
+	size_t optionalCompilerSlotWaitersHighWater = 0;
+	uint64_t optionalPriorityDeferrals = 0;
 	uint64_t compilerTimeoutNs = kMetal4DefaultCompilerTimeoutNs;
 	bool shuttingDown = false;
 	bool fatalCompilerTimeout = false;
@@ -466,7 +471,8 @@ static MVKMetal4CompilerLaneStats& getMetal4CompilerLaneStats(
 static MVKMetal4CompilerWorkStatistics* getMetal4DiagnosticWork(
 	MVKMetal4CompilerService::Impl* impl) {
 	if (!_mvkMetal4DiagnosticWork.active ||
-		_mvkMetal4DiagnosticWork.device != impl->device) {
+		_mvkMetal4DiagnosticWork.device != impl->device ||
+		!_mvkMetal4DiagnosticWork.stats.available) {
 		return nullptr;
 	}
 	return &_mvkMetal4DiagnosticWork.stats;
@@ -589,6 +595,22 @@ static void shutdownMetal4Compiler(const shared_ptr<MVKMetal4CompilerService::Im
 	notifyMetal4CompilerWaiters(impl.get());
 }
 
+static MVKMetal4CompilerWorkOrigin getCurrentMetal4CompilerWorkOrigin(
+	MVKMetal4CompilerService::Impl* impl) {
+	if (!_mvkMetal4DiagnosticWork.active ||
+		_mvkMetal4DiagnosticWork.device != impl->device) {
+		return MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN;
+	}
+	return static_cast<MVKMetal4CompilerWorkOrigin>(
+		_mvkMetal4DiagnosticWork.stats.origin);
+}
+
+static bool isOptionalMetal4CompilerWork(
+	MVKMetal4CompilerWorkOrigin origin) {
+	return origin == MVK_METAL4_COMPILER_WORK_ORIGIN_STARTUP_PRECOMPILE ||
+		origin == MVK_METAL4_COMPILER_WORK_ORIGIN_BACKGROUND_WARMUP;
+}
+
 static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 									  MVKMetal4CompilerLane lane,
 									  bool* attemptedMetal4) {
@@ -604,7 +626,10 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (attemptedMetal4) { *attemptedMetal4 = true; }
 	MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
 	stats.attempts++;
-	bool slotContended = impl->compilerTasksInFlight >= impl->compilerTaskMax;
+	MVKMetal4CompilerWorkOrigin origin = getCurrentMetal4CompilerWorkOrigin(impl);
+	bool optionalWork = isOptionalMetal4CompilerWork(origin);
+	bool blockedByForeground = optionalWork && impl->foregroundCompilerSlotWaiters > 0;
+	bool slotContended = impl->compilerTasksInFlight >= impl->compilerTaskMax || blockedByForeground;
 	if (slotContended) {
 		stats.queueWaitCount++;
 		stats.waiters++;
@@ -613,17 +638,47 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 		impl->compilerSlotWaitersHighWater = max(
 			impl->compilerSlotWaitersHighWater,
 			impl->compilerSlotWaiters);
+		if (optionalWork) {
+			impl->optionalCompilerSlotWaiters++;
+			impl->optionalCompilerSlotWaitersHighWater = max(
+				impl->optionalCompilerSlotWaitersHighWater,
+				impl->optionalCompilerSlotWaiters);
+			if (blockedByForeground) { impl->optionalPriorityDeferrals++; }
+		} else {
+			impl->foregroundCompilerSlotWaiters++;
+			impl->foregroundCompilerSlotWaitersHighWater = max(
+				impl->foregroundCompilerSlotWaitersHighWater,
+				impl->foregroundCompilerSlotWaiters);
+		}
 	}
-	bool slotReady = impl->compilerSlotReady.wait_for(
-		lock,
-		chrono::nanoseconds(impl->compilerTimeoutNs),
-		[&] {
-			return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
-				impl->compilerTasksInFlight < impl->compilerTaskMax;
-		});
+	bool slotReady = false;
+	while (!slotReady) {
+		slotReady = impl->compilerSlotReady.wait_for(
+			lock,
+			chrono::nanoseconds(impl->compilerTimeoutNs),
+			[&] {
+				return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
+					(impl->compilerTasksInFlight < impl->compilerTaskMax &&
+					 (!optionalWork || impl->foregroundCompilerSlotWaiters == 0));
+			});
+		if (!slotReady && optionalWork &&
+			impl->foregroundCompilerSlotWaiters > 0 &&
+			!impl->shuttingDown && !impl->fatalCompilerTimeout && !breaker) {
+			// Intentional yielding is not a stuck compiler. A preferred waiter owns
+			// the timeout responsibility while optional work waits behind it.
+			impl->optionalPriorityDeferrals++;
+			continue;
+		}
+		break;
+	}
 	if (slotContended) {
 		if (stats.waiters > 0) { stats.waiters--; }
 		if (impl->compilerSlotWaiters > 0) { impl->compilerSlotWaiters--; }
+		if (optionalWork) {
+			if (impl->optionalCompilerSlotWaiters > 0) { impl->optionalCompilerSlotWaiters--; }
+		} else {
+			if (impl->foregroundCompilerSlotWaiters > 0) { impl->foregroundCompilerSlotWaiters--; }
+		}
 	}
 
 	uint64_t waitDuration = mvkGetElapsedNanoseconds(waitStart);
@@ -648,6 +703,14 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (impl->fatalCompilerTimeout || breaker) { return false; }
 	impl->compilerTasksInFlight++;
 	impl->asyncInflightHighWater = max(impl->asyncInflightHighWater, impl->compilerTasksInFlight);
+	if (!optionalWork && slotContended &&
+		impl->foregroundCompilerSlotWaiters == 0 &&
+		impl->compilerTasksInFlight < impl->compilerTaskMax) {
+		// The last preferred waiter may leave spare capacity behind. Wake optional
+		// work that yielded while preferred work was queued so that capacity is not
+		// artificially stranded until another compiler task finishes.
+		impl->compilerSlotReady.notify_all();
+	}
 	return true;
 }
 
@@ -978,11 +1041,11 @@ static string formatMetal4SchedulingTelemetryLocked(
 	MVKMetal4CompilerService::Impl* impl,
 	bool finalSummary) {
 	const char* format = finalSummary
-		? "Metal 4 scheduling summary: inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, "
+		? "Metal 4 scheduling summary: inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, foreground_waiters_current=%zu, foreground_waiters_high_water=%zu, optional_waiters_current=%zu, optional_waiters_high_water=%zu, optional_priority_deferrals=%llu, "
 		  "library_wait_count=%llu, library_waiters=%zu, library_waiters_high_water=%zu, library_queue_wait_total_ns=%llu, library_queue_wait_max_ns=%llu, library_task_total_ns=%llu, library_task_max_ns=%llu, "
 		  "render_wait_count=%llu, render_waiters=%zu, render_waiters_high_water=%zu, render_queue_wait_total_ns=%llu, render_queue_wait_max_ns=%llu, render_task_total_ns=%llu, render_task_max_ns=%llu, "
 		  "compute_wait_count=%llu, compute_waiters=%zu, compute_waiters_high_water=%zu, compute_queue_wait_total_ns=%llu, compute_queue_wait_max_ns=%llu, compute_task_total_ns=%llu, compute_task_max_ns=%llu."
-		: "Metal 4 scheduling telemetry (periodic): inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, "
+		: "Metal 4 scheduling telemetry (periodic): inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, foreground_waiters_current=%zu, foreground_waiters_high_water=%zu, optional_waiters_current=%zu, optional_waiters_high_water=%zu, optional_priority_deferrals=%llu, "
 		  "library_wait_count=%llu, library_waiters=%zu, library_waiters_high_water=%zu, library_queue_wait_total_ns=%llu, library_queue_wait_max_ns=%llu, library_task_total_ns=%llu, library_task_max_ns=%llu, "
 		  "render_wait_count=%llu, render_waiters=%zu, render_waiters_high_water=%zu, render_queue_wait_total_ns=%llu, render_queue_wait_max_ns=%llu, render_task_total_ns=%llu, render_task_max_ns=%llu, "
 		  "compute_wait_count=%llu, compute_waiters=%zu, compute_waiters_high_water=%zu, compute_queue_wait_total_ns=%llu, compute_queue_wait_max_ns=%llu, compute_task_total_ns=%llu, compute_task_max_ns=%llu.";
@@ -992,6 +1055,11 @@ static string formatMetal4SchedulingTelemetryLocked(
 		impl->asyncInflightHighWater,
 		impl->compilerSlotWaiters,
 		impl->compilerSlotWaitersHighWater,
+		impl->foregroundCompilerSlotWaiters,
+		impl->foregroundCompilerSlotWaitersHighWater,
+		impl->optionalCompilerSlotWaiters,
+		impl->optionalCompilerSlotWaitersHighWater,
+		static_cast<unsigned long long>(impl->optionalPriorityDeferrals),
 		static_cast<unsigned long long>(impl->libraryStats.queueWaitCount),
 		impl->libraryStats.waiters,
 		impl->libraryStats.waitersHighWater,
@@ -1310,7 +1378,7 @@ VkResult MVKMetal4CompilerService::beginDiagnosticWork(
 	uint64_t requestId) {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;
-	if (!impl || !impl->device || requestId == 0) {
+	if (!impl || !impl->device) {
 		return VK_ERROR_FEATURE_NOT_PRESENT;
 	}
 	if (_mvkMetal4DiagnosticWork.active) {
@@ -1319,7 +1387,7 @@ VkResult MVKMetal4CompilerService::beginDiagnosticWork(
 	_mvkMetal4DiagnosticWork = {};
 	_mvkMetal4DiagnosticWork.device = impl->device;
 	_mvkMetal4DiagnosticWork.active = true;
-	_mvkMetal4DiagnosticWork.stats.available = VK_TRUE;
+	_mvkMetal4DiagnosticWork.stats.available = requestId != 0 ? VK_TRUE : VK_FALSE;
 	_mvkMetal4DiagnosticWork.stats.origin = static_cast<uint32_t>(origin);
 	_mvkMetal4DiagnosticWork.stats.requestId = requestId;
 	return VK_SUCCESS;

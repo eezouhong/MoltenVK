@@ -610,7 +610,8 @@ def test_source_policy() -> None:
     )
     merge_cache_body = shader_mm[merge_cache_start:merge_cache_end]
     require(merge_cache_body, "if (shared) {", SHADER_MM)
-    require(merge_cache_body, "_shaderLibraries.emplace_back(alignedConfig, shared);", SHADER_MM)
+    require(merge_cache_body, "alignedConfig.compactedForCacheStorage()", SHADER_MM)
+    require(merge_cache_body, "shared);", SHADER_MM)
     require(merge_cache_body, "_repository->release(_shaderModuleKey, alignedConfig, shared);", SHADER_MM)
     require(
         shader_mm,

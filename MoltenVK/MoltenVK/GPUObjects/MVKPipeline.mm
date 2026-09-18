@@ -2424,7 +2424,11 @@ void MVKPipeline::recordShaderLibraryContribution(
 			return;
 		}
 	}
-	_shaderLibraryContributions.push_back({ shaderModuleKey, shaderConfig, shaderLibrary });
+	_shaderLibraryContributions.push_back({
+		shaderModuleKey,
+		shaderConfig.compactedForCacheStorage(),
+		shaderLibrary,
+	});
 	shaderLibrary->retain();
 }
 

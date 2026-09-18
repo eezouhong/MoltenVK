@@ -31,7 +31,7 @@ assert (
 # diagnostics-only traced lock wrapper. Substitute an equivalent harness lock
 # so the test can observe lock ownership without changing production code.
 acquire = acquire.replace('lock_guard<mutex> lock(_lock);', 'mvkcachetrace::Lock lock(_lock, __func__, this);')
-align = body(converter, 'MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(', '\n\n#pragma mark -')
+align = body(converter, 'MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(', '\n\nMVK_PUBLIC_SYMBOL SPIRVToMSLConversionConfiguration')
 source = r'''
 #include <algorithm>
 #include <atomic>
@@ -96,6 +96,7 @@ struct SPIRVToMSLConversionConfiguration {
     }
     bool matches(const SPIRVToMSLConversionConfiguration& b) const { return variant == b.variant; }
     void alignWith(const SPIRVToMSLConversionConfiguration&);
+    SPIRVToMSLConversionConfiguration compactedForCacheStorage() const { return *this; }
 };
 // @ALIGN@
 struct MVKShaderLibrary {

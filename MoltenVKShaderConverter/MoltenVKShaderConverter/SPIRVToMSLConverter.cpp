@@ -22,6 +22,7 @@
 #include "FileSupport.h"
 #include "SPIRVSupport.h"
 #include <fstream>
+#include <type_traits>
 #include "SPIRVToMSLAlignment.h"
 
 using namespace mvk;
@@ -224,6 +225,91 @@ MVK_PUBLIC_SYMBOL void SPIRVToMSLConversionConfiguration::alignWith(const SPIRVT
 	alignShaderUsage(shaderInputs, srcContext.shaderInputs, InterfaceUsageHash{});
 	alignShaderUsage(shaderOutputs, srcContext.shaderOutputs, InterfaceUsageHash{});
 	alignShaderUsage(resourceBindings, srcContext.resourceBindings, ResourceUsageHash{});
+}
+
+MVK_PUBLIC_SYMBOL SPIRVToMSLConversionConfiguration
+SPIRVToMSLConversionConfiguration::compactedForCacheStorage() const {
+	SPIRVToMSLConversionConfiguration compacted;
+	compacted.options = options;
+
+	// Usage alignment has one subtle duplicate rule: the last matching source
+	// entry controls the aligned usage flag, while matches() considers any TRUE
+	// entry. Preserve that exact behavior without keeping every unused entry.
+	const auto compactUsage = [](const auto& source, auto& destination, auto hash,
+								  const auto& include) {
+		using T = typename std::decay_t<decltype(source)>::value_type;
+		struct Summary {
+			const T* firstTrue = nullptr;
+			const T* last = nullptr;
+		};
+
+		std::unordered_map<const T*, size_t, decltype(hash), ShaderUsageEqual<T>>
+			indices(0, hash);
+		indices.reserve(source.size());
+		std::vector<Summary> summaries;
+		summaries.reserve(source.size());
+
+		for (const auto& value : source) {
+			if (!include(value)) { continue; }
+
+			auto [found, inserted] = indices.emplace(&value, summaries.size());
+			if (inserted) {
+				summaries.push_back({});
+			}
+			Summary& summary = summaries[found->second];
+			if (value.outIsUsedByShader && !summary.firstTrue) {
+				summary.firstTrue = &value;
+			}
+			summary.last = &value;
+		}
+
+		size_t compactedCount = 0;
+		for (const Summary& summary : summaries) {
+			if (!summary.firstTrue) { continue; }
+			compactedCount += summary.last->outIsUsedByShader ? 1 : 2;
+		}
+		destination.reserve(compactedCount);
+
+		for (const Summary& summary : summaries) {
+			if (!summary.firstTrue) { continue; }
+			if (summary.last->outIsUsedByShader) {
+				destination.push_back(*summary.last);
+			} else {
+				// Keep one TRUE entry so matches() has the same requirement, then
+				// the final FALSE entry so alignWith() still observes last-wins.
+				destination.push_back(*summary.firstTrue);
+				destination.push_back(*summary.last);
+			}
+		}
+	};
+
+	const auto includeAll = [](const auto&) { return true; };
+	compactUsage(shaderInputs, compacted.shaderInputs, InterfaceUsageHash{}, includeAll);
+	compactUsage(shaderOutputs, compacted.shaderOutputs, InterfaceUsageHash{}, includeAll);
+	compactUsage(
+		resourceBindings,
+		compacted.resourceBindings,
+		ResourceUsageHash{},
+		[this](const auto& binding) {
+			return binding.resourceBinding.stage == options.entryPointStage;
+		});
+
+	compacted.discreteDescriptorSets = discreteDescriptorSets;
+
+	size_t stageDynamicDescriptorCount = 0;
+	for (const auto& descriptor : dynamicBufferDescriptors) {
+		if (descriptor.stage == options.entryPointStage) {
+			stageDynamicDescriptorCount++;
+		}
+	}
+	compacted.dynamicBufferDescriptors.reserve(stageDynamicDescriptorCount);
+	for (const auto& descriptor : dynamicBufferDescriptors) {
+		if (descriptor.stage == options.entryPointStage) {
+			compacted.dynamicBufferDescriptors.push_back(descriptor);
+		}
+	}
+
+	return compacted;
 }
 
 

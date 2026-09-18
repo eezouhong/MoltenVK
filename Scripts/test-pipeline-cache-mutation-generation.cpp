@@ -24,6 +24,7 @@ using VkPipelineCache = void*;
 struct ShaderConfig {
     int value = 0;
     bool matches(const ShaderConfig& other) const;
+    ShaderConfig compactedForCacheStorage() const { return *this; }
 };
 
 static bool throwOnSentinelMatch = false;
@@ -165,6 +166,7 @@ struct ShaderConfig {
 
     bool matches(const ShaderConfig& other) const { return key == other.key; }
     void alignWith(const ShaderConfig& other) { *this = other; }
+    ShaderConfig compactedForCacheStorage() const { return *this; }
     bool operator==(const ShaderConfig& other) const {
         return key == other.key && persistentValue == other.persistentValue;
     }

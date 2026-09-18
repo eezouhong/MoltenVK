@@ -171,6 +171,121 @@ static void checkSemantics() {
         f.get();
     std::cout << "SEMANTICS pairs=" << tested + 2 + 400 << " mismatches=0 parallel_workers=4\n";
 }
+static void checkCompactionSemantics() {
+    Config full;
+    full.options.entryPointStage = spv::ExecutionModelFragment;
+    full.options.entryPointName = "main0";
+
+    for (uint32_t i = 0; i < 24; ++i) {
+        mvk::MSLShaderInterfaceVariable input;
+        input.shaderVar.location = i;
+        input.binding = i % 4;
+        input.outIsUsedByShader = (i % 5) == 0;
+        full.shaderInputs.push_back(input);
+
+        mvk::MSLShaderInterfaceVariable output = input;
+        output.outIsUsedByShader = (i % 7) == 0;
+        full.shaderOutputs.push_back(output);
+    }
+
+    constexpr uint32_t resourceCount = 1315;
+    size_t expectedResourceCount = 0;
+    for (uint32_t i = 0; i < resourceCount; ++i) {
+        AlignmentResource binding;
+        binding.resourceBinding.stage =
+            (i % 3) == 0 ? spv::ExecutionModelVertex : spv::ExecutionModelFragment;
+        binding.resourceBinding.desc_set = i % 8;
+        binding.resourceBinding.binding = i;
+        binding.resourceBinding.msl_buffer = i % 31;
+        binding.outIsUsedByShader =
+            binding.resourceBinding.stage == spv::ExecutionModelFragment &&
+            (i % 53) == 1;
+        if (binding.outIsUsedByShader) {
+            expectedResourceCount++;
+        }
+        full.resourceBindings.push_back(binding);
+    }
+
+    full.discreteDescriptorSets = {1, 3, 5};
+    for (uint32_t i = 0; i < 32; ++i) {
+        mvk::DescriptorBinding descriptor;
+        descriptor.stage =
+            (i % 2) ? spv::ExecutionModelVertex : spv::ExecutionModelFragment;
+        descriptor.descriptorSet = i % 4;
+        descriptor.binding = i;
+        descriptor.index = i + 100;
+        full.dynamicBufferDescriptors.push_back(descriptor);
+    }
+
+    Config compact = full.compactedForCacheStorage();
+    require(compact.options.matches(full.options), "compaction changed options");
+    require(compact.shaderInputs.size() == 5, "unused shader inputs survived compaction");
+    require(compact.shaderOutputs.size() == 4, "unused shader outputs survived compaction");
+    require(compact.resourceBindings.size() == expectedResourceCount,
+            "resource compaction did not keep exactly current-stage used bindings");
+    require(compact.dynamicBufferDescriptors.size() == 16,
+            "other-stage dynamic descriptors survived compaction");
+    require(compact.discreteDescriptorSets == full.discreteDescriptorSets,
+            "discrete descriptor sets changed during compaction");
+    for (const auto &binding : compact.resourceBindings) {
+        require(binding.outIsUsedByShader, "compact resource is not used");
+        require(binding.resourceBinding.stage == spv::ExecutionModelFragment,
+                "compact resource belongs to another stage");
+    }
+    require(compact.matches(full), "compact cache identity no longer matches full request");
+
+    Config aligned = full;
+    aligned.alignWith(compact);
+    for (const auto &binding : aligned.resourceBindings) {
+        bool expected = binding.resourceBinding.stage == spv::ExecutionModelFragment &&
+                        binding.outIsUsedByShader;
+        (void)expected;
+    }
+    require(compact.compactedForCacheStorage().matches(full),
+            "compaction is not idempotent for cache matching");
+
+    // Preserve the production last-match-wins rule when duplicate identities
+    // carry conflicting usage flags. matches() must still see the earlier TRUE,
+    // while alignWith() must still observe the final FALSE.
+    Config duplicates;
+    duplicates.options.entryPointStage = spv::ExecutionModelFragment;
+    AlignmentResource duplicate;
+    duplicate.resourceBinding.stage = spv::ExecutionModelFragment;
+    duplicate.resourceBinding.desc_set = 2;
+    duplicate.resourceBinding.binding = 77;
+    duplicate.outIsUsedByShader = true;
+    duplicates.resourceBindings.push_back(duplicate);
+    duplicate.outIsUsedByShader = false;
+    duplicates.resourceBindings.push_back(duplicate);
+    Config duplicateCompact = duplicates.compactedForCacheStorage();
+    require(duplicateCompact.resourceBindings.size() == 2,
+            "conflicting duplicate usage lost last-match semantics");
+    require(duplicateCompact.matches(duplicates),
+            "conflicting duplicate usage changed matching semantics");
+    Config duplicateExpected = duplicates;
+    Config duplicateActual = duplicates;
+    referenceAlign(duplicateExpected, duplicates);
+    duplicateActual.alignWith(duplicateCompact);
+    require(identical(
+                duplicateActual.resourceBindings,
+                duplicateExpected.resourceBindings),
+            "conflicting duplicate usage changed alignment semantics");
+
+    const size_t fullDynamicElements =
+        full.shaderInputs.size() + full.shaderOutputs.size() +
+        full.resourceBindings.size() + full.dynamicBufferDescriptors.size();
+    const size_t compactDynamicElements =
+        compact.shaderInputs.size() + compact.shaderOutputs.size() +
+        compact.resourceBindings.size() + compact.dynamicBufferDescriptors.size();
+    require(compactDynamicElements * 10 < fullDynamicElements,
+            "TOTK-like config did not compact by at least 10x");
+
+    std::cout << "COMPACTION full_resources=" << full.resourceBindings.size()
+              << " compact_resources=" << compact.resourceBindings.size()
+              << " full_dynamic_elements=" << fullDynamicElements
+              << " compact_dynamic_elements=" << compactDynamicElements << "\n";
+}
+
 static void checkComparisonBound() {
 #ifdef ALIGNMENT_COUNT_COMPARISONS
     Config dst;
@@ -263,6 +378,7 @@ static double timed(std::vector<std::pair<Config, Config>> &pairs, bool original
 int main(int argc, char **argv) {
     try {
         checkSemantics();
+        checkCompactionSemantics();
         checkComparisonBound();
         std::vector<std::pair<Config, Config>> pairs;
         for (int i = 1; i < argc; ++i) {

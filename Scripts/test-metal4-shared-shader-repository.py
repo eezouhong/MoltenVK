@@ -312,9 +312,10 @@ def test_source_policy() -> None:
     require(device_h, "MVKShaderLibraryRepository* _shaderLibraryRepository = nullptr;", DEVICE_H)
     require(
         device_mm,
-        "? MVKShaderLibraryRepository::create(this)",
+        "_shaderLibraryRepository = MVKShaderLibraryRepository::create(this);",
         DEVICE_MM,
     )
+    assert "_shaderLibraryRepository = _metal4CompilerService" not in device_mm
     require(device_mm, "delete _shaderLibraryRepository;\n\tdelete _metal4CompilerService;", DEVICE_MM)
 
     require(pipeline_mm, "new MVKShaderLibraryCache(this, smKey)", PIPELINE_MM)

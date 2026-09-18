@@ -5676,9 +5676,7 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
 	_metal4CompilerService = MVKMetal4CompilerService::create(this);
-	_shaderLibraryRepository = _metal4CompilerService
-		? MVKShaderLibraryRepository::create(this)
-		: nullptr;
+	_shaderLibraryRepository = MVKShaderLibraryRepository::create(this);
 	_metal4TextureViewPool = MVKMetal4TextureViewPool::create(this);
 	_commandResourceFactory = new MVKCommandResourceFactory(this);
 

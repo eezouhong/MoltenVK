@@ -21,10 +21,15 @@ enum VkResult {
 };
 using VkPipelineCache = void*;
 
+static bool throwOnCompaction = false;
+
 struct ShaderConfig {
     int value = 0;
     bool matches(const ShaderConfig& other) const;
-    ShaderConfig compactedForCacheStorage() const { return *this; }
+    ShaderConfig compactedForCacheStorage() const {
+        if (throwOnCompaction) throw bad_alloc();
+        return *this;
+    }
 };
 
 static bool throwOnSentinelMatch = false;
@@ -59,7 +64,16 @@ struct ShaderLibrary {
     Owner* _owner = nullptr;
     int _shaderConversionResultInfo = 0;
     int _compressedMSL = 0;
+    ShaderConfig cacheConfig;
+    bool hasConfig = false;
     void release() { delete this; }
+    bool hasCacheConfig() const { return hasConfig; }
+    void setCacheConfig(const ShaderConfig& config) {
+        cacheConfig = config.compactedForCacheStorage();
+        hasConfig = true;
+    }
+    const ShaderConfig& getCacheConfig() const { return cacheConfig; }
+    ShaderConfig& getCacheConfig() { return cacheConfig; }
 };
 
 struct DeferredLibrary {
@@ -84,7 +98,7 @@ class MVKShaderLibraryCache {
     Owner* _owner = nullptr;
     ShaderModuleKey _shaderModuleKey;
     Repository* _repository = nullptr;
-    vector<pair<ShaderConfig, ShaderLibrary*>> _shaderLibraries;
+    vector<ShaderLibrary*> _shaderLibraries;
     vector<DeferredLibrary> _deferredShaderLibraries;
 
     explicit MVKShaderLibraryCache(Owner* owner, ShaderModuleKey key = {})
@@ -93,8 +107,8 @@ class MVKShaderLibraryCache {
         : _shaderModuleKey(key) {}
 
     bool hasShaderLibrary(const ShaderConfig& config) const {
-        for (const auto& entry : _shaderLibraries)
-            if (entry.first.matches(config)) return true;
+        for (const auto* library : _shaderLibraries)
+            if (library->getCacheConfig().matches(config)) return true;
         for (const auto& entry : _deferredShaderLibraries)
             if (entry.shaderConfig.matches(config)) return true;
         return false;
@@ -160,13 +174,18 @@ class MVKPipelineCache {
 
 namespace behavior {
 
+static bool throwOnCompaction = false;
+
 struct ShaderConfig {
     int key = 0;
     int persistentValue = 0;
 
     bool matches(const ShaderConfig& other) const { return key == other.key; }
     void alignWith(const ShaderConfig& other) { *this = other; }
-    ShaderConfig compactedForCacheStorage() const { return *this; }
+    ShaderConfig compactedForCacheStorage() const {
+        if (throwOnCompaction) throw bad_alloc();
+        return *this;
+    }
     bool operator==(const ShaderConfig& other) const {
         return key == other.key && persistentValue == other.persistentValue;
     }
@@ -254,6 +273,8 @@ class ShaderLibrary {
     Device* _owner = nullptr;
     SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
     MVKCompressor<string> _compressedMSL;
+    ShaderConfig _cacheConfig;
+    bool _hasCacheConfig = false;
 
     ShaderLibrary(Device* owner, const SPIRVToMSLConversionResult& result)
         : _owner(owner),
@@ -277,11 +298,20 @@ class ShaderLibrary {
         : _owner(other._owner),
           _shaderConversionResultInfo(other._shaderConversionResultInfo),
           _compressedMSL(other._compressedMSL),
+          _cacheConfig(other._cacheConfig),
+          _hasCacheConfig(other._hasCacheConfig),
           _resident(other._resident) {
         ++liveCount;
     }
 
     bool isResident() const { return _resident; }
+    bool hasCacheConfig() const { return _hasCacheConfig; }
+    void setCacheConfig(const ShaderConfig& config) {
+        _cacheConfig = config.compactedForCacheStorage();
+        _hasCacheConfig = true;
+    }
+    const ShaderConfig& getCacheConfig() const { return _cacheConfig; }
+    ShaderConfig& getCacheConfig() { return _cacheConfig; }
     void retain() { ++_referenceCount; }
     void release() {
         if (--_referenceCount == 0) {
@@ -314,7 +344,6 @@ class Repository {
   public:
     struct Entry {
         ShaderModuleKey key;
-        ShaderConfig config;
         ShaderLibrary* library = nullptr;
         int membershipCount = 0;
     };
@@ -332,8 +361,9 @@ class Repository {
         const SPIRVToMSLConversionResultInfo& resultInfo,
         const MVKCompressor<string>& compressedMSL) {
         auto* library = new ShaderLibrary(nullptr, resultInfo, compressedMSL);
+        library->setCacheConfig(config);
         library->retain();
-        entries.push_back({key, config, library, 1});
+        entries.push_back({key, library, 1});
         return library;
     }
 
@@ -346,9 +376,12 @@ class Repository {
             if (candidate) candidate->release();
             return nullptr;
         }
+        if (candidate && !candidate->hasCacheConfig()) {
+            candidate->setCacheConfig(*config);
+        }
         for (auto& entry : entries) {
-            if (entry.key == key && entry.config.matches(*config)) {
-                config->alignWith(entry.config);
+            if (entry.key == key && entry.library->getCacheConfig().matches(*config)) {
+                config->alignWith(entry.library->getCacheConfig());
                 ++entry.membershipCount;
                 entry.library->retain();
                 if (candidate) candidate->release();
@@ -360,7 +393,7 @@ class Repository {
             return nullptr;
         }
         candidate->retain();
-        entries.push_back({key, *config, candidate, 1});
+        entries.push_back({key, candidate, 1});
         return candidate;
     }
 
@@ -370,7 +403,7 @@ class Repository {
         ShaderLibrary* library) {
         for (auto it = entries.begin(); it != entries.end(); ++it) {
             if (it->key == key && it->library == library &&
-                it->config.matches(config)) {
+                library->getCacheConfig().matches(config)) {
                 --it->membershipCount;
                 library->release();
                 if (it->membershipCount == 0) {
@@ -408,6 +441,15 @@ class FaultVector {
         }
         if (residentEmplaceCountdown > 0) --residentEmplaceCountdown;
         values.emplace_back(forward<Args>(args)...);
+    }
+
+    void push_back(const T& value) {
+        if (residentEmplaceCountdown == 0) {
+            residentEmplaceCountdown = -1;
+            throw bad_alloc();
+        }
+        if (residentEmplaceCountdown > 0) --residentEmplaceCountdown;
+        values.push_back(value);
     }
 
     iterator begin() { return values.begin(); }
@@ -462,7 +504,6 @@ class MVKShaderModule {
 
 struct MVKPipelineShaderLibraryContribution {
     ShaderModuleKey shaderModuleKey;
-    ShaderConfig shaderConfig;
     ShaderLibrary* shaderLibrary = nullptr;
 };
 
@@ -474,9 +515,8 @@ class MVKPipeline {
     bool shouldRecordShaderLibraryContributions() const { return recordContributions; }
     void recordShaderLibraryContribution(
         ShaderModuleKey key,
-        const ShaderConfig& config,
         ShaderLibrary* library) {
-        _shaderLibraryContributions.push_back({key, config, library});
+        _shaderLibraryContributions.push_back({key, library});
         library->retain();
     }
     bool hasValidMTLPipelineStates() const { return valid; }
@@ -502,11 +542,14 @@ class MVKShaderLibraryCache {
           _repository(owner->getShaderLibraryRepository()) {}
 
     ~MVKShaderLibraryCache() {
-        for (auto& entry : _shaderLibraries) {
+        for (auto* library : _shaderLibraries) {
             if (_repository) {
-                _repository->release(_shaderModuleKey, entry.first, entry.second);
+                _repository->release(
+                    _shaderModuleKey,
+                    library->getCacheConfig(),
+                    library);
             } else {
-                entry.second->release();
+                library->release();
             }
         }
     }
@@ -566,7 +609,7 @@ class MVKShaderLibraryCache {
     Device* _owner = nullptr;
     ShaderModuleKey _shaderModuleKey;
     Repository* _repository = nullptr;
-    FaultVector<pair<ShaderConfig, ShaderLibrary*>> _shaderLibraries;
+    FaultVector<ShaderLibrary*> _shaderLibraries;
     vector<DeferredLibrary> _deferredShaderLibraries;
     PerformanceStats performanceStats;
 };
@@ -861,6 +904,41 @@ static void testNonRepositoryInsertionFaultOwnership() {
     }
 }
 
+static void testNonRepositoryDeferredConfigFaultOwnership() {
+    int liveBefore = ShaderLibrary::liveCount;
+    {
+        Device device{nullptr};
+        MVKPipelineCache cache(&device);
+        MVKPipeline pipeline(&device);
+        MVKShaderModule module;
+        module.key = {67};
+        ShaderConfig config{16, 160};
+        auto* view = cache.getShaderLibraryCache(module.key);
+        view->addDeferredShaderLibrary(&config, {671}, payload(68));
+
+        throwOnCompaction = true;
+        bool threw = false;
+        try {
+            ShaderConfig request = config;
+            cache.getShaderLibraryImpl(
+                &request, &module, &pipeline, nullptr, 0);
+        } catch (const bad_alloc&) {
+            threw = true;
+        }
+        throwOnCompaction = false;
+
+        check(threw, "deferred config compaction fault was not injected");
+        check(view->_shaderLibraries.size() == 0,
+              "deferred config fault published a materialized cache entry");
+        check(view->_deferredShaderLibraries.size() == 1,
+              "deferred config fault consumed the persisted deferred entry");
+        check(ShaderLibrary::liveCount == liveBefore,
+              "deferred config fault leaked replacement ownership");
+    }
+    check(ShaderLibrary::liveCount == liveBefore,
+          "deferred config fault cleanup changed after destruction");
+}
+
 static void testContributionAdoptionExceptionCleanup() {
     int liveBefore = ShaderLibrary::liveCount;
     {
@@ -879,9 +957,9 @@ static void testContributionAdoptionExceptionCleanup() {
         first->retain();
         second->retain();
         pipeline._shaderLibraryContributions.push_back(
-            {firstKey, firstConfig, first});
+            {firstKey, first});
         pipeline._shaderLibraryContributions.push_back(
-            {secondKey, secondConfig, second});
+            {secondKey, second});
 
         residentEmplaceCountdown = 1;
         bool threw = false;
@@ -919,6 +997,7 @@ static void runBehaviorTests() {
     testImportInsertionFaultOwnership();
     testRepositoryHitInsertionFaultOwnership();
     testNonRepositoryInsertionFaultOwnership();
+    testNonRepositoryDeferredConfigFaultOwnership();
     testContributionAdoptionExceptionCleanup();
 }
 

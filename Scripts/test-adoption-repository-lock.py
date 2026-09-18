@@ -105,17 +105,25 @@ struct MVKShaderLibrary {
     void* _owner = nullptr;
     void* _repository = nullptr;
     atomic<bool> _repositoryTracked{false}, _repositoryResidentCounted{false};
+    SPIRVToMSLConversionConfiguration cacheConfig;
+    bool hasConfig = false;
     void retain() { references++; }
     void release() { assert(references.fetch_sub(1) > 0); }
     bool isResident() const { return resident; }
     bool tryAdoptResidentPayload(MVKShaderLibrary*) { return false; }
+    bool hasCacheConfig() const { return hasConfig; }
+    void setCacheConfig(const SPIRVToMSLConversionConfiguration& config) {
+        cacheConfig = config.compactedForCacheStorage();
+        hasConfig = true;
+    }
+    const SPIRVToMSLConversionConfiguration& getCacheConfig() const { return cacheConfig; }
 };
 template<class T> void updateAtomicMaximum(atomic<T>& target, T value) {
     auto old = target.load();
     while (old < value && !target.compare_exchange_weak(old, value)) {}
 }
 struct MVKShaderLibraryRepository {
-    struct Entry { SPIRVToMSLConversionConfiguration shaderConfig; MVKShaderLibrary* library; uint32_t membershipCount; };
+    struct Entry { MVKShaderLibrary* library; uint32_t membershipCount; };
     mutex _lock;
     unordered_map<MVKShaderModuleKey, vector<Entry>> _entries;
     atomic<uint64_t> _logicalMembershipCount{0}, _logicalMembershipPeak{0}, _dedupeHitCount{0},
@@ -162,12 +170,15 @@ int main() {
     assert(repo.acquire(7, &foreground) == &library);
     alignmentProbe = {};
     assert(sawInside); equalConfig(expected, foreground);
-    // Snapshot allocation failure occurs before any membership/reference change.
+    // Canonical sharing removes the former config snapshot copy from the
+    // off-lock adoption path. A config-copy fault must no longer be observed.
     auto refs = library.references.load(); auto memberships = repo._logicalMembershipCount.load();
     throwCopy = true;
-    try { repo.acquire(7, &original, nullptr, true); assert(false); } catch (const bad_alloc&) {}
+    auto noCopy = original;
+    assert(repo.acquire(7, &noCopy, nullptr, true) == &library);
     throwCopy = false;
-    assert(library.references==refs && repo._logicalMembershipCount==memberships);
+    assert(library.references==refs+1 && repo._logicalMembershipCount==memberships+1);
+    equalConfig(expected, noCopy);
     auto missing = config(2);
     assert(!repo.acquire(7,&missing,nullptr,true));
     assert(!repo.acquire(77,&original,nullptr,true));
@@ -198,7 +209,7 @@ int main() {
     for(auto& t:threads)t.join();
     assert(repo._entries.at(7)[0].membershipCount==repo._logicalMembershipCount);
     assert(library.references==int(repo._logicalMembershipCount+1));
-    cout << "PASS: exact production acquire/alignment; canonical equivalence, duplicate bindings, copy failure, misses, cold payload, concurrent foreground progress, reference balance\n";
+    cout << "PASS: exact production acquire/alignment; canonical sharing, duplicate bindings, no snapshot copy, misses, cold payload, concurrent foreground progress, reference balance\n";
 }
 '''.replace('// @ALIGN@',align).replace('// @ACQUIRE@',acquire)
 with tempfile.TemporaryDirectory(prefix='mvk-adoption-lock-') as tmp:

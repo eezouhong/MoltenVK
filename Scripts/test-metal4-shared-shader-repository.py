@@ -482,7 +482,7 @@ def test_source_policy() -> None:
     assert "alignWith" not in raw_take_deferred_body
     assert "MVKDeferredShaderLibrary* deferred =" in replacement_body
     assert "mvkAreShaderLibraryPersistenceEqual(" in replacement_body
-    assert replacement_body.index("_shaderLibraries.emplace_back(") < replacement_body.index(
+    assert replacement_body.index("_shaderLibraries.push_back(") < replacement_body.index(
         "_deferredShaderLibraries.erase("
     )
     assert replacement_body.index("*pLogicalContentChanged = true;") < replacement_body.index(
@@ -599,7 +599,7 @@ def test_source_policy() -> None:
         add_membership_start,
     )
     add_membership_body = shader_mm[add_membership_start:first_add_overload]
-    require(add_membership_body, "_shaderLibraries.emplace_back(", SHADER_MM)
+    require(add_membership_body, "_shaderLibraries.push_back(", SHADER_MM)
     require(add_membership_body, "_repository->release(", SHADER_MM)
     require(add_membership_body, "shaderLibrary->release();", SHADER_MM)
     assert shader_mm.count("addShaderLibraryMembership(alignedConfig, existing);") == 2
@@ -610,8 +610,8 @@ def test_source_policy() -> None:
     )
     merge_cache_body = shader_mm[merge_cache_start:merge_cache_end]
     require(merge_cache_body, "if (shared) {", SHADER_MM)
-    require(merge_cache_body, "alignedConfig.compactedForCacheStorage()", SHADER_MM)
-    require(merge_cache_body, "shared);", SHADER_MM)
+    require(merge_cache_body, "otherLibrary->getCacheConfig()", SHADER_MM)
+    require(merge_cache_body, "_shaderLibraries.push_back(shared);", SHADER_MM)
     require(merge_cache_body, "_repository->release(_shaderModuleKey, alignedConfig, shared);", SHADER_MM)
     require(
         shader_mm,
@@ -896,11 +896,7 @@ def test_source_policy() -> None:
 
     require(pipeline_h, "struct MVKPipelineShaderLibraryContribution", PIPELINE_H)
     require(pipeline_h, "MVKShaderModuleKey shaderModuleKey", PIPELINE_H)
-    require(
-        pipeline_h,
-        "SPIRVToMSLConversionConfiguration shaderConfig",
-        PIPELINE_H,
-    )
+    assert "SPIRVToMSLConversionConfiguration shaderConfig" not in pipeline_h
     require(pipeline_h, "MVKShaderLibrary* shaderLibrary", PIPELINE_H)
     require(pipeline_h, "recordShaderLibraryContribution(", PIPELINE_H)
     require(pipeline_h, "beginShaderLibraryContributionCapture(", PIPELINE_H)
@@ -920,7 +916,7 @@ def test_source_policy() -> None:
     record_start = pipeline_mm.index("pipeline->recordShaderLibraryContribution(")
     record_body = pipeline_mm[record_start - 120 : record_start + 500]
     assert "shaderModule->getKey()" in record_body
-    assert "*pContext" in record_body
+    assert "*pContext" not in record_body
     assert "shLib" in record_body
     assert "shouldRecordShaderLibraryContributions()" in record_body
 

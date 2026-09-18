@@ -2414,19 +2414,17 @@ MVKPipeline::~MVKPipeline() {
 
 void MVKPipeline::recordShaderLibraryContribution(
 	MVKShaderModuleKey shaderModuleKey,
-	const SPIRVToMSLConversionConfiguration& shaderConfig,
 	MVKShaderLibrary* shaderLibrary) {
 
-	if (!shaderLibrary) { return; }
+	if (!shaderLibrary || !shaderLibrary->hasCacheConfig()) { return; }
 	for (const auto& contribution : _shaderLibraryContributions) {
 		if (contribution.shaderModuleKey == shaderModuleKey &&
-			contribution.shaderConfig.matches(shaderConfig)) {
+			contribution.shaderLibrary == shaderLibrary) {
 			return;
 		}
 	}
 	_shaderLibraryContributions.push_back({
 		shaderModuleKey,
-		shaderConfig.compactedForCacheStorage(),
 		shaderLibrary,
 	});
 	shaderLibrary->retain();
@@ -2452,7 +2450,7 @@ VkResult MVKPipeline::adoptShaderLibrariesInto(
 			for (const auto& contribution : contributions) {
 				if (destinationPipelineCache->adoptShaderLibraryMembership(
 						contribution.shaderModuleKey,
-						contribution.shaderConfig,
+						contribution.shaderLibrary->getCacheConfig(),
 						contribution.shaderLibrary)) {
 					adoptedCount++;
 				}
@@ -4711,7 +4709,7 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionCon
 	if (logicalContentChanged) { markContentChanged(); }
 	else if (cacheRepresentationChanged) { markDirty(); }
 	if (shLib && pipeline->shouldRecordShaderLibraryContributions()) {
-		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), *pContext, shLib);
+		pipeline->recordShaderLibraryContribution(shaderModule->getKey(), shLib);
 	}
 	if (wasCacheHit && pShaderFeedback) {
 		mvkEnableFlags(
@@ -4778,20 +4776,20 @@ protected:
 	friend MVKPipelineCache;
 
 	bool next() { return (++_index < getEntryCount()); }
-	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() {
+	const SPIRVToMSLConversionConfiguration& getShaderConversionConfig() {
 		return isDeferred()
 			? getDeferredShaderConversionConfig()
-			: _pSLCache->_shaderLibraries[_index].first;
+			: _pSLCache->_shaderLibraries[_index]->getCacheConfig();
 	}
 	MVKCompressor<std::string>& getCompressedMSL() {
 		return isDeferred()
 			? getDeferredCompressedMSL()
-			: _pSLCache->_shaderLibraries[_index].second->getCompressedMSL();
+			: _pSLCache->_shaderLibraries[_index]->getCompressedMSL();
 	}
 	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() {
 		return isDeferred()
 			? getDeferredShaderConversionResultInfo()
-			: _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo;
+			: _pSLCache->_shaderLibraries[_index]->_shaderConversionResultInfo;
 	}
 	MVKShaderCacheIterator(MVKShaderLibraryCache* pSLCache) : _pSLCache(pSLCache) {}
 

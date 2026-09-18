@@ -234,13 +234,6 @@ static void checkCompactionSemantics() {
     }
     require(compact.matches(full), "compact cache identity no longer matches full request");
 
-    Config aligned = full;
-    aligned.alignWith(compact);
-    for (const auto &binding : aligned.resourceBindings) {
-        bool expected = binding.resourceBinding.stage == spv::ExecutionModelFragment &&
-                        binding.outIsUsedByShader;
-        (void)expected;
-    }
     require(compact.compactedForCacheStorage().matches(full),
             "compaction is not idempotent for cache matching");
 

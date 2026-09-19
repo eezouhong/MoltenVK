@@ -92,9 +92,9 @@ struct MVKPipeline {
     bool fail = false;
     bool shouldFailOnPipelineCompileRequired() const { return noCompile; }
     bool shouldRecordShaderLibraryContributions() const { return false; }
-    void recordShaderLibraryContribution(MVKShaderModuleKey,
-                                         const SPIRVToMSLConversionConfiguration &,
-                                         MVKShaderLibrary *) {}
+    void recordShaderLibraryContribution(
+        MVKShaderModuleKey,
+        MVKShaderLibrary *) {}
 };
 struct Deferred {
     SPIRVToMSLConversionConfiguration shaderConfig;

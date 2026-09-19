@@ -190,6 +190,18 @@ namespace mvk {
         /** Aligns certain aspects of this configuration with the source configuration. */
         void alignWith(const SPIRVToMSLConversionConfiguration& srcContext);
 
+        /**
+         * Returns a compact copy suitable for persistent/cache ownership.
+         *
+         * The live pipeline configuration intentionally contains the complete
+         * descriptor layout so SPIRV-Cross can discover usage. Once usage is
+         * known, cache identity only needs the entries that can participate in
+         * matches(): used shader inputs/outputs, used resource bindings for the
+         * current stage, current-stage dynamic descriptors, all discrete sets,
+         * and the conversion options.
+         */
+        SPIRVToMSLConversionConfiguration compactedForCacheStorage() const;
+
 	} SPIRVToMSLConversionConfiguration;
 
 

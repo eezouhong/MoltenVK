@@ -43,8 +43,8 @@ class MVKPipelineCache;
 
 struct MVKPipelineShaderLibraryContribution {
 	MVKShaderModuleKey shaderModuleKey;
-	mvk::SPIRVToMSLConversionConfiguration shaderConfig;
-	// Short-lived raw reference. The source cache owns it through immediate adoption.
+	// Short-lived retained physical-library reference. Its immutable canonical
+	// config is the cache identity used for adoption.
 	MVKShaderLibrary* shaderLibrary = nullptr;
 };
 
@@ -196,7 +196,6 @@ public:
 	/** Records one exact shader library used while constructing this pipeline. */
 	void recordShaderLibraryContribution(
 		MVKShaderModuleKey shaderModuleKey,
-		const mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
 		MVKShaderLibrary* shaderLibrary);
 
 	/** Adds this pipeline's exact shader-library memberships to another cache view. */

@@ -169,6 +169,10 @@ public:
 	/** Releases one physical-library ownership reference. */
 	void release();
 
+	/** Returns the immutable cache-identity configuration owned by this library. */
+	const mvk::SPIRVToMSLConversionConfiguration& getCacheConfig() const { return _cacheConfig; }
+	bool hasCacheConfig() const { return _hasCacheConfig; }
+
 	/**
 	 * Sets the entry point function name.
 	 *
@@ -214,6 +218,9 @@ protected:
 	friend MVKShaderLibraryCache;
 	friend MVKShaderLibraryRepository;
 	friend MVKShaderModule;
+
+	/** Assigns the cache identity before the library is published to shared owners. */
+	void setCacheConfig(const mvk::SPIRVToMSLConversionConfiguration& shaderConfig);
 
 	MVKMTLFunction getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 								  VkPipelineCreationFeedback* pShaderFeedback,
@@ -265,6 +272,8 @@ protected:
 	std::mutex _accessLock;
 	MVKCompressor<std::string> _compressedMSL;
 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
+	mvk::SPIRVToMSLConversionConfiguration _cacheConfig;
+	bool _hasCacheConfig = false;
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	std::string _metal4LibraryContentKey;
@@ -389,7 +398,9 @@ protected:
 	MVKVulkanAPIDeviceObject* _owner;
 	MVKShaderModuleKey _shaderModuleKey;
 	MVKShaderLibraryRepository* _repository;
-	MVKSmallVector<std::pair<mvk::SPIRVToMSLConversionConfiguration, MVKShaderLibrary*>> _shaderLibraries;
+	// Materialized cache views retain only the physical library. The library
+	// owns the single compact cache-identity config shared by all logical views.
+	MVKSmallVector<MVKShaderLibrary*> _shaderLibraries;
 	MVKSmallVector<MVKDeferredShaderLibrary> _deferredShaderLibraries;
 };
 
@@ -453,7 +464,6 @@ private:
 	friend class MVKShaderLibraryCache;
 
 	struct Entry {
-		mvk::SPIRVToMSLConversionConfiguration shaderConfig;
 		MVKShaderLibrary* library;
 		uint32_t membershipCount;
 	};

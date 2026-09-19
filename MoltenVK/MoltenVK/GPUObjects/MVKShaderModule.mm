@@ -270,6 +270,16 @@ void MVKShaderLibrary::release() {
 	if (priorCount == 1) { destroy(); }
 }
 
+void MVKShaderLibrary::setCacheConfig(
+	const SPIRVToMSLConversionConfiguration& shaderConfig) {
+	if (_hasCacheConfig) {
+		assert(_cacheConfig.matches(shaderConfig));
+		return;
+	}
+	_cacheConfig = shaderConfig.compactedForCacheStorage();
+	_hasCacheConfig = true;
+}
+
 MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpecializationInfo,
 														VkPipelineCreationFeedback* pShaderFeedback,
 														MVKShaderModule* shaderModule,
@@ -761,6 +771,8 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
 	for (auto& item : _specializationVariants) { item.second->retain(); }
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
+	_cacheConfig = other._cacheConfig;
+	_hasCacheConfig = other._hasCacheConfig;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	_metal4LibraryContentKey = other._metal4LibraryContentKey;
 #endif
@@ -780,6 +792,8 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
 	_resident.store(_mtlLibrary != nil, memory_order_release);
 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
 	_compressedMSL = other._compressedMSL;
+	_cacheConfig = other._cacheConfig;
+	_hasCacheConfig = other._hasCacheConfig;
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	_metal4LibraryContentKey = other._metal4LibraryContentKey;
 #endif
@@ -1090,6 +1104,14 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 		if (candidate) { candidate->release(); }
 		return nullptr;
 	}
+	if (candidate && !candidate->hasCacheConfig()) {
+		try {
+			candidate->setCacheConfig(*pShaderConfig);
+		} catch (...) {
+			candidate->release();
+			throw;
+		}
+	}
 
 	MVKShaderLibrary* result = nullptr;
 	MVKShaderLibrary* rejectedCandidate = candidate;
@@ -1097,21 +1119,21 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 	bool shouldAdoptCandidatePayload = false;
 	bool adoptedCandidatePayload = false;
 	bool alignmentDeferred = false;
-	SPIRVToMSLConversionConfiguration canonicalConfig;
 	{
 		lock_guard<mutex> lock(_lock);
 		auto moduleIt = _entries.find(shaderModuleKey);
 		if (moduleIt != _entries.end()) {
 			for (Entry& entry : moduleIt->second) {
-				if (entry.shaderConfig.matches(*pShaderConfig)) {
+				const SPIRVToMSLConversionConfiguration& canonicalConfig =
+					entry.library->getCacheConfig();
+				if (canonicalConfig.matches(*pShaderConfig)) {
 					if (alignOutsideRepositoryLock) {
-						// Preserve the exact canonical selection and alignment rules.
-						// Copy before acquiring membership, so allocation failure cannot
-						// leak a reference. No Entry pointer escapes the repository lock.
-						canonicalConfig = entry.shaderConfig;
+						// The canonical config is immutable after publication. The
+						// retained library guards its lifetime while alignment runs
+						// outside the device-wide repository lock.
 						alignmentDeferred = true;
 					} else {
-						pShaderConfig->alignWith(entry.shaderConfig);
+						pShaderConfig->alignWith(canonicalConfig);
 					}
 					entry.membershipCount++;
 					entry.library->retain();
@@ -1139,7 +1161,10 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 			candidate->_repository = this;
 			candidate->_repositoryTracked.store(true, memory_order_release);
 			candidate->retain();
-			_entries[shaderModuleKey].push_back({ *pShaderConfig, candidate, 1 });
+			_entries[shaderModuleKey].push_back({
+				candidate,
+				1,
+			});
 			_canonicalPublishCount.fetch_add(1, memory_order_relaxed);
 			uint64_t membershipCount =
 				_logicalMembershipCount.fetch_add(1, memory_order_relaxed) + 1;
@@ -1160,9 +1185,9 @@ MVKShaderLibrary* MVKShaderLibraryRepository::acquire(
 	}
 
 	if (alignmentDeferred) {
-		// Adoption is already off the foreground path. Its quadratic alignment
-		// must not serialize unrelated foreground lookups through the device lock.
-		pShaderConfig->alignWith(canonicalConfig);
+		// Adoption is already off the foreground path. Its alignment must not
+		// serialize unrelated foreground lookups through the device lock.
+		pShaderConfig->alignWith(result->getCacheConfig());
 	}
 
 	if (shouldAdoptCandidatePayload && result && candidate) {
@@ -1203,7 +1228,8 @@ void MVKShaderLibraryRepository::release(
 		if (moduleIt != _entries.end()) {
 			auto& entries = moduleIt->second;
 			for (auto entryIt = entries.begin(); entryIt != entries.end(); ++entryIt) {
-				if (entryIt->library == library && entryIt->shaderConfig.matches(shaderConfig)) {
+				if (entryIt->library == library &&
+					library->getCacheConfig().matches(shaderConfig)) {
 					found = true;
 					assert(entryIt->membershipCount > 0);
 					entryIt->membershipCount--;
@@ -1249,10 +1275,12 @@ void MVKShaderLibraryCache::accumulateMemoryStatistics(
         sizeof(*this) +
         (_shaderLibraries.capacity() * sizeof(decltype(_shaderLibraries)::value_type)) +
         (_deferredShaderLibraries.capacity() * sizeof(MVKDeferredShaderLibrary));
-    for (const auto& libraryEntry : _shaderLibraries) {
+    for (size_t index = 0; index < _shaderLibraries.size(); ++index) {
+        MVKShaderLibrary* library =
+            const_cast<MVKShaderLibrary*>(_shaderLibraries[index]);
         pStats->logicalShaderLibraryCount++;
         MVKShaderLibraryMemorySnapshot snapshot;
-        if (!libraryEntry.second || !libraryEntry.second->tryGetMemorySnapshot(snapshot)) {
+        if (!library || !library->tryGetMemorySnapshot(snapshot)) {
             pStats->skippedShaderLibraryCount++;
             continue;
         }
@@ -1480,14 +1508,16 @@ MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(SPIRVToMSLConversionC
 	if (!startTime) {
 		startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
 	}
-	for (auto& slPair : _shaderLibraries) {
-		if (slPair.first.matches(*pShaderConfig)) {
-			pShaderConfig->alignWith(slPair.first);
+	for (MVKShaderLibrary* library : _shaderLibraries) {
+		const SPIRVToMSLConversionConfiguration& canonicalConfig =
+			library->getCacheConfig();
+		if (canonicalConfig.matches(*pShaderConfig)) {
+			pShaderConfig->alignWith(canonicalConfig);
 			addPerformanceInterval(getPerformanceStats().shaderCompilation.shaderLibraryFromCache, startTime);
 			if (pShaderFeedback) {
 				pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime);
 			}
-			return slPair.second;
+			return library;
 		}
 	}
 	return nullptr;
@@ -1499,7 +1529,11 @@ void MVKShaderLibraryCache::addDeferredShaderLibrary(
 	const MVKCompressor<std::string> compressedMSL) {
 
 	if (!pShaderConfig || hasShaderLibrary(*pShaderConfig)) { return; }
-	_deferredShaderLibraries.push_back({ *pShaderConfig, resultInfo, compressedMSL });
+	_deferredShaderLibraries.push_back({
+		pShaderConfig->compactedForCacheStorage(),
+		resultInfo,
+		compressedMSL,
+	});
 }
 
 bool MVKShaderLibraryCache::takeDeferredShaderLibrary(
@@ -1538,15 +1572,21 @@ bool MVKShaderLibraryCache::takeDeferredShaderLibraryForReplacement(
 			? &_deferredShaderLibraries[deferredIndex]
 			: nullptr;
 
-	bool logicalContentChanged = !deferred || !mvkAreShaderLibraryPersistenceEqual(
-		deferred->shaderConfig,
-		deferred->resultInfo,
-		deferred->compressedMSL,
-		replacementConfig,
-		replacement->_shaderConversionResultInfo,
-		replacement->_compressedMSL);
+	bool logicalContentChanged = true;
 	try {
-		_shaderLibraries.emplace_back(replacementConfig, replacement);
+		if (!replacement->hasCacheConfig()) {
+			replacement->setCacheConfig(replacementConfig);
+		}
+		const SPIRVToMSLConversionConfiguration& canonicalConfig =
+			replacement->getCacheConfig();
+		logicalContentChanged = !deferred || !mvkAreShaderLibraryPersistenceEqual(
+			deferred->shaderConfig,
+			deferred->resultInfo,
+			deferred->compressedMSL,
+			canonicalConfig,
+			replacement->_shaderConversionResultInfo,
+			replacement->_compressedMSL);
+		_shaderLibraries.push_back(replacement);
 	} catch (...) {
 		if (_repository) {
 			_repository->release(_shaderModuleKey, replacementConfig, replacement);
@@ -1624,8 +1664,9 @@ MVKShaderLibrary* MVKShaderLibraryCache::materializeDeferredShaderLibrary(
 bool MVKShaderLibraryCache::hasShaderLibrary(
 	const SPIRVToMSLConversionConfiguration& shaderConfig) const {
 
-	for (const auto& libraryEntry : _shaderLibraries) {
-		if (libraryEntry.first.matches(shaderConfig)) { return true; }
+	for (size_t index = 0; index < _shaderLibraries.size(); ++index) {
+		const MVKShaderLibrary* library = _shaderLibraries[index];
+		if (library->getCacheConfig().matches(shaderConfig)) { return true; }
 	}
 	for (const auto& deferred : _deferredShaderLibraries) {
 		if (deferred.shaderConfig.matches(shaderConfig)) { return true; }
@@ -1639,7 +1680,10 @@ void MVKShaderLibraryCache::addShaderLibraryMembership(
 
 	if (!shaderLibrary) { return; }
 	try {
-		_shaderLibraries.emplace_back(shaderConfig, shaderLibrary);
+		if (!shaderLibrary->hasCacheConfig()) {
+			shaderLibrary->setCacheConfig(shaderConfig);
+		}
+		_shaderLibraries.push_back(shaderLibrary);
 	} catch (...) {
 		if (_repository) {
 			_repository->release(_shaderModuleKey, shaderConfig, shaderLibrary);
@@ -1653,7 +1697,8 @@ void MVKShaderLibraryCache::addShaderLibraryMembership(
 // Adds and returns a new shader library configured from the specified conversion configuration.
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResult& conversionResult) {
-	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
+	SPIRVToMSLConversionConfiguration alignedConfig =
+		pShaderConfig->compactedForCacheStorage();
 	if (_repository) {
 		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
 			addShaderLibraryMembership(alignedConfig, existing);
@@ -1679,7 +1724,8 @@ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConver
 MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
 														  const SPIRVToMSLConversionResultInfo& resultInfo,
 														  const MVKCompressor<std::string> compressedMSL) {
-	SPIRVToMSLConversionConfiguration alignedConfig = *pShaderConfig;
+	SPIRVToMSLConversionConfiguration alignedConfig =
+		pShaderConfig->compactedForCacheStorage();
 	if (_repository) {
 		if (MVKShaderLibrary* existing = _repository->acquire(_shaderModuleKey, &alignedConfig)) {
 			addShaderLibraryMembership(alignedConfig, existing);
@@ -1710,8 +1756,8 @@ bool MVKShaderLibraryCache::adoptShaderLibraryMembership(
 	if (!shaderLibrary) { return false; }
 	if (!_repository) { return false; }
 
-	for (auto& libraryEntry : _shaderLibraries) {
-		if (libraryEntry.first.matches(shaderConfig)) { return false; }
+	for (MVKShaderLibrary* library : _shaderLibraries) {
+		if (library->getCacheConfig().matches(shaderConfig)) { return false; }
 	}
 
 	SPIRVToMSLConversionConfiguration alignedConfig = shaderConfig;
@@ -1738,29 +1784,31 @@ bool MVKShaderLibraryCache::merge(
 	bool* pLogicalContentChanged) {
 	if ( !other ) { return false; }
 	bool logicalContentChanged = false;
-	for (auto& otherPair : other->_shaderLibraries) {
-		if ( !hasShaderLibrary(otherPair.first) ) {
+	for (MVKShaderLibrary* otherLibrary : other->_shaderLibraries) {
+		const SPIRVToMSLConversionConfiguration& otherConfig =
+			otherLibrary->getCacheConfig();
+		if ( !hasShaderLibrary(otherConfig) ) {
 			if (_repository) {
-				SPIRVToMSLConversionConfiguration alignedConfig = otherPair.first;
+				SPIRVToMSLConversionConfiguration alignedConfig = otherConfig;
 				MVKShaderLibrary* shared = _repository->acquire(_shaderModuleKey, &alignedConfig);
 				if (!shared) {
 					addDeferredShaderLibrary(
-						&otherPair.first,
-						otherPair.second->_shaderConversionResultInfo,
-						otherPair.second->_compressedMSL);
+						&otherConfig,
+						otherLibrary->_shaderConversionResultInfo,
+						otherLibrary->_compressedMSL);
 				}
 				if (shared) {
 					try {
-						_shaderLibraries.emplace_back(alignedConfig, shared);
+						_shaderLibraries.push_back(shared);
 					} catch (...) {
 						_repository->release(_shaderModuleKey, alignedConfig, shared);
 						throw;
 					}
 				}
 			} else {
-				MVKShaderLibrary* copied = new MVKShaderLibrary(*otherPair.second);
+				MVKShaderLibrary* copied = new MVKShaderLibrary(*otherLibrary);
 				try {
-					_shaderLibraries.emplace_back(otherPair.first, copied);
+					_shaderLibraries.push_back(copied);
 				} catch (...) {
 					copied->release();
 					throw;
@@ -1785,11 +1833,14 @@ bool MVKShaderLibraryCache::merge(
 }
 
 MVKShaderLibraryCache::~MVKShaderLibraryCache() {
-	for (auto& slPair : _shaderLibraries) {
+	for (MVKShaderLibrary* library : _shaderLibraries) {
 		if (_repository) {
-			_repository->release(_shaderModuleKey, slPair.first, slPair.second);
+			_repository->release(
+				_shaderModuleKey,
+				library->getCacheConfig(),
+				library);
 		} else {
-			slPair.second->release();
+			library->release();
 		}
 	}
 }

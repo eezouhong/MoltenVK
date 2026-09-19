@@ -1023,9 +1023,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
                 cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
             }
 
-            if (drawIdx == 0 || pipeline->isTessellationPipeline() || needsInstanceAdjustment) {
-                cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
-            }
+            cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
 			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
 

@@ -1409,9 +1409,9 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
             }
 
 			if (drawIdx == 0 || pipeline->isTessellationPipeline() || vtxAdjmts.needsAdjustment()) {
-				cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
+				cmdEncoder->finalizeDrawState(stage);
 			}
-			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
+			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }
 
             switch (stage) {
                 case kMVKGraphicsStageVertex:

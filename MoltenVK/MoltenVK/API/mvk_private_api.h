@@ -386,6 +386,15 @@ typedef struct {
     uint64_t legacyTaskNanoseconds;
 } MVKMetal4CompilerWorkStatistics;
 
+/** Live nonblocking snapshot of the Metal 4 compiler admission gate. */
+typedef struct {
+    VkBool32 available;
+    uint64_t tasksInFlight;
+    uint64_t effectiveTaskMaximum;
+    uint64_t configuredTaskMaximum;
+    uint64_t deviceTaskMaximum;
+} MVKMetal4CompilerConcurrencyStatistics;
+
 /**
  * Device-wide physical payload owned by the Metal 4 shared shader-library repository.
  *
@@ -443,6 +452,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipeli
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMutationGenerationMVK)(VkPipelineCache pipelineCache, uint64_t* pGeneration);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginMetal4CompilerWorkMVK)(VkDevice device, MVKMetal4CompilerWorkOrigin origin, uint64_t requestId);
 typedef VkResult (VKAPI_PTR *PFN_vkEndMetal4CompilerWorkMVK)(VkDevice device, uint64_t requestId, MVKMetal4CompilerWorkStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4CompilerConcurrencyStatisticsMVK)(VkDevice device, MVKMetal4CompilerConcurrencyStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
 typedef VkResult (VKAPI_PTR *PFN_vkCancelPipelineCacheShaderLibraryCaptureMVK)(MVKPipelineCacheShaderLibraryCaptureToken captureToken);
@@ -549,6 +559,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
     VkDevice                                   device,
     uint64_t                                   requestId,
     MVKMetal4CompilerWorkStatistics*           pStats,
+    size_t*                                    pStatsSize);
+
+/** Returns a nonblocking snapshot of current Metal 4 compiler admission usage. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4CompilerConcurrencyStatisticsMVK(
+    VkDevice                                   device,
+    MVKMetal4CompilerConcurrencyStatistics*    pStats,
     size_t*                                    pStatsSize);
 
 /** Returns a nonblocking snapshot of the device-wide shared shader repository. */

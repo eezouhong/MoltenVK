@@ -1415,6 +1415,25 @@ VkResult MVKMetal4CompilerService::endDiagnosticWork(
 #endif
 }
 
+VkResult MVKMetal4CompilerService::getConcurrencyStatistics(
+	MVKMetal4CompilerConcurrencyStatistics* pStats) {
+	if (!pStats) { return VK_ERROR_INITIALIZATION_FAILED; }
+	*pStats = {};
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl) { return VK_ERROR_FEATURE_NOT_PRESENT; }
+	lock_guard<mutex> lock(impl->cacheLock);
+	pStats->available = VK_TRUE;
+	pStats->tasksInFlight = impl->compilerTasksInFlight;
+	pStats->effectiveTaskMaximum = impl->compilerTaskMax;
+	pStats->configuredTaskMaximum = impl->configuredTaskMax;
+	pStats->deviceTaskMaximum = impl->deviceTaskMax;
+	return VK_SUCCESS;
+#else
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
 MVKMetal4CompilerService::~MVKMetal4CompilerService() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;

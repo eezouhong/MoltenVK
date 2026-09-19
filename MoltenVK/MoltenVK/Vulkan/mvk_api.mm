@@ -149,6 +149,24 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(
+    VkDevice                                  device,
+    MVKMetal4CompilerConcurrencyStatistics*   pStats,
+    size_t*                                   pStatsSize) {
+
+    if (!device || !pStatsSize) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKMetal4CompilerConcurrencyStatistics stats = {};
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    VkResult result = compiler
+        ? compiler->getConcurrencyStatistics(&stats)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+    if (result != VK_SUCCESS) {
+        return result;
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
     VkDevice                                  device,
     MVKMetal4ShaderLibraryRepositoryStatistics* pStats,

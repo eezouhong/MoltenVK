@@ -280,6 +280,8 @@ public:
 	VkResult endDiagnosticWork(
 		uint64_t requestId,
 		MVKMetal4CompilerWorkStatistics* pStats);
+	VkResult getConcurrencyStatistics(
+		MVKMetal4CompilerConcurrencyStatistics* pStats);
 
 	~MVKMetal4CompilerService();
 

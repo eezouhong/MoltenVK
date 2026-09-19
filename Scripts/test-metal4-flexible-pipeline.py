@@ -223,6 +223,9 @@ def main() -> int:
         "PFN_vkEndMetal4CompilerWorkMVK",
         "vkBeginMetal4CompilerWorkMVK",
         "vkEndMetal4CompilerWorkMVK",
+        "MVKMetal4CompilerConcurrencyStatistics",
+        "PFN_vkGetMetal4CompilerConcurrencyStatisticsMVK",
+        "vkGetMetal4CompilerConcurrencyStatisticsMVK",
     ):
         require(
             private_api_h,
@@ -234,6 +237,18 @@ def main() -> int:
         r"vkBeginMetal4CompilerWorkMVK.*?beginDiagnosticWork.*?"
         r"vkEndMetal4CompilerWorkMVK.*?endDiagnosticWork.*?mvkCopyGrowingStruct",
         "private API is not wired to the production compiler service",
+    )
+    require(
+        api_mm,
+        r"vkGetMetal4CompilerConcurrencyStatisticsMVK.*?getConcurrencyStatistics.*?mvkCopyGrowingStruct",
+        "live compiler concurrency query is not wired to the production compiler service",
+    )
+    require(
+        pipeline_mm,
+        r"getConcurrencyStatistics.*?lock_guard<mutex>\s+lock\(impl->cacheLock\).*?"
+        r"tasksInFlight\s*=\s*impl->compilerTasksInFlight.*?"
+        r"effectiveTaskMaximum\s*=\s*impl->compilerTaskMax",
+        "live compiler concurrency query must snapshot the real gate under its existing lock",
     )
     require(
         pipeline_mm,

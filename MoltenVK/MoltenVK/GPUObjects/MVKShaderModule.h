@@ -22,8 +22,10 @@
 #include "MVKSync.h"
 #include "MVKCodec.h"
 #include "MVKSmallVector.h"
+#include "MVKShaderLibraryWork.h"
 #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -328,7 +330,18 @@ public:
 									   bool* pLogicalContentChanged,
 									   bool* pWasCacheHit,
 									   VkPipelineCreationFeedback* pShaderFeedback,
-									   uint64_t startTime = 0);
+									   uint64_t startTime = 0,
+									   bool allowCompile = true);
+
+	/** Performs lookup/publish under the logical-view lock while slow creation
+	 * runs behind the device-level module gate outside that lock. */
+	MVKShaderLibrary* getShaderLibraryConcurrent(
+		mvk::SPIRVToMSLConversionConfiguration* pShaderConfig,
+		MVKShaderModule* shaderModule, MVKPipeline* pipeline,
+		VkPipelineCreationFeedback* pShaderFeedback,
+		uint64_t startTime,
+		std::mutex& viewLock,
+		const std::function<void(bool)>& onChanged);
 
 	/** Adds this logical view's known bytes to a pipeline-cache snapshot. */
 	void accumulateMemoryStatistics(MVKPipelineCacheMemoryStatistics* pStats) const;
@@ -448,6 +461,8 @@ protected:
 	void propagateDebugName() override {}
 
 private:
+	friend class MVKShaderLibraryCache;
+
 	struct Entry {
 		MVKShaderLibrary* library;
 		uint32_t membershipCount;
@@ -484,6 +499,7 @@ private:
 	std::atomic<uint64_t> _trimTotalNanoseconds { 0 };
 	std::atomic<uint64_t> _trimMaximumNanoseconds { 0 };
 	std::unordered_map<MVKShaderModuleKey, std::vector<Entry>> _entries;
+	MVKShaderLibraryWork<MVKShaderModuleKey> _creationWork;
 };
 
 

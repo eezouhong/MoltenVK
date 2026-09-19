@@ -140,13 +140,24 @@ struct MVKMetal4CompilerLaneStats {
 	uint64_t successes = 0;
 	uint64_t failures = 0;
 	uint64_t breakerTrips = 0;
+	uint64_t queueWaitCount = 0;
 	uint64_t queueWaitTotalNs = 0;
 	uint64_t queueWaitMaxNs = 0;
 	uint64_t taskTotalNs = 0;
 	uint64_t taskMaxNs = 0;
+	size_t waiters = 0;
+	size_t waitersHighWater = 0;
 	uint64_t legacyFallbacks = 0;
 	uint64_t directLegacyCompiles = 0;
 };
+
+struct MVKMetal4DiagnosticWorkContext {
+	MVKDevice* device = nullptr;
+	bool active = false;
+	MVKMetal4CompilerWorkStatistics stats = {};
+};
+
+static thread_local MVKMetal4DiagnosticWorkContext _mvkMetal4DiagnosticWork;
 
 struct MVKMetal4CompilerService::Impl {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
@@ -186,6 +197,13 @@ struct MVKMetal4CompilerService::Impl {
 	condition_variable compilerSlotReady;
 	condition_variable baseCandidateReady;
 	size_t compilerTasksInFlight = 0;
+	size_t compilerSlotWaiters = 0;
+	size_t compilerSlotWaitersHighWater = 0;
+	size_t foregroundCompilerSlotWaiters = 0;
+	size_t foregroundCompilerSlotWaitersHighWater = 0;
+	size_t optionalCompilerSlotWaiters = 0;
+	size_t optionalCompilerSlotWaitersHighWater = 0;
+	uint64_t optionalPriorityDeferrals = 0;
 	uint64_t compilerTimeoutNs = kMetal4DefaultCompilerTimeoutNs;
 	bool shuttingDown = false;
 	bool fatalCompilerTimeout = false;
@@ -450,6 +468,78 @@ static MVKMetal4CompilerLaneStats& getMetal4CompilerLaneStats(
 	return impl->renderStats;
 }
 
+static MVKMetal4CompilerWorkStatistics* getMetal4DiagnosticWork(
+	MVKMetal4CompilerService::Impl* impl) {
+	if (!_mvkMetal4DiagnosticWork.active ||
+		_mvkMetal4DiagnosticWork.device != impl->device ||
+		!_mvkMetal4DiagnosticWork.stats.available) {
+		return nullptr;
+	}
+	return &_mvkMetal4DiagnosticWork.stats;
+}
+
+static void recordMetal4DiagnosticSlotWait(
+	MVKMetal4CompilerService::Impl* impl,
+	bool contended,
+	uint64_t durationNs) {
+	if (!contended) { return; }
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->slotWaitCount++;
+	stats->slotWaitNanoseconds = saturatingMetal4Add(
+		stats->slotWaitNanoseconds,
+		durationNs);
+	stats->slotWaitMaximumNanoseconds = max(
+		stats->slotWaitMaximumNanoseconds,
+		durationNs);
+}
+
+static void recordMetal4DiagnosticTask(
+	MVKMetal4CompilerService::Impl* impl,
+	MVKMetal4CompilerLane lane,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->compilerTaskCount++;
+	stats->compilerTaskNanoseconds = saturatingMetal4Add(
+		stats->compilerTaskNanoseconds,
+		durationNs);
+	stats->compilerTaskMaximumNanoseconds = max(
+		stats->compilerTaskMaximumNanoseconds,
+		durationNs);
+	switch (lane) {
+		case MVKMetal4CompilerLane::Library:
+			stats->libraryTaskCount++;
+			stats->libraryTaskNanoseconds = saturatingMetal4Add(
+				stats->libraryTaskNanoseconds,
+				durationNs);
+			break;
+		case MVKMetal4CompilerLane::Render:
+			stats->renderTaskCount++;
+			stats->renderTaskNanoseconds = saturatingMetal4Add(
+				stats->renderTaskNanoseconds,
+				durationNs);
+			break;
+		case MVKMetal4CompilerLane::Compute:
+			stats->computeTaskCount++;
+			stats->computeTaskNanoseconds = saturatingMetal4Add(
+				stats->computeTaskNanoseconds,
+				durationNs);
+			break;
+	}
+}
+
+static void recordMetal4DiagnosticLegacyTask(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->legacyTaskCount++;
+	stats->legacyTaskNanoseconds = saturatingMetal4Add(
+		stats->legacyTaskNanoseconds,
+		durationNs);
+}
+
 static bool& getMetal4CompilerLaneBreaker(MVKMetal4CompilerService::Impl* impl,
 											  MVKMetal4CompilerLane lane) {
 	switch (lane) {
@@ -505,6 +595,22 @@ static void shutdownMetal4Compiler(const shared_ptr<MVKMetal4CompilerService::Im
 	notifyMetal4CompilerWaiters(impl.get());
 }
 
+static MVKMetal4CompilerWorkOrigin getCurrentMetal4CompilerWorkOrigin(
+	MVKMetal4CompilerService::Impl* impl) {
+	if (!_mvkMetal4DiagnosticWork.active ||
+		_mvkMetal4DiagnosticWork.device != impl->device) {
+		return MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN;
+	}
+	return static_cast<MVKMetal4CompilerWorkOrigin>(
+		_mvkMetal4DiagnosticWork.stats.origin);
+}
+
+static bool isOptionalMetal4CompilerWork(
+	MVKMetal4CompilerWorkOrigin origin) {
+	return origin == MVK_METAL4_COMPILER_WORK_ORIGIN_STARTUP_PRECOMPILE ||
+		origin == MVK_METAL4_COMPILER_WORK_ORIGIN_BACKGROUND_WARMUP;
+}
+
 static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 									  MVKMetal4CompilerLane lane,
 									  bool* attemptedMetal4) {
@@ -520,17 +626,65 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (attemptedMetal4) { *attemptedMetal4 = true; }
 	MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
 	stats.attempts++;
-	bool slotReady = impl->compilerSlotReady.wait_for(
-		lock,
-		chrono::nanoseconds(impl->compilerTimeoutNs),
-		[&] {
-			return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
-				impl->compilerTasksInFlight < impl->compilerTaskMax;
-		});
+	MVKMetal4CompilerWorkOrigin origin = getCurrentMetal4CompilerWorkOrigin(impl);
+	bool optionalWork = isOptionalMetal4CompilerWork(origin);
+	bool blockedByForeground = optionalWork && impl->foregroundCompilerSlotWaiters > 0;
+	bool slotContended = impl->compilerTasksInFlight >= impl->compilerTaskMax || blockedByForeground;
+	if (slotContended) {
+		stats.queueWaitCount++;
+		stats.waiters++;
+		stats.waitersHighWater = max(stats.waitersHighWater, stats.waiters);
+		impl->compilerSlotWaiters++;
+		impl->compilerSlotWaitersHighWater = max(
+			impl->compilerSlotWaitersHighWater,
+			impl->compilerSlotWaiters);
+		if (optionalWork) {
+			impl->optionalCompilerSlotWaiters++;
+			impl->optionalCompilerSlotWaitersHighWater = max(
+				impl->optionalCompilerSlotWaitersHighWater,
+				impl->optionalCompilerSlotWaiters);
+			if (blockedByForeground) { impl->optionalPriorityDeferrals++; }
+		} else {
+			impl->foregroundCompilerSlotWaiters++;
+			impl->foregroundCompilerSlotWaitersHighWater = max(
+				impl->foregroundCompilerSlotWaitersHighWater,
+				impl->foregroundCompilerSlotWaiters);
+		}
+	}
+	bool slotReady = false;
+	while (!slotReady) {
+		slotReady = impl->compilerSlotReady.wait_for(
+			lock,
+			chrono::nanoseconds(impl->compilerTimeoutNs),
+			[&] {
+				return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
+					(impl->compilerTasksInFlight < impl->compilerTaskMax &&
+					 (!optionalWork || impl->foregroundCompilerSlotWaiters == 0));
+			});
+		if (!slotReady && optionalWork &&
+			impl->foregroundCompilerSlotWaiters > 0 &&
+			!impl->shuttingDown && !impl->fatalCompilerTimeout && !breaker) {
+			// Intentional yielding is not a stuck compiler. A preferred waiter owns
+			// the timeout responsibility while optional work waits behind it.
+			impl->optionalPriorityDeferrals++;
+			continue;
+		}
+		break;
+	}
+	if (slotContended) {
+		if (stats.waiters > 0) { stats.waiters--; }
+		if (impl->compilerSlotWaiters > 0) { impl->compilerSlotWaiters--; }
+		if (optionalWork) {
+			if (impl->optionalCompilerSlotWaiters > 0) { impl->optionalCompilerSlotWaiters--; }
+		} else {
+			if (impl->foregroundCompilerSlotWaiters > 0) { impl->foregroundCompilerSlotWaiters--; }
+		}
+	}
 
 	uint64_t waitDuration = mvkGetElapsedNanoseconds(waitStart);
 	stats.queueWaitTotalNs = saturatingMetal4Add(stats.queueWaitTotalNs, waitDuration);
 	stats.queueWaitMaxNs = max(stats.queueWaitMaxNs, waitDuration);
+	recordMetal4DiagnosticSlotWait(impl, slotContended, waitDuration);
 	impl->asyncSlotWaitTotalNs = saturatingMetal4Add(impl->asyncSlotWaitTotalNs, waitDuration);
 	impl->asyncSlotWaitMaxNs = max(impl->asyncSlotWaitMaxNs, waitDuration);
 	if (!slotReady) {
@@ -549,6 +703,14 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (impl->fatalCompilerTimeout || breaker) { return false; }
 	impl->compilerTasksInFlight++;
 	impl->asyncInflightHighWater = max(impl->asyncInflightHighWater, impl->compilerTasksInFlight);
+	if (!optionalWork && slotContended &&
+		impl->foregroundCompilerSlotWaiters == 0 &&
+		impl->compilerTasksInFlight < impl->compilerTaskMax) {
+		// The last preferred waiter may leave spare capacity behind. Wake optional
+		// work that yielded while preferred work was queued so that capacity is not
+		// artificially stranded until another compiler task finishes.
+		impl->compilerSlotReady.notify_all();
+	}
 	return true;
 }
 
@@ -561,6 +723,7 @@ static void finishMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 		MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
 		stats.taskTotalNs = saturatingMetal4Add(stats.taskTotalNs, taskDuration);
 		stats.taskMaxNs = max(stats.taskMaxNs, taskDuration);
+		recordMetal4DiagnosticTask(impl, lane, taskDuration);
 		impl->asyncTasks++;
 		impl->asyncTaskTotalNs = saturatingMetal4Add(impl->asyncTaskTotalNs, taskDuration);
 		impl->asyncTaskMaxNs = max(impl->asyncTaskMaxNs, taskDuration);
@@ -815,6 +978,7 @@ static string formatMetal4Message(const char* format, ...) {
 
 struct MVKMetal4TelemetryMessages {
 	string unified;
+	string scheduling;
 	string flexible;
 	string cache;
 	string fields;
@@ -873,12 +1037,63 @@ static string formatMetal4UnifiedCompilerTelemetryLocked(MVKMetal4CompilerServic
 		static_cast<unsigned long long>(impl->computeStats.directLegacyCompiles));
 }
 
+static string formatMetal4SchedulingTelemetryLocked(
+	MVKMetal4CompilerService::Impl* impl,
+	bool finalSummary) {
+	const char* format = finalSummary
+		? "Metal 4 scheduling summary: inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, foreground_waiters_current=%zu, foreground_waiters_high_water=%zu, optional_waiters_current=%zu, optional_waiters_high_water=%zu, optional_priority_deferrals=%llu, "
+		  "library_wait_count=%llu, library_waiters=%zu, library_waiters_high_water=%zu, library_queue_wait_total_ns=%llu, library_queue_wait_max_ns=%llu, library_task_total_ns=%llu, library_task_max_ns=%llu, "
+		  "render_wait_count=%llu, render_waiters=%zu, render_waiters_high_water=%zu, render_queue_wait_total_ns=%llu, render_queue_wait_max_ns=%llu, render_task_total_ns=%llu, render_task_max_ns=%llu, "
+		  "compute_wait_count=%llu, compute_waiters=%zu, compute_waiters_high_water=%zu, compute_queue_wait_total_ns=%llu, compute_queue_wait_max_ns=%llu, compute_task_total_ns=%llu, compute_task_max_ns=%llu."
+		: "Metal 4 scheduling telemetry (periodic): inflight_current=%zu, inflight_high_water=%zu, slot_waiters_current=%zu, slot_waiters_high_water=%zu, foreground_waiters_current=%zu, foreground_waiters_high_water=%zu, optional_waiters_current=%zu, optional_waiters_high_water=%zu, optional_priority_deferrals=%llu, "
+		  "library_wait_count=%llu, library_waiters=%zu, library_waiters_high_water=%zu, library_queue_wait_total_ns=%llu, library_queue_wait_max_ns=%llu, library_task_total_ns=%llu, library_task_max_ns=%llu, "
+		  "render_wait_count=%llu, render_waiters=%zu, render_waiters_high_water=%zu, render_queue_wait_total_ns=%llu, render_queue_wait_max_ns=%llu, render_task_total_ns=%llu, render_task_max_ns=%llu, "
+		  "compute_wait_count=%llu, compute_waiters=%zu, compute_waiters_high_water=%zu, compute_queue_wait_total_ns=%llu, compute_queue_wait_max_ns=%llu, compute_task_total_ns=%llu, compute_task_max_ns=%llu.";
+	return formatMetal4Message(
+		format,
+		impl->compilerTasksInFlight,
+		impl->asyncInflightHighWater,
+		impl->compilerSlotWaiters,
+		impl->compilerSlotWaitersHighWater,
+		impl->foregroundCompilerSlotWaiters,
+		impl->foregroundCompilerSlotWaitersHighWater,
+		impl->optionalCompilerSlotWaiters,
+		impl->optionalCompilerSlotWaitersHighWater,
+		static_cast<unsigned long long>(impl->optionalPriorityDeferrals),
+		static_cast<unsigned long long>(impl->libraryStats.queueWaitCount),
+		impl->libraryStats.waiters,
+		impl->libraryStats.waitersHighWater,
+		static_cast<unsigned long long>(impl->libraryStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->libraryStats.queueWaitMaxNs),
+		static_cast<unsigned long long>(impl->libraryStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->libraryStats.taskMaxNs),
+		static_cast<unsigned long long>(impl->renderStats.queueWaitCount),
+		impl->renderStats.waiters,
+		impl->renderStats.waitersHighWater,
+		static_cast<unsigned long long>(impl->renderStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->renderStats.queueWaitMaxNs),
+		static_cast<unsigned long long>(impl->renderStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->renderStats.taskMaxNs),
+		static_cast<unsigned long long>(impl->computeStats.queueWaitCount),
+		impl->computeStats.waiters,
+		impl->computeStats.waitersHighWater,
+		static_cast<unsigned long long>(impl->computeStats.queueWaitTotalNs),
+		static_cast<unsigned long long>(impl->computeStats.queueWaitMaxNs),
+		static_cast<unsigned long long>(impl->computeStats.taskTotalNs),
+		static_cast<unsigned long long>(impl->computeStats.taskMaxNs));
+}
+
 static MVKMetal4TelemetryMessages snapshotMetal4TelemetryMessages(
 	MVKMetal4CompilerService::Impl* impl,
 	bool finalSummary) {
 	MVKMetal4TelemetryMessages messages;
+	bool verboseSchedulingTelemetry =
+		mvkGetEnvVarNumber("MELONX_PERF_VERBOSE_GPU", 0.0) != 0.0;
 	lock_guard<mutex> lock(impl->cacheLock);
 	messages.unified = formatMetal4UnifiedCompilerTelemetryLocked(impl, finalSummary);
+	if (verboseSchedulingTelemetry) {
+		messages.scheduling = formatMetal4SchedulingTelemetryLocked(impl, finalSummary);
+	}
 	const char* format = finalSummary
 		? "Metal 4 flexible pipeline summary: attempts=%llu, base_hits=%llu, base_misses=%llu, "
 		  "base_failures=%llu, base_total_ns=%llu, base_max_ns=%llu, specialization_successes=%llu, "
@@ -1053,7 +1268,7 @@ static MVKMetal4TelemetryMessages snapshotMetal4TelemetryMessages(
 static void logMetal4FlexiblePipelineTelemetry(MVKMetal4CompilerService::Impl* impl,
 											 bool finalSummary) {
 	MVKMetal4TelemetryMessages messages = snapshotMetal4TelemetryMessages(impl, finalSummary);
-	for (const string* message : {&messages.unified, &messages.flexible, &messages.cache, &messages.fields}) {
+	for (const string* message : {&messages.unified, &messages.scheduling, &messages.flexible, &messages.cache, &messages.fields}) {
 		if (!message->empty()) {
 			impl->device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "%s", message->c_str());
 		}
@@ -1158,6 +1373,67 @@ MVKMetal4CompilerService* MVKMetal4CompilerService::create(MVKDevice* device) {
 	return nullptr;
 }
 
+VkResult MVKMetal4CompilerService::beginDiagnosticWork(
+	MVKMetal4CompilerWorkOrigin origin,
+	uint64_t requestId) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !impl->device) {
+		return VK_ERROR_FEATURE_NOT_PRESENT;
+	}
+	if (_mvkMetal4DiagnosticWork.active) {
+		return VK_ERROR_TOO_MANY_OBJECTS;
+	}
+	_mvkMetal4DiagnosticWork = {};
+	_mvkMetal4DiagnosticWork.device = impl->device;
+	_mvkMetal4DiagnosticWork.active = true;
+	_mvkMetal4DiagnosticWork.stats.available = requestId != 0 ? VK_TRUE : VK_FALSE;
+	_mvkMetal4DiagnosticWork.stats.origin = static_cast<uint32_t>(origin);
+	_mvkMetal4DiagnosticWork.stats.requestId = requestId;
+	return VK_SUCCESS;
+#else
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
+VkResult MVKMetal4CompilerService::endDiagnosticWork(
+	uint64_t requestId,
+	MVKMetal4CompilerWorkStatistics* pStats) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !pStats || !_mvkMetal4DiagnosticWork.active ||
+		_mvkMetal4DiagnosticWork.device != impl->device ||
+		_mvkMetal4DiagnosticWork.stats.requestId != requestId) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	*pStats = _mvkMetal4DiagnosticWork.stats;
+	_mvkMetal4DiagnosticWork = {};
+	return VK_SUCCESS;
+#else
+	if (pStats) { *pStats = {}; }
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
+VkResult MVKMetal4CompilerService::getConcurrencyStatistics(
+	MVKMetal4CompilerConcurrencyStatistics* pStats) {
+	if (!pStats) { return VK_ERROR_INITIALIZATION_FAILED; }
+	*pStats = {};
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl) { return VK_ERROR_FEATURE_NOT_PRESENT; }
+	lock_guard<mutex> lock(impl->cacheLock);
+	pStats->available = VK_TRUE;
+	pStats->tasksInFlight = impl->compilerTasksInFlight;
+	pStats->effectiveTaskMaximum = impl->compilerTaskMax;
+	pStats->configuredTaskMaximum = impl->configuredTaskMax;
+	pStats->deviceTaskMaximum = impl->deviceTaskMax;
+	return VK_SUCCESS;
+#else
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
 MVKMetal4CompilerService::~MVKMetal4CompilerService() {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	auto impl = _impl;
@@ -1186,6 +1462,7 @@ static void recordMetal4LegacyCompile(
 		totalNs = saturatingMetal4Add(totalNs, durationNs, &impl->scoreSaturations);
 		maxNs = max(maxNs, durationNs);
 		recordMetal4LegacyLane(impl, lane, fallback);
+		recordMetal4DiagnosticLegacyTask(impl, durationNs);
 		impl->legacyCompileEvents++;
 		logPeriodic = (impl->legacyCompileEvents % kMetal4TelemetryInterval) == 0;
 	}
@@ -4673,6 +4950,31 @@ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfigu
 													 MVKPipeline* pipeline,
 													 VkPipelineCreationFeedback* pShaderFeedback,
 													 uint64_t startTime) {
+	if (getDevice()->getShaderLibraryRepository() && shaderModule->getKey().codeSize != 0) {
+		MVKShaderLibraryCache* shaderCache;
+		{
+			lock_guard<mutex> lock(_shaderCacheLock);
+			shaderCache = getShaderLibraryCache(shaderModule->getKey());
+		}
+
+		MVKShaderLibrary* shaderLibrary = shaderCache->getShaderLibraryConcurrent(
+			pContext,
+			shaderModule,
+			pipeline,
+			pShaderFeedback,
+			startTime,
+			_shaderCacheLock,
+			[this](bool logicalContentChanged) {
+				if (logicalContentChanged) { markContentChanged(); }
+				else { markDirty(); }
+			});
+		if (shaderLibrary && pipeline->shouldRecordShaderLibraryContributions()) {
+			pipeline->recordShaderLibraryContribution(
+				shaderModule->getKey(), shaderLibrary);
+		}
+		return shaderLibrary;
+	}
+
 	if (_isExternallySynchronized) {
 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
 	} else {

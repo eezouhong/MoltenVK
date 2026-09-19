@@ -30,6 +30,8 @@ def main() -> int:
     device_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm")
     pipeline_h = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h")
     pipeline_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm")
+    private_api_h = read("MoltenVK/MoltenVK/API/mvk_private_api.h")
+    api_mm = read("MoltenVK/MoltenVK/Vulkan/mvk_api.mm")
     shader_h = read("MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h")
     shader_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm")
     render_pass_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKRenderPass.mm")
@@ -155,6 +157,106 @@ def main() -> int:
         pipeline_mm,
         r"baseCompileTotalNs.*?baseCompileMaxNs.*?specializationTotalNs.*?specializationMaxNs",
         "device-validation timing telemetry is missing",
+    )
+    require(
+        pipeline_mm,
+        r"Metal 4 scheduling (?:summary|telemetry \(periodic\)).*?"
+        r"inflight_current.*?slot_waiters_current.*?slot_waiters_high_water.*?"
+        r"library_wait_count.*?library_queue_wait_max_ns.*?library_task_max_ns.*?"
+        r"render_wait_count.*?render_queue_wait_max_ns.*?render_task_max_ns.*?"
+        r"compute_wait_count.*?compute_queue_wait_max_ns.*?compute_task_max_ns",
+        "Metal 4 slot-contention observability is incomplete",
+    )
+    require(
+        pipeline_mm,
+        r'MELONX_PERF_VERBOSE_GPU.*?formatMetal4SchedulingTelemetryLocked',
+        "detailed scheduling log must stay behind the verbose GPU telemetry gate",
+    )
+    require(
+        pipeline_mm,
+        r"slotContended.*?queueWaitCount\+\+.*?waitersHighWater.*?"
+        r"compilerSlotWaitersHighWater.*?compilerSlotReady\.wait_for",
+        "Metal 4 slot waiters are not measured at the production gate",
+    )
+    require(
+        pipeline_mm,
+        r"isOptionalMetal4CompilerWork.*?STARTUP_PRECOMPILE.*?BACKGROUND_WARMUP",
+        "optional compiler work classification must cover startup precompile and background warmup",
+    )
+    reject(
+        pipeline_mm,
+        r"isOptionalMetal4CompilerWork.*?RUNTIME_DEMAND",
+        "current-frame runtime demand must never be classified as optional Metal 4 work",
+    )
+    require(
+        pipeline_mm,
+        r"optionalWork.*?foregroundCompilerSlotWaiters.*?compilerSlotReady\.wait_for.*?"
+        r"!optionalWork\s*\|\|\s*impl->foregroundCompilerSlotWaiters\s*==\s*0",
+        "optional Metal 4 work must yield compiler-slot admission while preferred work is waiting",
+    )
+    require(
+        pipeline_mm,
+        r"foregroundCompilerSlotWaiters\s*==\s*0.*?compilerTasksInFlight\s*<\s*impl->compilerTaskMax.*?"
+        r"compilerSlotReady\.notify_all",
+        "the last preferred waiter must wake optional work when spare compiler capacity remains",
+    )
+    require(
+        pipeline_mm,
+        r"stats\.available\s*=\s*requestId\s*!=\s*0\s*\?\s*VK_TRUE\s*:\s*VK_FALSE",
+        "request-id zero must keep the scheduling origin scope without enabling detailed attribution",
+    )
+    require(
+        pipeline_mm,
+        r"getMetal4DiagnosticWork.*?stats\.available.*?return\s+nullptr",
+        "origin-only scopes must not accumulate per-scope diagnostic statistics",
+    )
+    require(
+        private_api_h,
+        r"zero requestId.*?origin.*?scheduling.*?disables detailed",
+        "the private API contract must document request-id zero origin-only scopes",
+    )
+    for token in (
+        "MVKMetal4CompilerWorkOrigin",
+        "MVK_METAL4_COMPILER_WORK_ORIGIN_RUNTIME_DEMAND",
+        "MVKMetal4CompilerWorkStatistics",
+        "PFN_vkBeginMetal4CompilerWorkMVK",
+        "PFN_vkEndMetal4CompilerWorkMVK",
+        "vkBeginMetal4CompilerWorkMVK",
+        "vkEndMetal4CompilerWorkMVK",
+        "MVKMetal4CompilerConcurrencyStatistics",
+        "PFN_vkGetMetal4CompilerConcurrencyStatisticsMVK",
+        "vkGetMetal4CompilerConcurrencyStatisticsMVK",
+    ):
+        require(
+            private_api_h,
+            re.escape(token),
+            f"private Metal 4 work-attribution contract is missing: {token}",
+        )
+    require(
+        api_mm,
+        r"vkBeginMetal4CompilerWorkMVK.*?beginDiagnosticWork.*?"
+        r"vkEndMetal4CompilerWorkMVK.*?endDiagnosticWork.*?mvkCopyGrowingStruct",
+        "private API is not wired to the production compiler service",
+    )
+    require(
+        api_mm,
+        r"vkGetMetal4CompilerConcurrencyStatisticsMVK.*?getConcurrencyStatistics.*?mvkCopyGrowingStruct",
+        "live compiler concurrency query is not wired to the production compiler service",
+    )
+    require(
+        pipeline_mm,
+        r"getConcurrencyStatistics.*?lock_guard<mutex>\s+lock\(impl->cacheLock\).*?"
+        r"tasksInFlight\s*=\s*impl->compilerTasksInFlight.*?"
+        r"effectiveTaskMaximum\s*=\s*impl->compilerTaskMax",
+        "live compiler concurrency query must snapshot the real gate under its existing lock",
+    )
+    require(
+        pipeline_mm,
+        r"thread_local\s+MVKMetal4DiagnosticWorkContext.*?"
+        r"recordMetal4DiagnosticSlotWait.*?recordMetal4DiagnosticTask.*?"
+        r"recordMetal4DiagnosticLegacyTask.*?beginDiagnosticWork.*?requestId.*?"
+        r"endDiagnosticWork.*?requestId",
+        "same-thread Metal 4 work attribution is not wired through the real compiler paths",
     )
     for token in (
         "recordLegacyGraphicsCompile",

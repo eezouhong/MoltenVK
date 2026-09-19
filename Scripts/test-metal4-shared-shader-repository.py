@@ -918,7 +918,7 @@ def test_source_policy() -> None:
     record_body = pipeline_mm[record_start - 120 : record_start + 500]
     assert "shaderModule->getKey()" in record_body
     assert "*pContext" not in record_body
-    assert "shLib" in record_body
+    assert "shLib" in record_body or "shaderLibrary" in record_body
     assert "shouldRecordShaderLibraryContributions()" in record_body
 
     capture_state_start = pipeline_mm.index(

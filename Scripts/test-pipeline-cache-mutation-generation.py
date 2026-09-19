@@ -46,10 +46,18 @@ def main() -> int:
             "VkResult MVKPipelineCache::mergePipelineCachesImpl(",
             "\n\n#pragma mark Cereal archive definitions",
         ),
-        "// @PRODUCTION_SHADER_CACHE_BEHAVIOR@": function(
-            shader,
-            "MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(",
-            "\nMVKShaderLibraryCache::~MVKShaderLibraryCache()",
+        "// @PRODUCTION_SHADER_CACHE_BEHAVIOR@": (
+            function(
+                shader,
+                "MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibrary(",
+                "\nMVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(",
+            )
+            + "\n\n"
+            + function(
+                shader,
+                "MVKShaderLibrary* MVKShaderLibraryCache::findShaderLibrary(",
+                "\nMVKShaderLibraryCache::~MVKShaderLibraryCache()",
+            )
         ),
         "// @PRODUCTION_PIPELINE_CACHE_BEHAVIOR@": function(
             pipeline,

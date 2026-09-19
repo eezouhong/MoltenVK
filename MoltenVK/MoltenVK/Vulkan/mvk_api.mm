@@ -117,6 +117,56 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPipelineCacheMutationGenerationMVK(
 	return VK_SUCCESS;
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkBeginMetal4CompilerWorkMVK(
+    VkDevice                                  device,
+    MVKMetal4CompilerWorkOrigin               origin,
+    uint64_t                                  requestId) {
+
+    if (!device) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    return compiler
+        ? compiler->beginDiagnosticWork(origin, requestId)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
+    VkDevice                                  device,
+    uint64_t                                  requestId,
+    MVKMetal4CompilerWorkStatistics*          pStats,
+    size_t*                                   pStatsSize) {
+
+    if (!device || !pStatsSize) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKMetal4CompilerWorkStatistics stats = {};
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    VkResult result = compiler
+        ? compiler->endDiagnosticWork(requestId, &stats)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+    if (result != VK_SUCCESS) {
+        return result;
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(
+    VkDevice                                  device,
+    MVKMetal4CompilerConcurrencyStatistics*   pStats,
+    size_t*                                   pStatsSize) {
+
+    if (!device || !pStatsSize) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKMetal4CompilerConcurrencyStatistics stats = {};
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    VkResult result = compiler
+        ? compiler->getConcurrencyStatistics(&stats)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+    if (result != VK_SUCCESS) {
+        return result;
+    }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4ShaderLibraryRepositoryStatisticsMVK(
     VkDevice                                  device,
     MVKMetal4ShaderLibraryRepositoryStatistics* pStats,

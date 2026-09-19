@@ -272,6 +272,16 @@ public:
 	/** Creates the compiler only when the internal environment gate and runtime capabilities allow it. */
 	static MVKMetal4CompilerService* create(MVKDevice* device);
 
+	/** Starts/ends same-thread diagnostic attribution without changing admission. */
+	VkResult beginDiagnosticWork(
+		MVKMetal4CompilerWorkOrigin origin,
+		uint64_t requestId);
+	VkResult endDiagnosticWork(
+		uint64_t requestId,
+		MVKMetal4CompilerWorkStatistics* pStats);
+	VkResult getConcurrencyStatistics(
+		MVKMetal4CompilerConcurrencyStatistics* pStats);
+
 	~MVKMetal4CompilerService();
 
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR

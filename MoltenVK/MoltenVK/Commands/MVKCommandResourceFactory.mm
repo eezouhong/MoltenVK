@@ -93,6 +93,7 @@ id<MTLRenderPipelineState> MVKCommandResourceFactory::newCmdBlitImageMTLRenderPi
 
 	return rps;
 }
+
 id<MTLSamplerState> MVKCommandResourceFactory::newCmdBlitImageMTLSamplerState(MTLSamplerMinMagFilter mtlFilter) {
 
     MTLSamplerDescriptor* sDesc = [MTLSamplerDescriptor new];					// temp retain
@@ -580,21 +581,10 @@ id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdResolveColorImageMT
 }
 
 id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectConvertBuffersMTLComputePipelineState(bool indexed,
-																																	   MVKVulkanAPIDeviceObject* owner) {
+																											   MVKVulkanAPIDeviceObject* owner) {
 	return newMTLComputePipelineState(indexed
-																	  ? "cmdDrawIndexedIndirectConvertBuffers"
-																	  : "cmdDrawIndirectConvertBuffers", owner);
-}
-
-id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectCountConvertBuffersMTLComputePipelineState(bool indexed,
-																																																						   MVKVulkanAPIDeviceObject* owner) {
-	return newMTLComputePipelineState(indexed
-																																																						  ? "cmdDrawIndexedIndirectCountConvertBuffers"
-																																																						  : "cmdDrawIndirectCountConvertBuffers", owner);
-}
-
-id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectCopyZeroDivisorVertexBuffersMTLComputePipelineState(MVKVulkanAPIDeviceObject* owner) {
-	return newMTLComputePipelineState("cmdDrawIndirectCopyZeroDivisorVertexBuffers", owner);
+									  ? "cmdDrawIndexedIndirectConvertBuffers"
+									  : "cmdDrawIndirectConvertBuffers", owner);
 }
 
 id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectPopulateIndexesMTLComputePipelineState(MVKVulkanAPIDeviceObject* owner) {
@@ -734,3 +724,4 @@ MVKCommandResourceFactory::~MVKCommandResourceFactory() {
 	_mtlLibrary = nil;
 	if (_transferImageMemory) { _transferImageMemory->destroy(); }
 }
+

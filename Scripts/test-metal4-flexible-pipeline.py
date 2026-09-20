@@ -174,6 +174,12 @@ def main() -> int:
     )
     require(
         pipeline_mm,
+        r"logMetal4FlexiblePipelineTelemetry\s*\([^)]*\)\s*\{.*?"
+        r'MELONX_PERF_TELEMETRY.*?return\s*;.*?snapshotMetal4TelemetryMessages',
+        "disabled Performance Log must bypass Metal 4 summary formatting",
+    )
+    require(
+        pipeline_mm,
         r"slotContended.*?queueWaitCount\+\+.*?waitersHighWater.*?"
         r"compilerSlotWaitersHighWater.*?compilerSlotReady\.wait_for",
         "Metal 4 slot waiters are not measured at the production gate",

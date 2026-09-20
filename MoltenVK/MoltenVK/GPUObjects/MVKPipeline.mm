@@ -1267,6 +1267,7 @@ static MVKMetal4TelemetryMessages snapshotMetal4TelemetryMessages(
 
 static void logMetal4FlexiblePipelineTelemetry(MVKMetal4CompilerService::Impl* impl,
 											 bool finalSummary) {
+	if (mvkGetEnvVarNumber("MELONX_PERF_TELEMETRY", 0.0) == 0.0) { return; }
 	MVKMetal4TelemetryMessages messages = snapshotMetal4TelemetryMessages(impl, finalSummary);
 	for (const string* message : {&messages.unified, &messages.scheduling, &messages.flexible, &messages.cache, &messages.fields}) {
 		if (!message->empty()) {

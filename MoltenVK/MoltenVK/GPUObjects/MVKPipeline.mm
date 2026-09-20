@@ -1722,6 +1722,47 @@ void MVKMetal4CompilerService::recordShaderFunctionTrace(
 		specializationNs);
 }
 
+void MVKMetal4CompilerService::recordShaderLibraryWorkTrace(
+	uint64_t totalNs,
+	uint64_t lookupNs,
+	uint64_t gateNs,
+	uint64_t recheckNs,
+	uint64_t buildNs,
+	uint64_t readyHits,
+	uint64_t recheckHits,
+	uint64_t buildCalls) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	MVKMetal4CompilerWorkStatistics* stats =
+		getMetal4DiagnosticWork(impl.get());
+	if (!stats) { return; }
+	stats->shaderWorkCount++;
+	stats->shaderWorkTotalNanoseconds = saturatingMetal4Add(
+		stats->shaderWorkTotalNanoseconds,
+		totalNs);
+	stats->shaderWorkLookupNanoseconds = saturatingMetal4Add(
+		stats->shaderWorkLookupNanoseconds,
+		lookupNs);
+	stats->shaderWorkGateNanoseconds = saturatingMetal4Add(
+		stats->shaderWorkGateNanoseconds,
+		gateNs);
+	stats->shaderWorkRecheckNanoseconds = saturatingMetal4Add(
+		stats->shaderWorkRecheckNanoseconds,
+		recheckNs);
+	stats->shaderWorkBuildNanoseconds = saturatingMetal4Add(
+		stats->shaderWorkBuildNanoseconds,
+		buildNs);
+	stats->shaderWorkReadyHitCount = saturatingMetal4Add(
+		stats->shaderWorkReadyHitCount,
+		readyHits);
+	stats->shaderWorkRecheckHitCount = saturatingMetal4Add(
+		stats->shaderWorkRecheckHitCount,
+		recheckHits);
+	stats->shaderWorkBuildCount = saturatingMetal4Add(
+		stats->shaderWorkBuildCount,
+		buildCalls);
+}
+
 static id<MTLRenderPipelineState> newMetal4RenderPipelineState(
 	MVKMetal4CompilerService::Impl* impl,
 	MTL4PipelineDescriptor* descriptor,

@@ -415,6 +415,15 @@ typedef struct {
     uint64_t function1DeviceLockWaitNanoseconds;
     uint64_t function1LookupNanoseconds;
     uint64_t function1SpecializationNanoseconds;
+    uint64_t shaderWorkCount;
+    uint64_t shaderWorkTotalNanoseconds;
+    uint64_t shaderWorkLookupNanoseconds;
+    uint64_t shaderWorkGateNanoseconds;
+    uint64_t shaderWorkRecheckNanoseconds;
+    uint64_t shaderWorkBuildNanoseconds;
+    uint64_t shaderWorkReadyHitCount;
+    uint64_t shaderWorkRecheckHitCount;
+    uint64_t shaderWorkBuildCount;
 } MVKMetal4CompilerWorkStatistics;
 
 /** Live nonblocking snapshot of the Metal 4 compiler admission gate. */

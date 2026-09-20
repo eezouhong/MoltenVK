@@ -30,6 +30,7 @@ def main() -> int:
     pipeline_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm")
     shader_h = read("MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h")
     shader_mm = read("MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm")
+    shader_work_h = read("MoltenVK/MoltenVK/GPUObjects/MVKShaderLibraryWork.h")
     library_trace = pipeline_mm[
         pipeline_mm.index("static void recordMetal4DiagnosticLibraryTrace") :
         pipeline_mm.index("static MVKMetal4CompilerWorkStatistics* beginMetal4DiagnosticBaseLookup")
@@ -71,6 +72,15 @@ def main() -> int:
         "function1DeviceLockWaitNanoseconds",
         "function1LookupNanoseconds",
         "function1SpecializationNanoseconds",
+        "shaderWorkCount",
+        "shaderWorkTotalNanoseconds",
+        "shaderWorkLookupNanoseconds",
+        "shaderWorkGateNanoseconds",
+        "shaderWorkRecheckNanoseconds",
+        "shaderWorkBuildNanoseconds",
+        "shaderWorkReadyHitCount",
+        "shaderWorkRecheckHitCount",
+        "shaderWorkBuildCount",
     ):
         require(private_api, rf"\b{field}\b", f"missing ABI field: {field}")
 
@@ -141,6 +151,12 @@ def main() -> int:
         r"deviceLockWaitStart.*?functionLookupStart.*?"
         r"functionSpecializationStart.*?recordShaderFunctionTrace",
         "shader-library wait, rehydrate, function lookup, and specialization chain is incomplete",
+    )
+    require(
+        shader_work_h + shader_h + shader_mm,
+        r"perCallTiming.*?workTiming.*?recordShaderLibraryWorkTrace.*?"
+        r"gateNs.*?recheckNs.*?buildNs",
+        "module-local shader creation-gate timing is not joined to the work scope",
     )
     require(
         pipeline_mm,

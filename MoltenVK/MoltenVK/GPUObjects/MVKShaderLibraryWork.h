@@ -52,8 +52,9 @@ template <class Key> class MVKShaderLibraryWork {
     }
 
     template <class Lookup, class Build>
-    auto run(const Key &key, bool allowCompile, Lookup lookup, Build build) -> decltype(lookup()) {
-        if (!_timingEnabled) {
+    auto run(const Key &key, bool allowCompile, Lookup lookup, Build build,
+             Timing *perCallTiming = nullptr) -> decltype(lookup()) {
+        if (!_timingEnabled && !perCallTiming) {
             return runImpl(key, allowCompile, lookup, build, nullptr);
         }
         Timing observation;
@@ -62,12 +63,22 @@ template <class Key> class MVKShaderLibraryWork {
         try {
             auto result = runImpl(key, allowCompile, lookup, build, &observation);
             observation.totalNs = elapsed(started);
-            record(observation);
+            if (_timingEnabled) {
+                record(observation);
+            }
+            if (perCallTiming) {
+                *perCallTiming = observation;
+            }
             return result;
         } catch (...) {
             observation.exceptions = 1;
             observation.totalNs = elapsed(started);
-            record(observation);
+            if (_timingEnabled) {
+                record(observation);
+            }
+            if (perCallTiming) {
+                *perCallTiming = observation;
+            }
             throw;
         }
     }

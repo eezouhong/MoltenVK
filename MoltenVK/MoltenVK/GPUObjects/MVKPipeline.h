@@ -300,6 +300,14 @@ public:
 								  uint64_t deviceLockWaitNs,
 								  uint64_t lookupNs,
 								  uint64_t specializationNs);
+	void recordShaderLibraryWorkTrace(uint64_t totalNs,
+								 uint64_t lookupNs,
+								 uint64_t gateNs,
+								 uint64_t recheckNs,
+								 uint64_t buildNs,
+								 uint64_t readyHits,
+								 uint64_t recheckHits,
+								 uint64_t buildCalls);
 
 	/**
 	 * Returns a retained specialized pipeline state, or nil so the caller can use

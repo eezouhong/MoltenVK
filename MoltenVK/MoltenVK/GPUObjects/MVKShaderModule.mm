@@ -1466,6 +1466,14 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 	const std::function<void(bool)>& onChanged) {
 	assert(_repository);
 
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MVKMetal4CompilerService* diagnosticCompiler =
+		getDevice()->getMetal4CompilerService();
+	bool collectWorkTrace = diagnosticCompiler &&
+		diagnosticCompiler->isDiagnosticWorkActive();
+	MVKShaderLibraryWork<MVKShaderModuleKey>::Timing workTiming;
+#endif
+
 	auto reportChange = [&](bool cacheRepresentationChanged, bool logicalContentChanged) {
 		if (logicalContentChanged) { onChanged(true); }
 		else if (cacheRepresentationChanged) { onChanged(false); }
@@ -1501,7 +1509,7 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 		return library;
 	};
 
-	return _repository->_creationWork.run(
+	MVKShaderLibrary* result = _repository->_creationWork.run(
 		_shaderModuleKey,
 		!pipeline->shouldFailOnPipelineCompileRequired(),
 		lookup,
@@ -1561,8 +1569,27 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 					pShaderFeedback->flags,
 					VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT);
 			}
-			return library;
-		});
+				return library;
+			}
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			,
+			collectWorkTrace ? &workTiming : nullptr
+#endif
+		);
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (collectWorkTrace) {
+		diagnosticCompiler->recordShaderLibraryWorkTrace(
+			workTiming.totalNs,
+			workTiming.lookupNs,
+			workTiming.gateNs,
+			workTiming.recheckNs,
+			workTiming.buildNs,
+			workTiming.readyHits,
+			workTiming.recheckHits,
+			workTiming.buildCalls);
+	}
+#endif
+	return result;
 }
 
 // Finds and returns a shader library matching the shader config, or returns nullptr if it doesn't exist.

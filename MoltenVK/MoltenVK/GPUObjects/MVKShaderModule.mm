@@ -725,7 +725,11 @@ void MVKShaderLibrary::compileLibrary(const string& msl,
 														 _shaderConversionResultInfo,
 														 macro_def);
 #endif
-	_mtlLibrary = slc->newMTLLibrary(nsSrc, _shaderConversionResultInfo, macro_def);	// retained
+	_mtlLibrary = slc->newMTLLibrary(nsSrc,
+									 _shaderConversionResultInfo,
+									 macro_def,
+									 _metal4LibraryContentKey,
+									 static_cast<uint64_t>(msl.size()));	// retained
 	[nsSrc release];														// release temp string
 	slc->destroy();
 	_resident.store(_mtlLibrary != nil, memory_order_release);
@@ -2026,7 +2030,9 @@ MVKShaderModule::~MVKShaderModule() {
 
 id<MTLLibrary> MVKShaderLibraryCompiler::newMTLLibrary(NSString* mslSourceCode,
 												   const SPIRVToMSLConversionResultInfo& shaderConversionResults,
-												   const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& specializationMacroDef) {
+												   const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& specializationMacroDef,
+												   const string& contentKey,
+												   uint64_t sourceBytes) {
 	auto mtlCompileOptions = [getDevice()->getMTLCompileOptions(
 		shaderConversionResults.entryPoint.fpFastMathFlags,
 		shaderConversionResults.isPositionInvariant) retain];
@@ -2054,6 +2060,8 @@ id<MTLLibrary> MVKShaderLibraryCompiler::newMTLLibrary(NSString* mslSourceCode,
 		id<MTLLibrary> mtl4Library = metal4Compiler->newMTLLibrary(
 			mslSourceCode,
 			mtlCompileOptions,
+			contentKey,
+			sourceBytes,
 			&metal4Error,
 			&attemptedMetal4);
 		if (mtl4Library) {

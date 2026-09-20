@@ -529,6 +529,79 @@ static void recordMetal4DiagnosticTask(
 	}
 }
 
+static void recordMetal4DiagnosticLibraryTrace(
+	MVKMetal4CompilerService::Impl* impl,
+	const string& contentKey,
+	uint64_t sourceBytes,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	uint64_t fingerprint = contentKey.empty()
+		? 0
+		: getMetal4BaseKeyFingerprint(contentKey);
+	uint64_t traceIndex = stats->libraryTraceCount++;
+	if (traceIndex == 0) {
+		stats->library0ContentFingerprint = fingerprint;
+		stats->library0SourceBytes = sourceBytes;
+		stats->library0TaskNanoseconds = durationNs;
+	} else if (traceIndex == 1) {
+		stats->library1ContentFingerprint = fingerprint;
+		stats->library1SourceBytes = sourceBytes;
+		stats->library1TaskNanoseconds = durationNs;
+	} else {
+		stats->libraryTraceOverflowCount++;
+	}
+}
+
+static MVKMetal4CompilerWorkStatistics* beginMetal4DiagnosticBaseLookup(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t keyFingerprint) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return nullptr; }
+	stats->baseLookupCount++;
+	stats->baseKeyFingerprint = keyFingerprint;
+	return stats;
+}
+
+static void recordMetal4DiagnosticBaseMemoryHit(
+	MVKMetal4CompilerService::Impl* impl) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (stats) { stats->baseMemoryHitCount++; }
+}
+
+static void recordMetal4DiagnosticBaseCompile(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->baseCompileCount++;
+	stats->baseCompileNanoseconds = saturatingMetal4Add(
+		stats->baseCompileNanoseconds,
+		durationNs);
+}
+
+static void recordMetal4DiagnosticBaseCoalescedWait(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->baseCoalescedWaitCount++;
+	stats->baseCoalescedWaitNanoseconds = saturatingMetal4Add(
+		stats->baseCoalescedWaitNanoseconds,
+		durationNs);
+}
+
+static void recordMetal4DiagnosticSpecialization(
+	MVKMetal4CompilerService::Impl* impl,
+	uint64_t durationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	stats->specializationCount++;
+	stats->specializationNanoseconds = saturatingMetal4Add(
+		stats->specializationNanoseconds,
+		durationNs);
+}
+
 static void recordMetal4DiagnosticLegacyTask(
 	MVKMetal4CompilerService::Impl* impl,
 	uint64_t durationNs) {
@@ -1533,6 +1606,8 @@ void MVKMetal4CompilerService::recordLegacyComputeCompile(uint64_t durationNs,
 
 id<MTLLibrary> MVKMetal4CompilerService::newMTLLibrary(NSString* source,
 												   MTLCompileOptions* options,
+												   const string& contentKey,
+												   uint64_t sourceBytes,
 												   NSError** error,
 												   bool* attemptedMetal4) {
 	if (attemptedMetal4) { *attemptedMetal4 = false; }
@@ -1574,6 +1649,11 @@ id<MTLLibrary> MVKMetal4CompilerService::newMTLLibrary(NSString* source,
 			taskError = newMetal4CompilerTimeoutError("library compilation", impl->compilerTimeoutNs);
 			markMetal4CompilerTimedOut(impl.get(), false);
 		}
+		recordMetal4DiagnosticLibraryTrace(
+			impl.get(),
+			contentKey,
+			sourceBytes,
+			taskDuration);
 		finishMetal4CompilerSlot(impl.get(), MVKMetal4CompilerLane::Library, taskDuration, library != nil);
 		if (error) {
 			*error = [taskError autorelease];
@@ -1846,6 +1926,8 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 	using BaseEntry = MVKMetal4CompilerService::Impl::BaseEntry;
 	shared_ptr<BaseEntry> entry;
 	uint64_t keyFingerprint = getMetal4BaseKeyFingerprint(key);
+	bool collectBaseTrace =
+		beginMetal4DiagnosticBaseLookup(impl, keyFingerprint) != nullptr;
 	{
 		unique_lock<mutex> lock(impl->cacheLock);
 		recordMetal4DistinctBaseKey(impl, keyFingerprint);
@@ -1856,6 +1938,10 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 			auto found = impl->baseCache.find(key);
 			if (found != impl->baseCache.end()) {
 				entry = found->second;
+				bool coalescedWait = entry->compiling;
+				uint64_t coalescedWaitStart = collectBaseTrace && coalescedWait
+					? mvkGetTimestamp()
+					: 0;
 				bool entryReady = entry->ready.wait_for(
 					lock,
 					chrono::nanoseconds(impl->compilerTimeoutNs),
@@ -1863,6 +1949,11 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 						return !entry->compiling || impl->shuttingDown ||
 							impl->fatalCompilerTimeout || impl->renderBreakerOpen;
 					});
+				if (coalescedWaitStart) {
+					recordMetal4DiagnosticBaseCoalescedWait(
+						impl,
+						mvkGetElapsedNanoseconds(coalescedWaitStart));
+				}
 				if (!entryReady) {
 					// Cache coordination can outlast one compiler deadline even when the
 					// owner is healthy. Bypass only this call; no Metal task failed.
@@ -1891,6 +1982,7 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 						&impl->scoreSaturations);
 				}
 				impl->baseHits++;
+				recordMetal4DiagnosticBaseMemoryHit(impl);
 				return entry;
 			}
 
@@ -1978,6 +2070,7 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 		&error,
 		&compilerTaskDuration);
 	uint64_t compileDuration = mvkGetElapsedNanoseconds(compileStart);
+	recordMetal4DiagnosticBaseCompile(impl, compileDuration);
 	uint64_t allocatedBytes = basePipeline
 		? static_cast<uint64_t>(basePipeline.allocatedSize)
 		: 0;
@@ -2152,6 +2245,9 @@ id<MTLRenderPipelineState> MVKMetal4CompilerService::newMTLRenderPipelineState(
 				entry->pipeline,
 				&error);
 			uint64_t specializationDuration = mvkGetElapsedNanoseconds(specializationStart);
+			recordMetal4DiagnosticSpecialization(
+				impl.get(),
+				specializationDuration);
 			[specializationDescriptor release];
 			{
 				lock_guard<mutex> lock(impl->cacheLock);

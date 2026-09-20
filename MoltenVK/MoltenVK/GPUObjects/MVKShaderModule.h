@@ -573,7 +573,9 @@ public:
 	 */
 	id<MTLLibrary> newMTLLibrary(NSString* mslSourceCode,
 								 const mvk::SPIRVToMSLConversionResultInfo& shaderConversionResults,
-								 const std::vector<std::pair<mvk::MSLSpecializationMacroInfo, MVKShaderMacroValue>>& macroDef);
+								 const std::vector<std::pair<mvk::MSLSpecializationMacroInfo, MVKShaderMacroValue>>& macroDef,
+								 const std::string& contentKey,
+								 uint64_t sourceBytes);
 
 
 #pragma mark Construction

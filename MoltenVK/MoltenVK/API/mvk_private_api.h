@@ -384,6 +384,23 @@ typedef struct {
     uint64_t computeTaskNanoseconds;
     uint64_t legacyTaskCount;
     uint64_t legacyTaskNanoseconds;
+    uint64_t libraryTraceCount;
+    uint64_t libraryTraceOverflowCount;
+    uint64_t library0ContentFingerprint;
+    uint64_t library0SourceBytes;
+    uint64_t library0TaskNanoseconds;
+    uint64_t library1ContentFingerprint;
+    uint64_t library1SourceBytes;
+    uint64_t library1TaskNanoseconds;
+    uint64_t baseKeyFingerprint;
+    uint64_t baseLookupCount;
+    uint64_t baseMemoryHitCount;
+    uint64_t baseCompileCount;
+    uint64_t baseCompileNanoseconds;
+    uint64_t baseCoalescedWaitCount;
+    uint64_t baseCoalescedWaitNanoseconds;
+    uint64_t specializationCount;
+    uint64_t specializationNanoseconds;
 } MVKMetal4CompilerWorkStatistics;
 
 /** Live nonblocking snapshot of the Metal 4 compiler admission gate. */

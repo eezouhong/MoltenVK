@@ -288,6 +288,8 @@ public:
 	/** Returns a retained library, or nil. attemptedMetal4 distinguishes bypass from a failed attempt. */
 	id<MTLLibrary> newMTLLibrary(NSString* source,
 								 MTLCompileOptions* options,
+								 const std::string& contentKey,
+								 uint64_t sourceBytes,
 								 NSError** error,
 								 bool* attemptedMetal4);
 

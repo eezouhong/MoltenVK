@@ -57,6 +57,20 @@ def main() -> int:
         "baseCoalescedWaitNanoseconds",
         "specializationCount",
         "specializationNanoseconds",
+        "functionTraceCount",
+        "functionTraceOverflowCount",
+        "function0ContentFingerprint",
+        "function0AccessWaitNanoseconds",
+        "function0RehydrateNanoseconds",
+        "function0DeviceLockWaitNanoseconds",
+        "function0LookupNanoseconds",
+        "function0SpecializationNanoseconds",
+        "function1ContentFingerprint",
+        "function1AccessWaitNanoseconds",
+        "function1RehydrateNanoseconds",
+        "function1DeviceLockWaitNanoseconds",
+        "function1LookupNanoseconds",
+        "function1SpecializationNanoseconds",
     ):
         require(private_api, rf"\b{field}\b", f"missing ABI field: {field}")
 
@@ -113,6 +127,20 @@ def main() -> int:
         pipeline_mm,
         r"specializationDuration.*?recordMetal4DiagnosticSpecialization",
         "final specialization duration is missing",
+    )
+    require(
+        pipeline_mm,
+        r"recordMetal4DiagnosticFunctionTrace.*?functionTraceCount\+\+.*?"
+        r"traceIndex\s*==\s*0.*?traceIndex\s*==\s*1.*?"
+        r"functionTraceOverflowCount\+\+",
+        "shader-function trace must remain fixed at two entries plus overflow",
+    )
+    require(
+        shader_mm,
+        r"isDiagnosticWorkActive.*?accessWaitStart.*?_accessLock.*?"
+        r"deviceLockWaitStart.*?functionLookupStart.*?"
+        r"functionSpecializationStart.*?recordShaderFunctionTrace",
+        "shader-library wait, rehydrate, function lookup, and specialization chain is incomplete",
     )
     require(
         pipeline_mm,

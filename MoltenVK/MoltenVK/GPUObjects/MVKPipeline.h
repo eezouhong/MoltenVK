@@ -293,6 +293,14 @@ public:
 								 NSError** error,
 								 bool* attemptedMetal4);
 
+	bool isDiagnosticWorkActive() const;
+	void recordShaderFunctionTrace(const std::string& contentKey,
+								  uint64_t accessWaitNs,
+								  uint64_t rehydrateNs,
+								  uint64_t deviceLockWaitNs,
+								  uint64_t lookupNs,
+								  uint64_t specializationNs);
+
 	/**
 	 * Returns a retained specialized pipeline state, or nil so the caller can use
 	 * the existing legacy compiler in the same Vulkan pipeline creation call.

@@ -563,6 +563,39 @@ static MVKMetal4CompilerWorkStatistics* beginMetal4DiagnosticBaseLookup(
 	return stats;
 }
 
+static void recordMetal4DiagnosticFunctionTrace(
+	MVKMetal4CompilerService::Impl* impl,
+	const string& contentKey,
+	uint64_t accessWaitNs,
+	uint64_t rehydrateNs,
+	uint64_t deviceLockWaitNs,
+	uint64_t lookupNs,
+	uint64_t specializationNs) {
+	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
+	if (!stats) { return; }
+	uint64_t fingerprint = contentKey.empty()
+		? 0
+		: getMetal4BaseKeyFingerprint(contentKey);
+	uint64_t traceIndex = stats->functionTraceCount++;
+	if (traceIndex == 0) {
+		stats->function0ContentFingerprint = fingerprint;
+		stats->function0AccessWaitNanoseconds = accessWaitNs;
+		stats->function0RehydrateNanoseconds = rehydrateNs;
+		stats->function0DeviceLockWaitNanoseconds = deviceLockWaitNs;
+		stats->function0LookupNanoseconds = lookupNs;
+		stats->function0SpecializationNanoseconds = specializationNs;
+	} else if (traceIndex == 1) {
+		stats->function1ContentFingerprint = fingerprint;
+		stats->function1AccessWaitNanoseconds = accessWaitNs;
+		stats->function1RehydrateNanoseconds = rehydrateNs;
+		stats->function1DeviceLockWaitNanoseconds = deviceLockWaitNs;
+		stats->function1LookupNanoseconds = lookupNs;
+		stats->function1SpecializationNanoseconds = specializationNs;
+	} else {
+		stats->functionTraceOverflowCount++;
+	}
+}
+
 static void recordMetal4DiagnosticBaseMemoryHit(
 	MVKMetal4CompilerService::Impl* impl) {
 	MVKMetal4CompilerWorkStatistics* stats = getMetal4DiagnosticWork(impl);
@@ -1663,6 +1696,30 @@ id<MTLLibrary> MVKMetal4CompilerService::newMTLLibrary(NSString* source,
 		return library;
 	}
 	return nil;
+}
+
+bool MVKMetal4CompilerService::isDiagnosticWorkActive() const {
+	auto impl = _impl;
+	return impl && getMetal4DiagnosticWork(impl.get()) != nullptr;
+}
+
+void MVKMetal4CompilerService::recordShaderFunctionTrace(
+	const string& contentKey,
+	uint64_t accessWaitNs,
+	uint64_t rehydrateNs,
+	uint64_t deviceLockWaitNs,
+	uint64_t lookupNs,
+	uint64_t specializationNs) {
+	auto impl = _impl;
+	if (!impl) { return; }
+	recordMetal4DiagnosticFunctionTrace(
+		impl.get(),
+		contentKey,
+		accessWaitNs,
+		rehydrateNs,
+		deviceLockWaitNs,
+		lookupNs,
+		specializationNs);
 }
 
 static id<MTLRenderPipelineState> newMetal4RenderPipelineState(

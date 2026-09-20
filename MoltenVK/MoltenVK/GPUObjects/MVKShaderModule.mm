@@ -288,8 +288,26 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 	bool rehydrated = false;
 	uint64_t rehydrateStartedAt = 0;
 	uint64_t rehydrateNanoseconds = 0;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	MVKMetal4CompilerService* diagnosticCompiler =
+		getDevice()->getMetal4CompilerService();
+	bool collectFunctionTrace = diagnosticCompiler &&
+		diagnosticCompiler->isDiagnosticWorkActive();
+	uint64_t accessWaitStart = collectFunctionTrace && _repository
+		? mvkGetTimestamp()
+		: 0;
+	uint64_t accessWaitNanoseconds = 0;
+	uint64_t deviceLockWaitNanoseconds = 0;
+	uint64_t functionLookupNanoseconds = 0;
+	uint64_t functionSpecializationNanoseconds = 0;
+#endif
 	unique_lock<mutex> accessLock(_accessLock, defer_lock);
 	if (_repository) { accessLock.lock(); }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (accessWaitStart) {
+		accessWaitNanoseconds = mvkGetElapsedNanoseconds(accessWaitStart);
+	}
+#endif
 	bool wasResident = isResident();
 	if (_repository) {
 		if (!wasResident && allowLibraryCompile) { rehydrateStartedAt = mvkGetTimestamp(); }
@@ -391,12 +409,34 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 	if (accessLock.owns_lock()) { accessLock.unlock(); }
 
 	MVKMTLFunction result;
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	uint64_t deviceLockWaitStart = collectFunctionTrace
+		? mvkGetTimestamp()
+		: 0;
+#endif
 	@synchronized (getMTLDevice()) {
 		@autoreleasepool {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			if (deviceLockWaitStart) {
+				deviceLockWaitNanoseconds =
+					mvkGetElapsedNanoseconds(deviceLockWaitStart);
+			}
+#endif
 			NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
 
 			uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			uint64_t functionLookupStart = collectFunctionTrace
+				? mvkGetTimestamp()
+				: 0;
+#endif
 			id<MTLFunction> mtlFunc = [[lib newFunctionWithName: mtlFuncName] autorelease];
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+			if (functionLookupStart) {
+				functionLookupNanoseconds =
+					mvkGetElapsedNanoseconds(functionLookupStart);
+			}
+#endif
 			addPerformanceInterval(getPerformanceStats().shaderCompilation.functionRetrieval, startTime);
 			if (pShaderFeedback) {
 				if (mtlFunc) {
@@ -431,7 +471,18 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 
 					MVKFunctionSpecializer fs(_owner);
 					if (pShaderFeedback) { startTime = mvkGetTimestamp(); }
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+					uint64_t functionSpecializationStart = collectFunctionTrace
+						? mvkGetTimestamp()
+						: 0;
+#endif
 					mtlFunc = [fs.newMTLFunction(lib, mtlFuncName, mtlFCVals) autorelease];
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+					if (functionSpecializationStart) {
+						functionSpecializationNanoseconds =
+							mvkGetElapsedNanoseconds(functionSpecializationStart);
+					}
+#endif
 					if (pShaderFeedback) { pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime); }
 				}
 			}
@@ -478,6 +529,18 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 #endif
 		}
 	}
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	if (collectFunctionTrace) {
+		diagnosticCompiler->recordShaderFunctionTrace(
+			*libraryContentKey,
+			accessWaitNanoseconds,
+			rehydrateNanoseconds,
+			deviceLockWaitNanoseconds,
+			functionLookupNanoseconds,
+			functionSpecializationNanoseconds);
+	}
+#endif
 
 	if (retainedLibraryForUnlockedUse) { [lib release]; }
 	if (activeRepositoryUse) {

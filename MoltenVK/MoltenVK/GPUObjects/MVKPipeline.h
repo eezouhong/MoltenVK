@@ -272,12 +272,25 @@ public:
 	/** Creates the compiler only when the internal environment gate and runtime capabilities allow it. */
 	static MVKMetal4CompilerService* create(MVKDevice* device);
 
-	/** Starts/ends same-thread diagnostic attribution without changing admission. */
+	/** Legacy origin scope retained for callers built before ordered admission. */
 	VkResult beginDiagnosticWork(
 		MVKMetal4CompilerWorkOrigin origin,
 		uint64_t requestId);
 	VkResult endDiagnosticWork(
 		uint64_t requestId,
+		MVKMetal4CompilerWorkStatistics* pStats);
+	VkResult beginPriorityWork(
+		MVKMetal4CompilerWorkOrigin origin,
+		MVKMetal4CompilerWorkUrgency urgency,
+		uint64_t scopeId,
+		uint64_t orderingSequence,
+		bool collectStatistics);
+	VkResult promotePriorityWork(
+		uint64_t scopeId,
+		MVKMetal4CompilerWorkUrgency urgency,
+		uint64_t orderingSequence);
+	VkResult endPriorityWork(
+		uint64_t scopeId,
 		MVKMetal4CompilerWorkStatistics* pStats);
 	VkResult getConcurrencyStatistics(
 		MVKMetal4CompilerConcurrencyStatistics* pStats);

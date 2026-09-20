@@ -149,6 +149,58 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkBeginMetal4CompilerWorkScopeMVK(
+    VkDevice                                  device,
+    MVKMetal4CompilerWorkOrigin               origin,
+    MVKMetal4CompilerWorkUrgency              urgency,
+    uint64_t                                  scopeId,
+    uint64_t                                  orderingSequence,
+    VkBool32                                  collectStatistics) {
+
+    if (!device) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    return compiler
+        ? compiler->beginPriorityWork(
+            origin,
+            urgency,
+            scopeId,
+            orderingSequence,
+            collectStatistics)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkPromoteMetal4CompilerWorkScopeMVK(
+    VkDevice                                  device,
+    uint64_t                                  scopeId,
+    MVKMetal4CompilerWorkUrgency              urgency,
+    uint64_t                                  orderingSequence) {
+
+    if (!device) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    return compiler
+        ? compiler->promotePriorityWork(scopeId, urgency, orderingSequence)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkScopeMVK(
+    VkDevice                                  device,
+    uint64_t                                  scopeId,
+    MVKMetal4CompilerWorkStatistics*          pStats,
+    size_t*                                   pStatsSize) {
+
+    if (!device || !pStatsSize) { return VK_ERROR_INITIALIZATION_FAILED; }
+    MVKMetal4CompilerWorkStatistics stats = {};
+    MVKDevice* mvkDevice = MVKDevice::getMVKDevice(device);
+    MVKMetal4CompilerService* compiler = mvkDevice->getMetal4CompilerService();
+    VkResult result = compiler
+        ? compiler->endPriorityWork(scopeId, &stats)
+        : VK_ERROR_FEATURE_NOT_PRESENT;
+    if (result != VK_SUCCESS) { return result; }
+    return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(
     VkDevice                                  device,
     MVKMetal4CompilerConcurrencyStatistics*   pStats,

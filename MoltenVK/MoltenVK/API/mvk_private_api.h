@@ -359,12 +359,18 @@ typedef enum {
     MVK_METAL4_COMPILER_WORK_ORIGIN_RUNTIME_DEMAND = 4,
 } MVKMetal4CompilerWorkOrigin;
 
+/** Orders pending work at the shared Metal 4 compiler admission gate. */
+typedef enum {
+    MVK_METAL4_COMPILER_WORK_URGENCY_LIFECYCLE = 0,
+    MVK_METAL4_COMPILER_WORK_URGENCY_DEMANDED = 1,
+    MVK_METAL4_COMPILER_WORK_URGENCY_BLOCKING = 2,
+} MVKMetal4CompilerWorkUrgency;
+
 /**
- * Same-thread attribution for one Vulkan pipeline creation call.
- * The origin may also be used by the bounded Metal 4 compiler gate to let
- * foreground/unknown work take newly available capacity before optional
- * startup-precompile or background-warmup work. It does not change the
- * configured task cap, fallback, timeout, or native task execution semantics.
+ * Same-thread attribution for one Vulkan pipeline creation call. The appended
+ * admission fields are populated by priority scopes only when statistics were
+ * requested. They do not change the configured task cap, fallback, timeout, or
+ * native task execution semantics.
  */
 typedef struct {
     VkBool32 available;
@@ -384,6 +390,14 @@ typedef struct {
     uint64_t computeTaskNanoseconds;
     uint64_t legacyTaskCount;
     uint64_t legacyTaskNanoseconds;
+    uint32_t initialUrgency;
+    uint32_t finalUrgency;
+    uint64_t initialOrderingSequence;
+    uint64_t finalOrderingSequence;
+    uint64_t firstEnqueueSequence;
+    uint64_t firstAdmissionSequence;
+    uint64_t lastAdmissionSequence;
+    uint64_t priorityUpdateCount;
 } MVKMetal4CompilerWorkStatistics;
 
 /** Live nonblocking snapshot of the Metal 4 compiler admission gate. */
@@ -452,6 +466,9 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMemoryStatisticsMVK)(VkPipeli
 typedef VkResult (VKAPI_PTR *PFN_vkGetPipelineCacheMutationGenerationMVK)(VkPipelineCache pipelineCache, uint64_t* pGeneration);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginMetal4CompilerWorkMVK)(VkDevice device, MVKMetal4CompilerWorkOrigin origin, uint64_t requestId);
 typedef VkResult (VKAPI_PTR *PFN_vkEndMetal4CompilerWorkMVK)(VkDevice device, uint64_t requestId, MVKMetal4CompilerWorkStatistics* pStats, size_t* pStatsSize);
+typedef VkResult (VKAPI_PTR *PFN_vkBeginMetal4CompilerWorkScopeMVK)(VkDevice device, MVKMetal4CompilerWorkOrigin origin, MVKMetal4CompilerWorkUrgency urgency, uint64_t scopeId, uint64_t orderingSequence, VkBool32 collectStatistics);
+typedef VkResult (VKAPI_PTR *PFN_vkPromoteMetal4CompilerWorkScopeMVK)(VkDevice device, uint64_t scopeId, MVKMetal4CompilerWorkUrgency urgency, uint64_t orderingSequence);
+typedef VkResult (VKAPI_PTR *PFN_vkEndMetal4CompilerWorkScopeMVK)(VkDevice device, uint64_t scopeId, MVKMetal4CompilerWorkStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4CompilerConcurrencyStatisticsMVK)(VkDevice device, MVKMetal4CompilerConcurrencyStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMetal4ShaderLibraryRepositoryStatisticsMVK)(VkDevice device, MVKMetal4ShaderLibraryRepositoryStatistics* pStats, size_t* pStatsSize);
 typedef VkResult (VKAPI_PTR *PFN_vkBeginPipelineCacheShaderLibraryCaptureMVK)(VkPipelineCache sourcePipelineCache, MVKPipelineCacheShaderLibraryCaptureToken* pCaptureToken);
@@ -558,6 +575,33 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBeginMetal4CompilerWorkMVK(
 VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
     VkDevice                                   device,
     uint64_t                                   requestId,
+    MVKMetal4CompilerWorkStatistics*           pStats,
+    size_t*                                    pStatsSize);
+
+/**
+ * Begins a same-thread priority scope. Pending native tasks are ordered by
+ * urgency, then orderingSequence, then native enqueue order. Running tasks are
+ * never preempted and the configured device-wide task cap is unchanged.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL vkBeginMetal4CompilerWorkScopeMVK(
+    VkDevice                                   device,
+    MVKMetal4CompilerWorkOrigin                origin,
+    MVKMetal4CompilerWorkUrgency               urgency,
+    uint64_t                                   scopeId,
+    uint64_t                                   orderingSequence,
+    VkBool32                                   collectStatistics);
+
+/** Improves an active scope and wakes the shared gate so queued work is reordered. */
+VKAPI_ATTR VkResult VKAPI_CALL vkPromoteMetal4CompilerWorkScopeMVK(
+    VkDevice                                   device,
+    uint64_t                                   scopeId,
+    MVKMetal4CompilerWorkUrgency               urgency,
+    uint64_t                                   orderingSequence);
+
+/** Ends the matching same-thread priority scope. */
+VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkScopeMVK(
+    VkDevice                                   device,
+    uint64_t                                   scopeId,
     MVKMetal4CompilerWorkStatistics*           pStats,
     size_t*                                    pStatsSize);
 

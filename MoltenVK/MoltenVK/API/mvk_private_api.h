@@ -367,11 +367,10 @@ typedef enum {
 } MVKMetal4CompilerWorkUrgency;
 
 /**
- * Same-thread attribution for one Vulkan pipeline creation call.
- * The origin may also be used by the bounded Metal 4 compiler gate to let
- * foreground/unknown work take newly available capacity before optional
- * startup-precompile or background-warmup work. It does not change the
- * configured task cap, fallback, timeout, or native task execution semantics.
+ * Same-thread attribution for one Vulkan pipeline creation call. The appended
+ * admission fields are populated by priority scopes only when statistics were
+ * requested. They do not change the configured task cap, fallback, timeout, or
+ * native task execution semantics.
  */
 typedef struct {
     VkBool32 available;
@@ -391,6 +390,14 @@ typedef struct {
     uint64_t computeTaskNanoseconds;
     uint64_t legacyTaskCount;
     uint64_t legacyTaskNanoseconds;
+    uint32_t initialUrgency;
+    uint32_t finalUrgency;
+    uint64_t initialOrderingSequence;
+    uint64_t finalOrderingSequence;
+    uint64_t firstEnqueueSequence;
+    uint64_t firstAdmissionSequence;
+    uint64_t lastAdmissionSequence;
+    uint64_t priorityUpdateCount;
 } MVKMetal4CompilerWorkStatistics;
 
 /** Live nonblocking snapshot of the Metal 4 compiler admission gate. */

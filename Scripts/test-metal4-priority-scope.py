@@ -34,6 +34,14 @@ def main() -> int:
         "vkBeginMetal4CompilerWorkScopeMVK",
         "vkPromoteMetal4CompilerWorkScopeMVK",
         "vkEndMetal4CompilerWorkScopeMVK",
+        "initialUrgency",
+        "finalUrgency",
+        "initialOrderingSequence",
+        "finalOrderingSequence",
+        "firstEnqueueSequence",
+        "firstAdmissionSequence",
+        "lastAdmissionSequence",
+        "priorityUpdateCount",
     ):
         require(private_api, re.escape(token), f"missing priority-scope ABI: {token}")
 
@@ -62,14 +70,20 @@ def main() -> int:
     )
     require(
         pipeline,
-        r"promotePriorityWork.*?promoteMetal4AdmissionScope.*?"
+        r"promotePriorityWork.*?promoteMetal4PriorityScope.*?"
         r"compilerSlotReady\.notify_all",
         "live promotion does not wake and reorder native waiters",
     )
     require(
         pipeline,
-        r"struct\s+BaseEntry.*?admissionScope.*?entry->admissionScope.*?"
-        r"promoteMetal4AdmissionScope",
+        r"collectStatistics.*?firstEnqueueSequence.*?firstAdmissionSequence.*?"
+        r"lastAdmissionSequence.*?priorityUpdateCount",
+        "opt-in native admission ordering statistics are incomplete",
+    )
+    require(
+        pipeline,
+        r"struct\s+BaseEntry.*?priorityScope.*?entry->priorityScope.*?"
+        r"promoteMetal4PriorityScope",
         "a blocking waiter cannot promote the owner of a coalesced Metal 4 base",
     )
     require(

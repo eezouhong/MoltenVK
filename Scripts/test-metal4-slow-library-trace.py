@@ -81,6 +81,23 @@ def main() -> int:
         "shaderWorkReadyHitCount",
         "shaderWorkRecheckHitCount",
         "shaderWorkBuildCount",
+        "shaderWorkTraceOverflowCount",
+        "shader0ModuleHash",
+        "shader0ModuleBytes",
+        "shader0Stage",
+        "shader0UsedInputCount",
+        "shader0UsedOutputCount",
+        "shader0UsedResourceCount",
+        "shader0DiscreteSetCount",
+        "shader0DynamicBufferCount",
+        "shader1ModuleHash",
+        "shader1ModuleBytes",
+        "shader1Stage",
+        "shader1UsedInputCount",
+        "shader1UsedOutputCount",
+        "shader1UsedResourceCount",
+        "shader1DiscreteSetCount",
+        "shader1DynamicBufferCount",
     ):
         require(private_api, rf"\b{field}\b", f"missing ABI field: {field}")
 
@@ -157,6 +174,13 @@ def main() -> int:
         r"perCallTiming.*?workTiming.*?recordShaderLibraryWorkTrace.*?"
         r"gateNs.*?recheckNs.*?buildNs",
         "module-local shader creation-gate timing is not joined to the work scope",
+    )
+    require(
+        shader_mm + pipeline_mm,
+        r"_shaderModuleKey\.codeHash.*?_shaderModuleKey\.codeSize.*?"
+        r"entryPointStage.*?shaderInputs.*?shaderOutputs.*?resourceBindings.*?"
+        r"shaderWorkTraceOverflowCount",
+        "guest module, stage, and compact conversion-shape identity is incomplete",
     )
     require(
         pipeline_mm,

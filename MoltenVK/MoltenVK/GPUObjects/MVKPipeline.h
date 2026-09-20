@@ -307,7 +307,15 @@ public:
 								 uint64_t buildNs,
 								 uint64_t readyHits,
 								 uint64_t recheckHits,
-								 uint64_t buildCalls);
+								 uint64_t buildCalls,
+								 uint64_t moduleHash,
+								 uint64_t moduleBytes,
+								 uint64_t stage,
+								 uint64_t usedInputCount,
+								 uint64_t usedOutputCount,
+								 uint64_t usedResourceCount,
+								 uint64_t discreteSetCount,
+								 uint64_t dynamicBufferCount);
 
 	/**
 	 * Returns a retained specialized pipeline state, or nil so the caller can use

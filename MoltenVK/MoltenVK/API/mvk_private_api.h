@@ -424,6 +424,23 @@ typedef struct {
     uint64_t shaderWorkReadyHitCount;
     uint64_t shaderWorkRecheckHitCount;
     uint64_t shaderWorkBuildCount;
+    uint64_t shaderWorkTraceOverflowCount;
+    uint64_t shader0ModuleHash;
+    uint64_t shader0ModuleBytes;
+    uint64_t shader0Stage;
+    uint64_t shader0UsedInputCount;
+    uint64_t shader0UsedOutputCount;
+    uint64_t shader0UsedResourceCount;
+    uint64_t shader0DiscreteSetCount;
+    uint64_t shader0DynamicBufferCount;
+    uint64_t shader1ModuleHash;
+    uint64_t shader1ModuleBytes;
+    uint64_t shader1Stage;
+    uint64_t shader1UsedInputCount;
+    uint64_t shader1UsedOutputCount;
+    uint64_t shader1UsedResourceCount;
+    uint64_t shader1DiscreteSetCount;
+    uint64_t shader1DynamicBufferCount;
 } MVKMetal4CompilerWorkStatistics;
 
 /** Live nonblocking snapshot of the Metal 4 compiler admission gate. */

@@ -1578,6 +1578,12 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 		);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 	if (collectWorkTrace) {
+		auto countUsed = [](const auto& values) -> uint64_t {
+			return static_cast<uint64_t>(count_if(
+				values.begin(),
+				values.end(),
+				[](const auto& value) { return value.outIsUsedByShader; }));
+		};
 		diagnosticCompiler->recordShaderLibraryWorkTrace(
 			workTiming.totalNs,
 			workTiming.lookupNs,
@@ -1586,7 +1592,15 @@ MVKShaderLibrary* MVKShaderLibraryCache::getShaderLibraryConcurrent(
 			workTiming.buildNs,
 			workTiming.readyHits,
 			workTiming.recheckHits,
-			workTiming.buildCalls);
+			workTiming.buildCalls,
+			static_cast<uint64_t>(_shaderModuleKey.codeHash),
+			static_cast<uint64_t>(_shaderModuleKey.codeSize),
+			static_cast<uint64_t>(pShaderConfig->options.entryPointStage),
+			countUsed(pShaderConfig->shaderInputs),
+			countUsed(pShaderConfig->shaderOutputs),
+			countUsed(pShaderConfig->resourceBindings),
+			static_cast<uint64_t>(pShaderConfig->discreteDescriptorSets.size()),
+			static_cast<uint64_t>(pShaderConfig->dynamicBufferDescriptors.size()));
 	}
 #endif
 	return result;

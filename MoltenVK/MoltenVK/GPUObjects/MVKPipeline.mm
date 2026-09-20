@@ -1730,13 +1730,21 @@ void MVKMetal4CompilerService::recordShaderLibraryWorkTrace(
 	uint64_t buildNs,
 	uint64_t readyHits,
 	uint64_t recheckHits,
-	uint64_t buildCalls) {
+	uint64_t buildCalls,
+	uint64_t moduleHash,
+	uint64_t moduleBytes,
+	uint64_t stage,
+	uint64_t usedInputCount,
+	uint64_t usedOutputCount,
+	uint64_t usedResourceCount,
+	uint64_t discreteSetCount,
+	uint64_t dynamicBufferCount) {
 	auto impl = _impl;
 	if (!impl) { return; }
 	MVKMetal4CompilerWorkStatistics* stats =
 		getMetal4DiagnosticWork(impl.get());
 	if (!stats) { return; }
-	stats->shaderWorkCount++;
+	uint64_t traceIndex = stats->shaderWorkCount++;
 	stats->shaderWorkTotalNanoseconds = saturatingMetal4Add(
 		stats->shaderWorkTotalNanoseconds,
 		totalNs);
@@ -1761,6 +1769,27 @@ void MVKMetal4CompilerService::recordShaderLibraryWorkTrace(
 	stats->shaderWorkBuildCount = saturatingMetal4Add(
 		stats->shaderWorkBuildCount,
 		buildCalls);
+	if (traceIndex == 0) {
+		stats->shader0ModuleHash = moduleHash;
+		stats->shader0ModuleBytes = moduleBytes;
+		stats->shader0Stage = stage;
+		stats->shader0UsedInputCount = usedInputCount;
+		stats->shader0UsedOutputCount = usedOutputCount;
+		stats->shader0UsedResourceCount = usedResourceCount;
+		stats->shader0DiscreteSetCount = discreteSetCount;
+		stats->shader0DynamicBufferCount = dynamicBufferCount;
+	} else if (traceIndex == 1) {
+		stats->shader1ModuleHash = moduleHash;
+		stats->shader1ModuleBytes = moduleBytes;
+		stats->shader1Stage = stage;
+		stats->shader1UsedInputCount = usedInputCount;
+		stats->shader1UsedOutputCount = usedOutputCount;
+		stats->shader1UsedResourceCount = usedResourceCount;
+		stats->shader1DiscreteSetCount = discreteSetCount;
+		stats->shader1DynamicBufferCount = dynamicBufferCount;
+	} else {
+		stats->shaderWorkTraceOverflowCount++;
+	}
 }
 
 static id<MTLRenderPipelineState> newMetal4RenderPipelineState(

@@ -44,17 +44,20 @@ struct Metal4AdmissionScope {
 inline bool promoteMetal4AdmissionScope(Metal4AdmissionScope& scope,
 										Metal4AdmissionUrgency urgency,
 										uint64_t orderingSequence) {
-	bool changed = false;
 	if (urgency > scope.urgency) {
 		scope.urgency = urgency;
-		changed = true;
+		// Ordering sequences name roots within one urgency tier. Moving to a new
+		// tier replaces the old tier's sequence even when the new value is larger.
+		scope.orderingSequence = orderingSequence;
+		return true;
 	}
+	if (urgency < scope.urgency) { return false; }
 	if (orderingSequence != 0 &&
 		(scope.orderingSequence == 0 || orderingSequence < scope.orderingSequence)) {
 		scope.orderingSequence = orderingSequence;
-		changed = true;
+		return true;
 	}
-	return changed;
+	return false;
 }
 
 /** Intrusive waiter owned by the blocked compiler thread. */

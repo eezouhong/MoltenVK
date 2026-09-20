@@ -79,6 +79,21 @@ static void testLivePromotionReordersQueuedWork() {
 	assert(promotedScope.orderingSequence == 5);
 }
 
+static void testPromotionSequenceBelongsToItsUrgency() {
+	Metal4AdmissionScope scope{1, Metal4AdmissionUrgency::Demanded, 10};
+
+	assert(mvk::promoteMetal4AdmissionScope(
+		scope, Metal4AdmissionUrgency::Blocking, 40));
+	assert(scope.urgency == Metal4AdmissionUrgency::Blocking);
+	assert(scope.orderingSequence == 40);
+	assert(!mvk::promoteMetal4AdmissionScope(
+		scope, Metal4AdmissionUrgency::Demanded, 1));
+	assert(scope.orderingSequence == 40);
+	assert(mvk::promoteMetal4AdmissionScope(
+		scope, Metal4AdmissionUrgency::Blocking, 30));
+	assert(scope.orderingSequence == 30);
+}
+
 static void testQueueMembershipAndCapacity() {
 	Metal4AdmissionQueue queue;
 	Metal4AdmissionScope scope{1, Metal4AdmissionUrgency::Demanded, 1};
@@ -158,6 +173,7 @@ int main() {
 	testRootSequenceThenNativeFifo();
 	testUnknownRootFallsBackToNativeFifo();
 	testLivePromotionReordersQueuedWork();
+	testPromotionSequenceBelongsToItsUrgency();
 	testQueueMembershipAndCapacity();
 	testCapacityNeverExpandsPastConfiguredLimit();
 	testLaneDoesNotSplitTheSharedOrder();

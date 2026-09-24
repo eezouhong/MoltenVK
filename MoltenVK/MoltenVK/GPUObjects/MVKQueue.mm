@@ -25,7 +25,375 @@
 #include "MVKOSExtensions.h"
 #include "MVKGPUCapture.h"
 
+#include <chrono>
+#include <memory>
+#include <vector>
+
 using namespace std;
+
+
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+
+namespace {
+
+static constexpr double kMetal4CommandAllocatorDefaultCount = 4.0;
+static constexpr double kMetal4CommandAllocatorMaximumCount = 16.0;
+static constexpr double kMetal4CommandValidationDefaultTimeoutMs = 5000.0;
+static constexpr double kMetal4CommandValidationMinimumTimeoutMs = 100.0;
+static constexpr double kMetal4CommandValidationMaximumTimeoutMs = 30000.0;
+
+static string describeMetal4CommandError(NSError* error, const char* fallback) {
+	if (error.localizedDescription.length > 0) {
+		return error.localizedDescription.UTF8String;
+	}
+	return fallback;
+}
+
+/**
+ * Heap-owned feedback state. A late Metal callback owns this context and the
+ * Metal objects needed by the validation submission, but never an MVKQueue or
+ * MVKDevice pointer. A timeout can therefore disable this experiment without
+ * creating a queue/device teardown use-after-free.
+ */
+struct MVKMetal4CommandFeedbackContext {
+	mutex lock;
+	condition_variable ready;
+	id<MTL4CommandQueue> queue = nil;
+	id<MTL4CommandBuffer> commandBuffer = nil;
+	id<MTL4CommandAllocator> allocator = nil;
+	NSError* error = nil;
+	bool completed = false;
+	bool receivedFeedback = false;
+
+	MVKMetal4CommandFeedbackContext(id<MTL4CommandQueue> mtlQueue,
+									 id<MTL4CommandBuffer> mtlCommandBuffer,
+									 id<MTL4CommandAllocator> mtlAllocator) :
+		queue([mtlQueue retain]),
+		commandBuffer([mtlCommandBuffer retain]),
+		allocator([mtlAllocator retain]) {}
+
+	~MVKMetal4CommandFeedbackContext() {
+		[error release];
+		[allocator release];
+		[commandBuffer release];
+		[queue release];
+	}
+
+	void complete(id<MTL4CommitFeedback> feedback) {
+		NSError* feedbackError = [feedback.error retain];
+		{
+			lock_guard<mutex> guard(lock);
+			if (completed) {
+				[feedbackError release];
+				return;
+			}
+			error = feedbackError;
+			receivedFeedback = feedback != nil;
+			completed = true;
+		}
+		ready.notify_all();
+	}
+
+	bool waitFor(uint64_t timeoutNs, NSError** feedbackError, bool* hasFeedback) {
+		unique_lock<mutex> guard(lock);
+		bool finished = ready.wait_for(
+			guard,
+			chrono::nanoseconds(timeoutNs),
+			[this] { return completed; });
+		if (finished) {
+			if (feedbackError) { *feedbackError = [error retain]; }
+			if (hasFeedback) { *hasFeedback = receivedFeedback; }
+		}
+		return finished;
+	}
+};
+
+} // anonymous namespace
+
+
+/**
+ * Device-gated Metal 4 queue and allocator foundation.
+ *
+ * Phase 1 deliberately leaves all Vulkan command encoding and submission on
+ * the existing Metal path. This transport is created only when explicitly
+ * requested and survives only if a bounded empty-command-buffer commit returns
+ * successful feedback. Later phases can materialize MVKCommand streams here
+ * without changing the public Vulkan-facing queue object.
+ */
+class MVKMetal4CommandTransport {
+
+public:
+	static MVKMetal4CommandTransport* create(MVKQueue* owner) {
+		MVKDevice* device = owner->getDevice();
+		if (device->getMVKConfig().useMetalPrivateAPI) {
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command backend disabled because Metal private APIs are active.");
+			return nullptr;
+		}
+
+		if (!owner->getPhysicalDevice()->getMTLDeviceCapabilities().supportsMetal4 ||
+			!mvkOSVersionIsAtLeast(26.0)) {
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command backend requested but unavailable on this OS or GPU.");
+			return nullptr;
+		}
+
+		if (@available(macOS 26.0, iOS 26.0, *)) {
+			id<MTLDevice> mtlDevice = owner->getMTLDevice();
+			if (![mtlDevice respondsToSelector:@selector(newMTL4CommandQueueWithDescriptor:error:)] ||
+				![mtlDevice respondsToSelector:@selector(newCommandAllocatorWithDescriptor:error:)] ||
+				![mtlDevice respondsToSelector:@selector(newCommandBuffer)]) {
+				device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+								  "Metal 4 command backend requested but required command factories are unavailable.");
+				return nullptr;
+			}
+
+			NSString* queueLabel = [NSString stringWithFormat:@"%s Metal 4", owner->getName().c_str()];
+			MTL4CommandQueueDescriptor* queueDescriptor = [MTL4CommandQueueDescriptor new];
+			queueDescriptor.label = queueLabel;
+			NSError* error = nil;
+			id<MTL4CommandQueue> commandQueue =
+				[mtlDevice newMTL4CommandQueueWithDescriptor:queueDescriptor error:&error];
+			[queueDescriptor release];
+			if (!commandQueue) {
+				string reason = describeMetal4CommandError(error, "unknown queue creation error");
+				device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+								  "Metal 4 command queue creation failed; preserving the legacy backend: %s",
+								  reason.c_str());
+				return nullptr;
+			}
+
+			double requestedAllocatorCount = mvkGetEnvVarNumber(
+				"MVK_CONFIG_METAL4_COMMAND_ALLOCATOR_MAX",
+				kMetal4CommandAllocatorDefaultCount);
+			size_t allocatorCount = static_cast<size_t>(mvkClamp(
+				requestedAllocatorCount,
+				1.0,
+				kMetal4CommandAllocatorMaximumCount));
+			vector<id<MTL4CommandAllocator>> allocators;
+			allocators.reserve(allocatorCount);
+			for (size_t allocatorIndex = 0; allocatorIndex < allocatorCount; allocatorIndex++) {
+				MTL4CommandAllocatorDescriptor* allocatorDescriptor = [MTL4CommandAllocatorDescriptor new];
+				allocatorDescriptor.label = [NSString stringWithFormat:@"%s Metal 4 allocator %zu",
+					owner->getName().c_str(), allocatorIndex];
+				error = nil;
+				id<MTL4CommandAllocator> allocator =
+					[mtlDevice newCommandAllocatorWithDescriptor:allocatorDescriptor error:&error];
+				[allocatorDescriptor release];
+				if (!allocator) {
+					string reason = describeMetal4CommandError(error, "unknown allocator creation error");
+					device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+									  "Metal 4 command allocator creation failed; preserving the legacy backend: %s",
+									  reason.c_str());
+					for (id<MTL4CommandAllocator> createdAllocator : allocators) {
+						[createdAllocator release];
+					}
+					[commandQueue release];
+					return nullptr;
+				}
+				allocators.push_back(allocator);
+			}
+
+			double requestedTimeoutMs = mvkGetEnvVarNumber(
+				"MVK_CONFIG_METAL4_COMMAND_VALIDATION_TIMEOUT_MS",
+				kMetal4CommandValidationDefaultTimeoutMs);
+			uint64_t validationTimeoutNs = static_cast<uint64_t>(mvkClamp(
+				requestedTimeoutMs,
+				kMetal4CommandValidationMinimumTimeoutMs,
+				kMetal4CommandValidationMaximumTimeoutMs) * NSEC_PER_MSEC);
+
+			auto* transport = new MVKMetal4CommandTransport(
+				device,
+				mtlDevice,
+				commandQueue,
+				std::move(allocators),
+				validationTimeoutNs);
+			string validationFailure;
+			if (!transport->validate(&validationFailure)) {
+				device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+								  "Metal 4 command transport validation failed; preserving the legacy backend: %s",
+								  validationFailure.c_str());
+				delete transport;
+				return nullptr;
+			}
+
+			device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+							  "Metal 4 command transport validated with %zu allocators; Vulkan command encoding remains on the legacy backend until encoder migration.",
+							  allocatorCount);
+			return transport;
+		}
+		return nullptr;
+	}
+
+	~MVKMetal4CommandTransport() {
+		uint64_t leaseAttempts;
+		uint64_t leaseTimeouts;
+		uint64_t commits;
+		uint64_t commitFailures;
+		uint64_t commitTimeouts;
+		{
+			lock_guard<mutex> guard(_lock);
+			_shuttingDown = true;
+			leaseAttempts = _leaseAttempts;
+			leaseTimeouts = _leaseTimeouts;
+			commits = _commits;
+			commitFailures = _commitFailures;
+			commitTimeouts = _commitTimeouts;
+		}
+		_allocatorReady.notify_all();
+		_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						  "Metal 4 command transport summary: allocators=%zu, lease_attempts=%llu, lease_timeouts=%llu, commits=%llu, commit_failures=%llu, commit_timeouts=%llu.",
+						  _allocators.size(),
+						  static_cast<unsigned long long>(leaseAttempts),
+						  static_cast<unsigned long long>(leaseTimeouts),
+						  static_cast<unsigned long long>(commits),
+						  static_cast<unsigned long long>(commitFailures),
+						  static_cast<unsigned long long>(commitTimeouts));
+		for (auto& slot : _allocators) { [slot.allocator release]; }
+		[_queue release];
+	}
+
+private:
+	struct AllocatorSlot {
+		id<MTL4CommandAllocator> allocator = nil;
+		bool leased = false;
+	};
+
+	MVKMetal4CommandTransport(MVKDevice* device,
+								 id<MTLDevice> mtlDevice,
+								 id<MTL4CommandQueue> queue,
+								 vector<id<MTL4CommandAllocator>>&& allocators,
+								 uint64_t validationTimeoutNs) :
+		_device(device),
+		_mtlDevice(mtlDevice),
+		_queue(queue),
+		_validationTimeoutNs(validationTimeoutNs) {
+		_allocators.reserve(allocators.size());
+		for (id<MTL4CommandAllocator> allocator : allocators) {
+			_allocators.push_back({allocator, false});
+		}
+	}
+
+	bool leaseAllocator(size_t* slotIndex, id<MTL4CommandAllocator>* allocator) {
+		unique_lock<mutex> guard(_lock);
+		_leaseAttempts++;
+		bool available = _allocatorReady.wait_for(
+			guard,
+			chrono::nanoseconds(_validationTimeoutNs),
+			[this] {
+				if (_shuttingDown) { return true; }
+				for (const auto& slot : _allocators) {
+					if (!slot.leased) { return true; }
+				}
+				return false;
+			});
+		if (!available || _shuttingDown) {
+			_leaseTimeouts++;
+			return false;
+		}
+		for (size_t index = 0; index < _allocators.size(); index++) {
+			if (!_allocators[index].leased) {
+				_allocators[index].leased = true;
+				*slotIndex = index;
+				*allocator = _allocators[index].allocator;
+				return true;
+			}
+		}
+		_leaseTimeouts++;
+		return false;
+	}
+
+	void releaseAllocator(size_t slotIndex) {
+		{
+			lock_guard<mutex> guard(_lock);
+			if (slotIndex < _allocators.size()) { _allocators[slotIndex].leased = false; }
+		}
+		_allocatorReady.notify_one();
+	}
+
+	bool validate(string* failureReason) {
+		if (@available(macOS 26.0, iOS 26.0, *)) {
+			size_t allocatorIndex = 0;
+			id<MTL4CommandAllocator> allocator = nil;
+			if (!leaseAllocator(&allocatorIndex, &allocator)) {
+				*failureReason = "command allocator lease timed out";
+				return false;
+			}
+
+			id<MTL4CommandBuffer> commandBuffer = [_mtlDevice newCommandBuffer];
+			if (!commandBuffer) {
+				releaseAllocator(allocatorIndex);
+				*failureReason = "MTL4CommandBuffer creation returned nil";
+				return false;
+			}
+			commandBuffer.label = @"MoltenVK Metal 4 command transport validation";
+			[commandBuffer beginCommandBufferWithAllocator:allocator];
+			[commandBuffer endCommandBuffer];
+			releaseAllocator(allocatorIndex);
+
+			auto context = make_shared<MVKMetal4CommandFeedbackContext>(
+				_queue,
+				commandBuffer,
+				allocator);
+			MTL4CommitOptions* options = [MTL4CommitOptions new];
+			[options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+				context->complete(feedback);
+			}];
+			id<MTL4CommandBuffer> commandBuffers[] = {commandBuffer};
+			[_queue commit:commandBuffers count:1 options:options];
+			[options release];
+			[commandBuffer release];
+			{
+				lock_guard<mutex> guard(_lock);
+				_commits++;
+			}
+
+			NSError* feedbackError = nil;
+			bool receivedFeedback = false;
+			bool completed = context->waitFor(
+				_validationTimeoutNs,
+				&feedbackError,
+				&receivedFeedback);
+			if (!completed) {
+				lock_guard<mutex> guard(_lock);
+				_commitTimeouts++;
+				*failureReason = "command queue feedback timed out";
+				return false;
+			}
+			if (!receivedFeedback || feedbackError) {
+				{
+					lock_guard<mutex> guard(_lock);
+					_commitFailures++;
+				}
+				*failureReason = receivedFeedback
+					? describeMetal4CommandError(feedbackError, "unknown command queue feedback error")
+					: "command queue returned no feedback object";
+				[feedbackError release];
+				return false;
+			}
+			[feedbackError release];
+			return true;
+		}
+		*failureReason = "Metal 4 command APIs are unavailable at runtime";
+		return false;
+	}
+
+	MVKDevice* _device;
+	id<MTLDevice> _mtlDevice;
+	id<MTL4CommandQueue> _queue;
+	vector<AllocatorSlot> _allocators;
+	mutex _lock;
+	condition_variable _allocatorReady;
+	uint64_t _validationTimeoutNs;
+	uint64_t _leaseAttempts = 0;
+	uint64_t _leaseTimeouts = 0;
+	uint64_t _commits = 0;
+	uint64_t _commitFailures = 0;
+	uint64_t _commitTimeouts = 0;
+	bool _shuttingDown = false;
+};
+
+#endif
 
 
 #pragma mark -
@@ -62,7 +430,9 @@ MVKQueueFamily::~MVKQueueFamily() {
 #pragma mark -
 #pragma mark MVKQueue
 
-void MVKQueue::propagateDebugName() { setMetalObjectLabel(_mtlQueue, _debugName); }
+void MVKQueue::propagateDebugName() {
+	setMetalObjectLabel(_mtlQueue, _debugName);
+}
 
 
 #pragma mark Queue submissions
@@ -337,10 +707,33 @@ void MVKQueue::initMTLCommandQueue() {
 		_submissionCaptureScope->makeDefault();
 	}
 	_submissionCaptureScope->beginScope();	// Allow Xcode to capture the first frame if desired.
+	initMetal4CommandTransport();
+}
+
+void MVKQueue::initMetal4CommandTransport() {
+	if (mvkGetEnvVarNumber("MVK_CONFIG_METAL4_COMMAND_BACKEND", 0.0) == 0.0) { return; }
+
+#if MVK_USE_METAL_PRIVATE_API
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						   "Metal 4 command backend disabled in Metal private-API builds.");
+#elif MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	_metal4CommandTransport = MVKMetal4CommandTransport::create(this);
+#else
+	_device->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
+						   "Metal 4 command backend requested but excluded from this MoltenVK target.");
+#endif
+}
+
+void MVKQueue::destroyMetal4CommandTransport() {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	delete _metal4CommandTransport;
+#endif
+	_metal4CommandTransport = nullptr;
 }
 
 MVKQueue::~MVKQueue() {
 	destroyExecQueue();
+	destroyMetal4CommandTransport();
 	_submissionCaptureScope->destroy();
 	_device->removeResidencySet(_mtlQueue);
 

@@ -32,6 +32,7 @@ class MVKQueue;
 class MVKQueueSubmission;
 class MVKPhysicalDevice;
 class MVKGPUCaptureScope;
+class MVKMetal4CommandTransport;
 
 
 #pragma mark -
@@ -90,6 +91,9 @@ public:
 	/** Return the name of this queue. */
 	const std::string& getName() { return _name; }
 
+	/** Returns whether the default-off Metal 4 command transport passed its runtime validation. */
+	bool isMetal4CommandTransportEnabled() const { return _metal4CommandTransport != nullptr; }
+
 #pragma mark Queue submissions
 
 	/** Submits the specified command buffers to the queue. */
@@ -140,6 +144,8 @@ protected:
 	void initName();
 	void initExecQueue();
 	void initMTLCommandQueue();
+	void initMetal4CommandTransport();
+	void destroyMetal4CommandTransport();
 	void destroyExecQueue();
 	VkResult submit(MVKQueueSubmission* qSubmit);
 	NSString* getMTLCommandBufferLabel(MVKCommandUse cmdUse);
@@ -152,6 +158,7 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+	MVKMetal4CommandTransport* _metal4CommandTransport = nullptr;
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;

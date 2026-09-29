@@ -1718,15 +1718,19 @@ void MVKPhysicalDevice::getProperties(VkPhysicalDeviceProperties2* properties) {
 				// Metal keeps mesh outputs in the 32 KB of threadgroup memory, together with any shared memory
 				// and a small header, so a shader cannot use both maximums at once. Metal also limits threadgroup
 				// memory plus the mesh vertex data to 60 KB, which caps the outputs at about 30 KB.
+				// This output limit is below the Vulkan minimum of 32768 bytes, which Metal cannot provide.
 				meshProps->maxMeshSharedMemorySize = 28672;
 				meshProps->maxMeshPayloadAndSharedMemorySize = 28672 + 16384;
 				meshProps->maxMeshOutputMemorySize = 30720 - 512;
-				meshProps->maxMeshPayloadAndOutputMemorySize = (30720 - 512) + 16384;
+				// Without task shaders a mesh shader has no payload, so only maxMeshOutputMemorySize limits its outputs.
+				meshProps->maxMeshPayloadAndOutputMemorySize = 48128;
 				// Metal allows 124 unique mesh output scalars, including the position.
+				// This is below the Vulkan minimum of 128 components, which Metal cannot provide.
 				meshProps->maxMeshOutputComponents = 120;
 				meshProps->maxMeshOutputVertices = 256;
 				meshProps->maxMeshOutputPrimitives = 256;
-				meshProps->maxMeshOutputLayers = 1;
+				// A mesh primitive selects its layer with render_target_array_index.
+				meshProps->maxMeshOutputLayers = _properties.limits.maxFramebufferLayers;
 				meshProps->maxMeshMultiviewViewCount = 1;
 				meshProps->meshOutputPerVertexGranularity = 32;
 				meshProps->meshOutputPerPrimitiveGranularity = 32;

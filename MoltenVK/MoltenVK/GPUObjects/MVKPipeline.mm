@@ -2248,7 +2248,7 @@ id<MTLComputePipelineState> MVKMetal4CompilerService::newMTLComputePipelineState
 #pragma mark - MVKPipelineLayout
 
 bool MVKPipelineLayout::stageUsesPushConstants(MVKShaderStage stage) const {
-	return mvkIsAnyFlagEnabled(_pushConstantStages, mvkVkShaderStageFlagBitsFromMVKShaderStage(stage));
+	return mvkIsAnyFlagEnabled(_pushConstantStages, mvkVkShaderStageFlagsBoundToMVKShaderStage(stage));
 }
 
 /** Gets the layout for use with the Metal binding API (rather than argument buffers). */
@@ -2388,7 +2388,7 @@ void MVKPipelineLayout::populateShaderConversionConfig(SPIRVToMSLConversionConfi
 			MVKShaderStageResourceBinding resCount = desc.totalResourceCount();
 			for (uint32_t i = 0; i < kMVKShaderStageCount; i++) {
 				auto stage = static_cast<MVKShaderStage>(i);
-				bool used = mvkIsAnyFlagEnabled(desc.stageFlags, mvkVkShaderStageFlagBitsFromMVKShaderStage(stage));
+				bool used = mvkIsAnyFlagEnabled(desc.stageFlags, mvkVkShaderStageFlagsBoundToMVKShaderStage(stage));
 				if (argbuf) {
 					binding.stages[stage].textureIndex = argBufResIdx;
 					binding.stages[stage].bufferIndex = argBufResIdx + resCount.textureIndex;
@@ -3125,6 +3125,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 					pFragmentFB = &pFeedbackInfo->pPipelineStageCreationFeedbacks[i];
 				}
 				break;
+			case VK_SHADER_STAGE_MESH_BIT_EXT:
+				// A mesh shader occupies the vertex stage of this pipeline, including its resources.
+				pVertexSS = pSS;
+				_isMeshPipeline = true;
+				if (pFeedbackInfo && pFeedbackInfo->pPipelineStageCreationFeedbacks) {
+					pVertexFB = &pFeedbackInfo->pPipelineStageCreationFeedbacks[i];
+				}
+				break;
+			case VK_SHADER_STAGE_TASK_BIT_EXT:
+				setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCreateGraphicsPipelines(): Task shaders are not supported."));
+				return;
 			default:
 				break;
 		}
@@ -3504,7 +3515,9 @@ void MVKGraphicsPipeline::initMTLRenderPipelineState(const VkGraphicsPipelineCre
 		}
 	}
 
-	if (!isTessellationPipeline()) {
+	if (isMeshPipeline()) {
+		initMeshMTLRenderPipelineState(pCreateInfo, reflectData, pVertexSS, pVertexFB, pFragmentSS, pFragmentFB);
+	} else if (!isTessellationPipeline()) {
 		MTLRenderPipelineDescriptor* plDesc = newMTLRenderPipelineDescriptor(pCreateInfo, reflectData, pVertexSS, pVertexFB, pFragmentSS, pFragmentFB);	// temp retain
 		if (plDesc) {
 			auto viewMask = getRenderingCreateInfo(pCreateInfo)->viewMask;
@@ -3612,6 +3625,120 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	setMetalObjectLabel(plDesc, ((MVKPipelineLayout*)pCreateInfo->layout)->getDebugName());
 
 	return plDesc;
+}
+
+static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfiguration& dst, const MVKOnePerEnumEntry<uint8_t, MVKImplicitBuffer>& src);
+
+// Clones the resource bindings assigned to the vertex stage, so that a mesh shader,
+// which occupies the vertex stage of this pipeline, resolves the same Metal resource indexes.
+static void addMeshStageResourceBindings(SPIRVToMSLConversionConfiguration& shaderConfig) {
+	size_t rbCnt = shaderConfig.resourceBindings.size();
+	for (size_t rbIdx = 0; rbIdx < rbCnt; rbIdx++) {
+		if (shaderConfig.resourceBindings[rbIdx].resourceBinding.stage == spv::ExecutionModelVertex) {
+			mvk::MSLResourceBinding rb = shaderConfig.resourceBindings[rbIdx];
+			rb.resourceBinding.stage = spv::ExecutionModelMeshEXT;
+			shaderConfig.resourceBindings.push_back(rb);
+		}
+	}
+	size_t dbCnt = shaderConfig.dynamicBufferDescriptors.size();
+	for (size_t dbIdx = 0; dbIdx < dbCnt; dbIdx++) {
+		if (shaderConfig.dynamicBufferDescriptors[dbIdx].stage == spv::ExecutionModelVertex) {
+			mvk::DescriptorBinding db = shaderConfig.dynamicBufferDescriptors[dbIdx];
+			db.stage = spv::ExecutionModelMeshEXT;
+			shaderConfig.dynamicBufferDescriptors.push_back(db);
+		}
+	}
+}
+
+// Creates the Metal mesh render pipeline for a pipeline that uses a mesh shader instead of vertex input.
+// The mesh shader uses the vertex stage resources of this pipeline, and the fragment and output state
+// is built exactly as for a vertex pipeline, then copied into the mesh render pipeline descriptor.
+void MVKGraphicsPipeline::initMeshMTLRenderPipelineState(const VkGraphicsPipelineCreateInfo* pCreateInfo,
+														 const SPIRVTessReflectionData& reflectData,
+														 const VkPipelineShaderStageCreateInfo* pMeshSS,
+														 VkPipelineCreationFeedback* pMeshFB,
+														 const VkPipelineShaderStageCreateInfo* pFragmentSS,
+														 VkPipelineCreationFeedback* pFragmentFB) {
+	if ( !getPhysicalDevice()->supportsMeshShaders() ) {
+		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCreateGraphicsPipelines(): Mesh shaders are not supported on this device."));
+		_hasValidMTLPipelineStates = false;
+		return;
+	}
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		SPIRVToMSLConversionConfiguration shaderConfig;
+		initShaderConversionConfig(shaderConfig, pCreateInfo, reflectData);
+		addMeshStageResourceBindings(shaderConfig);
+
+		// Mesh shader
+		const auto& implicit = _stageResources[kMVKShaderStageVertex].implicitBuffers.ids;
+		shaderConfig.options.entryPointStage = spv::ExecutionModelMeshEXT;
+		shaderConfig.options.entryPointName = pMeshSS->pName;
+		addCommonImplicitBuffersToShaderConfig(shaderConfig, implicit);
+		shaderConfig.options.mslOptions.capture_output_to_buffer = false;
+		shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
+
+		MVKMTLFunction meshFunc = getMTLFunction(shaderConfig, pMeshSS, pMeshFB, _vertexModule, "Mesh");
+		id<MTLFunction> mtlMeshFunc = meshFunc.getMTLFunction();
+		if ( !mtlMeshFunc ) {
+			_hasValidMTLPipelineStates = false;
+			return;
+		}
+		auto& meshRslts = meshFunc.shaderConversionResults;
+		populateResourceUsage(_stageResources[kMVKShaderStageVertex], shaderConfig, meshRslts, spv::ExecutionModelMeshEXT);
+		_layout->populateBindOperations(_stageResources[kMVKShaderStageVertex].bindScript, shaderConfig, spv::ExecutionModelMeshEXT);
+		if ( !verifyImplicitBuffers(kMVKShaderStageVertex) ) {
+			_hasValidMTLPipelineStates = false;
+			return;
+		}
+		_meshThreadgroupSize = meshFunc.threadGroupSize;
+		if (meshRslts.isRasterizationDisabled) { pFragmentSS = nullptr; }
+
+		// Fragment shader and outputs. Fragment inputs are matched to mesh outputs by location.
+		MTLRenderPipelineDescriptor* rastDesc = [MTLRenderPipelineDescriptor new];		// temp retain
+		SPIRVShaderOutputs meshOutputs;
+		bool isValid = addFragmentShaderToPipeline(rastDesc, pCreateInfo, shaderConfig, meshOutputs, pFragmentSS, pFragmentFB);
+		if (isValid) { addFragmentOutputToPipeline(rastDesc, pCreateInfo); }
+
+		MTLMeshRenderPipelineDescriptor* plDesc = [MTLMeshRenderPipelineDescriptor new];	// temp retain
+		plDesc.meshFunction = mtlMeshFunc;
+		plDesc.fragmentFunction = rastDesc.fragmentFunction;
+		plDesc.rasterizationEnabled = !meshRslts.isRasterizationDisabled;
+		plDesc.rasterSampleCount = rastDesc.rasterSampleCount;
+		plDesc.alphaToCoverageEnabled = rastDesc.alphaToCoverageEnabled;
+		plDesc.alphaToOneEnabled = rastDesc.alphaToOneEnabled;
+		plDesc.depthAttachmentPixelFormat = rastDesc.depthAttachmentPixelFormat;
+		plDesc.stencilAttachmentPixelFormat = rastDesc.stencilAttachmentPixelFormat;
+		for (uint32_t caIdx = 0; caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
+			MTLRenderPipelineColorAttachmentDescriptor* srcCA = rastDesc.colorAttachments[caIdx];
+			MTLRenderPipelineColorAttachmentDescriptor* dstCA = plDesc.colorAttachments[caIdx];
+			dstCA.pixelFormat = srcCA.pixelFormat;
+			dstCA.writeMask = srcCA.writeMask;
+			dstCA.blendingEnabled = srcCA.blendingEnabled;
+			dstCA.rgbBlendOperation = srcCA.rgbBlendOperation;
+			dstCA.sourceRGBBlendFactor = srcCA.sourceRGBBlendFactor;
+			dstCA.destinationRGBBlendFactor = srcCA.destinationRGBBlendFactor;
+			dstCA.alphaBlendOperation = srcCA.alphaBlendOperation;
+			dstCA.sourceAlphaBlendFactor = srcCA.sourceAlphaBlendFactor;
+			dstCA.destinationAlphaBlendFactor = srcCA.destinationAlphaBlendFactor;
+		}
+		[rastDesc release];																		// temp release
+		setMetalObjectLabel(plDesc, ((MVKPipelineLayout*)pCreateInfo->layout)->getDebugName());
+
+		if (isValid) {
+			NSError* mtlErr = nil;
+			_mtlPipelineState = [getMTLDevice() newRenderPipelineStateWithMeshDescriptor: plDesc
+			                                                                     options: MTLPipelineOptionNone
+			                                                                  reflection: nil
+			                                                                       error: &mtlErr];	// retained
+			if ( !_mtlPipelineState ) {
+				setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Could not compile mesh render pipeline (Error code %li): %s", (long)mtlErr.code, mtlErr.localizedDescription.UTF8String));
+			}
+		}
+		[plDesc release];																		// temp release
+		if ( !isValid || !_mtlPipelineState ) { _hasValidMTLPipelineStates = false; }
+	} else {
+		_hasValidMTLPipelineStates = false;
+	}
 }
 
 // Returns a retained MTLComputePipelineDescriptor for the vertex stage of a tessellated draw constructed from this instance, or nil if an error occurs.
@@ -4528,9 +4655,10 @@ void MVKGraphicsPipeline::initReservedVertexAttributeBufferCount(const VkGraphic
 	int32_t maxBinding = -1;
 	uint32_t xltdBuffCnt = 0;
 
-	const VkPipelineVertexInputStateCreateInfo* pVI = pCreateInfo->pVertexInputState;
-	uint32_t vaCnt = pVI->vertexAttributeDescriptionCount;
-	uint32_t vbCnt = pVI->vertexBindingDescriptionCount;
+	// Mesh pipelines ignore vertex input state, and the app may leave it unset.
+	const VkPipelineVertexInputStateCreateInfo* pVI = isMeshPipeline() ? nullptr : pCreateInfo->pVertexInputState;
+	uint32_t vaCnt = pVI ? pVI->vertexAttributeDescriptionCount : 0;
+	uint32_t vbCnt = pVI ? pVI->vertexBindingDescriptionCount : 0;
 
 	// Determine the highest binding number used by the vertex buffers
 	for (uint32_t vbIdx = 0; vbIdx < vbCnt; vbIdx++) {

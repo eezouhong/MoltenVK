@@ -52,6 +52,16 @@ struct MVKShaderImplicitRezBinding {
 	uint32_t stages[kMVKShaderStageCount];
 };
 
+/**
+ * Returns the Vulkan shader stages whose resources are bound to the specified MoltenVK shader stage.
+ * A mesh shader (VK_EXT_mesh_shader) occupies the vertex stage of a graphics pipeline.
+ */
+static inline VkShaderStageFlags mvkVkShaderStageFlagsBoundToMVKShaderStage(MVKShaderStage stage) {
+	VkShaderStageFlags flags = mvkVkShaderStageFlagBitsFromMVKShaderStage(stage);
+	if (stage == kMVKShaderStageVertex) { flags |= VK_SHADER_STAGE_MESH_BIT_EXT; }
+	return flags;
+}
+
 #pragma mark - MVKDescriptorBindOperation
 
 enum class MVKDescriptorBindOperationCode : uint8_t {
@@ -363,6 +373,12 @@ public:
 	/** Returns whether this pipeline has tessellation shaders. */
 	bool isTessellationPipeline() { return _isTessellationPipeline; }
 
+	/** Returns whether this pipeline draws with a mesh shader (VK_EXT_mesh_shader) instead of vertex input. */
+	bool isMeshPipeline() const { return _isMeshPipeline; }
+
+	/** Returns the threadgroup size of the mesh shader of a mesh pipeline. */
+	MTLSize getMeshThreadgroupSize() const { return _meshThreadgroupSize; }
+
 	/** Returns the number of output tessellation patch control points. */
 	uint32_t getOutputControlPointCount() { return _outputControlPointCount; }
 
@@ -463,6 +479,7 @@ protected:
 	void initDynamicState(const VkGraphicsPipelineCreateInfo* pCreateInfo);
 	void initSampleLocations(const VkGraphicsPipelineCreateInfo* pCreateInfo);
     void initMTLRenderPipelineState(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, VkPipelineCreationFeedback* pPipelineFB, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, const VkPipelineShaderStageCreateInfo* pTessCtlSS, VkPipelineCreationFeedback* pTessCtlFB, const VkPipelineShaderStageCreateInfo* pTessEvalSS, VkPipelineCreationFeedback* pTessEvalFB, const VkPipelineShaderStageCreateInfo* pFragmentSS, VkPipelineCreationFeedback* pFragmentFB);
+    void initMeshMTLRenderPipelineState(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, const VkPipelineShaderStageCreateInfo* pMeshSS, VkPipelineCreationFeedback* pMeshFB, const VkPipelineShaderStageCreateInfo* pFragmentSS, VkPipelineCreationFeedback* pFragmentFB);
     void initShaderConversionConfig(mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData);
 	void initReservedVertexAttributeBufferCount(const VkGraphicsPipelineCreateInfo* pCreateInfo);
     void addVertexInputToShaderConversionConfig(mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkGraphicsPipelineCreateInfo* pCreateInfo);
@@ -531,6 +548,7 @@ protected:
 	MVKShaderImplicitRezBinding _reservedVertexAttributeBufferCount;
 	VkPrimitiveTopology _vkPrimitiveTopology;
 	uint32_t _outputControlPointCount;
+	MTLSize _meshThreadgroupSize = {1, 1, 1};
 
 	MVKShaderModule* _vertexModule = nullptr;
 	MVKShaderModule* _tessCtlModule = nullptr;
@@ -545,6 +563,7 @@ protected:
 	bool _isRasterizing = false;
 	bool _isRasterizingColor = false;
 	bool _isTessellationPipeline = false;
+	bool _isMeshPipeline = false;
 	bool _inputAttachmentIsDSAttachment = false;
 	bool _hasRemappedAttachmentLocations = false;
 };

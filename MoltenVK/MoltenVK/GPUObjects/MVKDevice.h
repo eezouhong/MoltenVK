@@ -444,6 +444,12 @@ public:
 	/** Returns info on the sizes of argument buffers. */
 	const MVKPhysicalDeviceArgumentBufferSizes& getArgumentBufferSizes() const { return _argumentBufferSizes; }
 
+	/**
+	 * Returns whether VK_EXT_mesh_shader is exposed. Requires a GPU with Metal mesh render pipeline
+	 * support (Apple7 or Mac2 family, MSL 3.0, macOS 13 or iOS 16).
+	 */
+	bool supportsMeshShaders() const { return _supportsMeshShaders; }
+
 
 #pragma mark Construction
 
@@ -532,6 +538,7 @@ protected:
 	MVKPhysicalDeviceArgumentBufferSizes _argumentBufferSizes;
 	bool _hasUnifiedMemory = true;
 	bool _isUsingMetalArgumentBuffers = true;
+	bool _supportsMeshShaders = false;
 };
 
 

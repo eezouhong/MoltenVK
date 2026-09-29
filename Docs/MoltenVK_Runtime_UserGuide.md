@@ -374,7 +374,7 @@ In addition to core *Vulkan* functionality, **MoltenVK**  also supports the foll
     `vkCmdDrawMeshTasksIndirectCountEXT()` are not supported.*
   - *`maxMeshOutputMemorySize` (30208) and `maxMeshOutputComponents` (120) are below the Vulkan
     minimums (32768 and 128). Metal keeps mesh outputs in threadgroup memory and allows at most
-    124 mesh output scalars, including the position.*
+    124 mesh output scalars, including the position. See [VK_EXT_mesh_shader.md](VK_EXT_mesh_shader.md).*
 - `VK_EXT_metal_objects`
 - `VK_EXT_metal_surface`
 - `VK_EXT_non_seamless_cube_map`

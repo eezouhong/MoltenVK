@@ -96,6 +96,9 @@ if a patch fails to apply.
 - **_SPIRV-Cross_** `0001-MSL-Resolve-LocalSizeId-workgroup-size.patch`: shaders that declare
   their workgroup size with `LocalSizeId` were translated with a zero workgroup size, which hung
   the GPU in mesh shaders and broke `vkCmdDispatchBase` offsets in compute shaders.
+- **_SPIRV-Cross_** `0002-MSL-Pass-mesh-shader-builtin-inputs-with-their-builtin-type.patch`: a
+  mesh shader that reads a builtin input whose SPIR-V type differs from its MSL builtin type, such
+  as `gl_DrawID`, was translated to MSL that does not compile.
 
 >***Note:*** If, after updating to new versions of the external libraries, you encounter 
 >build errors when building **MoltenVK**, review the instructions in the sections below 

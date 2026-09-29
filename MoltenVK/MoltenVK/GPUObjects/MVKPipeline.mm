@@ -3674,6 +3674,7 @@ void MVKGraphicsPipeline::initMeshMTLRenderPipelineState(const VkGraphicsPipelin
 		shaderConfig.options.entryPointStage = spv::ExecutionModelMeshEXT;
 		shaderConfig.options.entryPointName = pMeshSS->pName;
 		addCommonImplicitBuffersToShaderConfig(shaderConfig, implicit);
+		shaderConfig.options.mslOptions.draw_id_buffer_index = implicit[MVKImplicitBuffer::DrawId];
 		shaderConfig.options.mslOptions.capture_output_to_buffer = false;
 		shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
 

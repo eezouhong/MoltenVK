@@ -1345,6 +1345,16 @@ static MVKGraphicsPipeline* prepareMeshDraw(MVKCommandEncoder* cmdEncoder, const
 	return pipeline;
 }
 
+// Binds the DrawIndex value of a mesh draw, if the mesh shader reads it.
+static void bindMeshDrawID(MVKCommandEncoder* cmdEncoder, MVKGraphicsPipeline* pipeline, uint32_t drawID) {
+	if ( !pipeline->needsDrawIdBuffer() ) { return; }
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		[cmdEncoder->_mtlRenderEncoder setMeshBytes: &drawID
+		                                      length: sizeof(drawID)
+		                                     atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+	}
+}
+
 VkResult MVKCmdDrawMeshTasks::setContent(MVKCommandBuffer* cmdBuff,
 										 uint32_t groupCountX,
 										 uint32_t groupCountY,
@@ -1361,6 +1371,7 @@ void MVKCmdDrawMeshTasks::encode(MVKCommandEncoder* cmdEncoder) {
 	auto* pipeline = prepareMeshDraw(cmdEncoder, "vkCmdDrawMeshTasksEXT()");
 	if ( !pipeline ) { return; }
 
+	bindMeshDrawID(cmdEncoder, pipeline, 0);
 	if (@available(macOS 13.0, iOS 16.0, *)) {
 		[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroups: MTLSizeMake(_groupCountX, _groupCountY, _groupCountZ)
 		                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)
@@ -1395,6 +1406,7 @@ void MVKCmdDrawMeshTasksIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 		// VkDrawMeshTasksIndirectCommandEXT has the same layout as MTLDispatchThreadgroupsIndirectArguments.
 		VkDeviceSize mtlIndBuffOfst = _mtlIndirectBufferOffset;
 		for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
+			bindMeshDrawID(cmdEncoder, pipeline, drawIdx);
 			[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroupsWithIndirectBuffer: _mtlIndirectBuffer
 			                                               indirectBufferOffset: mtlIndBuffOfst
 			                                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)

@@ -73,6 +73,7 @@ struct MVKResourceBinder {
 		Vertex   = static_cast<uint32_t>(MVKMetalGraphicsStage::Vertex),
 		Fragment = static_cast<uint32_t>(MVKMetalGraphicsStage::Fragment),
 		Compute  = static_cast<uint32_t>(MVKMetalGraphicsStage::Count),
+		Mesh,     /**< Metal mesh function, which occupies the Metal vertex stage state of a mesh pipeline. */
 		Count
 	};
 	static const MVKResourceBinder& Get(Stage stage) GCC_CONST;
@@ -80,6 +81,7 @@ struct MVKResourceBinder {
 	static const MVKResourceBinder& Vertex()   { return Get(Stage::Vertex); }
 	static const MVKResourceBinder& Fragment() { return Get(Stage::Fragment); }
 	static const MVKResourceBinder& Compute()  { return Get(Stage::Compute); }
+	static const MVKResourceBinder& Mesh()     { return Get(Stage::Mesh); }
 };
 
 /** Provides dynamic dispatch for binding vertex buffers to an encoder. */
@@ -149,6 +151,8 @@ struct MVKUseResourceHelper {
 	};
 	MVKOnePerEnumEntry<Entry, MVKResourceUsageStages> entries;
 	std::unordered_map<id<MTLResource>, ResourceInfo> used;
+	/** Whether the Metal vertex stage resources are used by a mesh function, rather than a vertex function. */
+	bool meshStage = false;
 	/** Add a resource to the list of resources to use. */
 	void add(id<MTLResource> resource, MVKResourceUsageStages stage, bool write);
 	/**
@@ -284,6 +288,7 @@ enum class MVKMetalRenderEncoderStateFlag {
 	ScissorDirty,
 	PipelineReady,
 	SamplePositionsOverridden,
+	MeshStageBound,   /**< The Metal vertex stage resources are bound for a mesh function. */
 	Count
 };
 
@@ -359,6 +364,12 @@ struct MVKMetalGraphicsCommandEncoderState : public MVKMetalGraphicsCommandEncod
 	void markDirty(MVKRenderStateFlags flags) { _stateReady.removeAll(flags); }
 	/** Mark everything dirty that needs to be marked when changing pipelines. */
 	void changePipeline(MVKGraphicsPipeline* from, MVKGraphicsPipeline* to);
+
+	/**
+	 * Vertex and mesh functions share the Metal vertex stage binding state, but use different encoder setters.
+	 * Invalidates that state whenever the kind of function it is bound for changes.
+	 */
+	void setVertexStageIsMesh(bool isMesh);
 
 	void bindFragmentBuffer(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> buffer, VkDeviceSize offset, NSUInteger index);
 	void bindFragmentBytes(id<MTLRenderCommandEncoder> encoder, const void* data, size_t size, NSUInteger index);

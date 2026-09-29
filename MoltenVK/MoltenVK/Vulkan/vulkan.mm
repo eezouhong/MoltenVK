@@ -1632,6 +1632,44 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDrawIndexedIndirect(
 	MVKTraceVulkanCallEnd();
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDrawMeshTasksEXT(
+	VkCommandBuffer                             commandBuffer,
+	uint32_t                                    groupCountX,
+	uint32_t                                    groupCountY,
+	uint32_t                                    groupCountZ) {
+
+	MVKTraceVulkanCallStart();
+	MVKAddCmd(DrawMeshTasks, commandBuffer, groupCountX, groupCountY, groupCountZ);
+	MVKTraceVulkanCallEnd();
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDrawMeshTasksIndirectEXT(
+	VkCommandBuffer                             commandBuffer,
+	VkBuffer                                    buffer,
+	VkDeviceSize                                offset,
+	uint32_t                                    drawCount,
+	uint32_t                                    stride) {
+
+	MVKTraceVulkanCallStart();
+	MVKAddCmd(DrawMeshTasksIndirect, commandBuffer, buffer, offset, drawCount, stride);
+	MVKTraceVulkanCallEnd();
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDrawMeshTasksIndirectCountEXT(
+	VkCommandBuffer                             commandBuffer,
+	VkBuffer                                    buffer,
+	VkDeviceSize                                offset,
+	VkBuffer                                    countBuffer,
+	VkDeviceSize                                countBufferOffset,
+	uint32_t                                    maxDrawCount,
+	uint32_t                                    stride) {
+
+	MVKTraceVulkanCallStart();
+	MVKCommandBuffer* cmdBuff = MVKCommandBuffer::getMVKCommandBuffer(commandBuffer);
+	cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdDrawMeshTasksIndirectCountEXT(): Indirect count mesh draws are not supported.");
+	MVKTraceVulkanCallEnd();
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDispatch(
     VkCommandBuffer                             commandBuffer,
     uint32_t                                    x,

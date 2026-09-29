@@ -368,6 +368,13 @@ In addition to core *Vulkan* functionality, **MoltenVK**  also supports the foll
 - `VK_EXT_load_store_op_none`
 - `VK_EXT_memory_budget`
   - *Requires Metal 2.0.*
+- `VK_EXT_mesh_shader`
+  - *iOS and macOS, requires Metal 3 and a family 7 (A14) or better Apple GPU, or a Mac2 GPU.*
+  - *Mesh shaders only. Task shaders, multiview, mesh shader queries and
+    `vkCmdDrawMeshTasksIndirectCountEXT()` are not supported.*
+  - *`maxMeshOutputMemorySize` (30208) and `maxMeshOutputComponents` (120) are below the Vulkan
+    minimums (32768 and 128). Metal keeps mesh outputs in threadgroup memory and allows at most
+    124 mesh output scalars, including the position. See [VK_EXT_mesh_shader.md](VK_EXT_mesh_shader.md).*
 - `VK_EXT_metal_objects`
 - `VK_EXT_metal_surface`
 - `VK_EXT_non_seamless_cube_map`

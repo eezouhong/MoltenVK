@@ -1323,3 +1323,95 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
     }
 }
 
+
+
+#pragma mark -
+#pragma mark MVKCmdDrawMeshTasks
+
+// Returns the bound mesh pipeline after submitting all updated state to Metal,
+// or nullptr if the mesh draw cannot be encoded.
+static MVKGraphicsPipeline* prepareMeshDraw(MVKCommandEncoder* cmdEncoder, const char* cmdName) {
+	auto* pipeline = cmdEncoder->getGraphicsPipeline();
+	if ( !pipeline || !pipeline->isMeshPipeline() ) {
+		cmdEncoder->_cmdBuffer->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "%s: The bound graphics pipeline does not contain a mesh shader.", cmdName);
+		return nullptr;
+	}
+
+	cmdEncoder->restartMetalRenderPassIfNeeded();
+	cmdEncoder->_isIndexedDraw = false;
+	cmdEncoder->finalizeDrawState(kMVKGraphicsStageRasterization);	// Ensure all updated state has been submitted to Metal
+
+	if ( !pipeline->hasValidMTLPipelineStates() ) { return nullptr; }	// Abort if the pipeline could not be compiled.
+	return pipeline;
+}
+
+// Binds the DrawIndex value of a mesh draw, if the mesh shader reads it.
+static void bindMeshDrawID(MVKCommandEncoder* cmdEncoder, MVKGraphicsPipeline* pipeline, uint32_t drawID) {
+	if ( !pipeline->needsDrawIdBuffer() ) { return; }
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		[cmdEncoder->_mtlRenderEncoder setMeshBytes: &drawID
+		                                      length: sizeof(drawID)
+		                                     atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
+	}
+}
+
+VkResult MVKCmdDrawMeshTasks::setContent(MVKCommandBuffer* cmdBuff,
+										 uint32_t groupCountX,
+										 uint32_t groupCountY,
+										 uint32_t groupCountZ) {
+	_groupCountX = groupCountX;
+	_groupCountY = groupCountY;
+	_groupCountZ = groupCountZ;
+	return VK_SUCCESS;
+}
+
+void MVKCmdDrawMeshTasks::encode(MVKCommandEncoder* cmdEncoder) {
+	if (_groupCountX == 0 || _groupCountY == 0 || _groupCountZ == 0) { return; }	// Nothing to do.
+
+	auto* pipeline = prepareMeshDraw(cmdEncoder, "vkCmdDrawMeshTasksEXT()");
+	if ( !pipeline ) { return; }
+
+	bindMeshDrawID(cmdEncoder, pipeline, 0);
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroups: MTLSizeMake(_groupCountX, _groupCountY, _groupCountZ)
+		                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)
+		                          threadsPerMeshThreadgroup: pipeline->getMeshThreadgroupSize()];
+	}
+}
+
+
+#pragma mark -
+#pragma mark MVKCmdDrawMeshTasksIndirect
+
+VkResult MVKCmdDrawMeshTasksIndirect::setContent(MVKCommandBuffer* cmdBuff,
+												 VkBuffer buffer,
+												 VkDeviceSize offset,
+												 uint32_t drawCount,
+												 uint32_t stride) {
+	MVKBuffer* mvkBuffer = (MVKBuffer*)buffer;
+	_mtlIndirectBuffer = mvkBuffer->getMTLBuffer();
+	_mtlIndirectBufferOffset = mvkBuffer->getMTLBufferOffset() + offset;
+	_mtlIndirectBufferStride = stride ? stride : sizeof(VkDrawMeshTasksIndirectCommandEXT);
+	_drawCount = drawCount;
+	return VK_SUCCESS;
+}
+
+void MVKCmdDrawMeshTasksIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+	if (_drawCount == 0) { return; }	// Nothing to do.
+
+	auto* pipeline = prepareMeshDraw(cmdEncoder, "vkCmdDrawMeshTasksIndirectEXT()");
+	if ( !pipeline ) { return; }
+
+	if (@available(macOS 13.0, iOS 16.0, *)) {
+		// VkDrawMeshTasksIndirectCommandEXT has the same layout as MTLDispatchThreadgroupsIndirectArguments.
+		VkDeviceSize mtlIndBuffOfst = _mtlIndirectBufferOffset;
+		for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
+			bindMeshDrawID(cmdEncoder, pipeline, drawIdx);
+			[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroupsWithIndirectBuffer: _mtlIndirectBuffer
+			                                               indirectBufferOffset: mtlIndBuffOfst
+			                                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)
+			                                          threadsPerMeshThreadgroup: pipeline->getMeshThreadgroupSize()];
+			mtlIndBuffOfst += _mtlIndirectBufferStride;
+		}
+	}
+}

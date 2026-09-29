@@ -1,0 +1,39 @@
+From c70ab2ac98220871751e582c02f8e1e53954ea59 Mon Sep 17 00:00:00 2001
+From: Hong Zou <hong@turn.app>
+Date: Tue, 29 Sep 2026 11:10:58 -0700
+Subject: [PATCH] MSL: Pass builtin inputs of mesh shaders with their builtin
+ type.
+
+A mesh shader's main body is emitted as a separate function, and the
+builtin inputs it uses are passed to it as arguments. argument_decl()
+skipped the builtin type override for every mesh shader argument, so an
+input whose SPIR-V type differs from its MSL builtin type kept the SPIR-V
+type: gl_DrawID is declared as uint in the entry point but passed as
+thread int&, which does not compile.
+
+Use the builtin type for the builtin inputs of mesh shaders, as in other
+stages. Mesh shader outputs keep their declared types.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ spirv_msl.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index eb874c9b..42547854 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -16287,7 +16287,9 @@ string CompilerMSL::argument_decl(const SPIRFunction::Parameter &arg)
+ 
+ 	if (var.basevariable && (var.basevariable == stage_in_ptr_var_id || var.basevariable == stage_out_ptr_var_id))
+ 		decl = join(cv_qualifier, type_to_glsl(type, arg.id));
+-	else if (builtin && !is_mesh_shader())
++	// Mesh shader outputs keep their declared types, but builtin inputs are declared with the
++	// builtin type in the entry point, as in other stages, so they must be passed with that type.
++	else if (builtin && (!is_mesh_shader() || get<SPIRType>(var.basetype).storage == StorageClassInput))
+ 	{
+ 		// Only use templated array for Clip/Cull distance when feasible.
+ 		// In other scenarios, we need need to override array length for tess levels (if used as outputs),
+-- 
+2.37.3
+

@@ -1072,6 +1072,15 @@ void MVKPhysicalDevice::getFeatures(VkPhysicalDeviceFeatures2* features) {
 				barycentricFeatures->fragmentShaderBarycentric = true;
 				break;
 			}
+			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT: {
+				auto* meshFeatures = (VkPhysicalDeviceMeshShaderFeaturesEXT*)next;
+				meshFeatures->taskShader = false;
+				meshFeatures->meshShader = _supportsMeshShaders;
+				meshFeatures->multiviewMeshShader = false;
+				meshFeatures->primitiveFragmentShadingRateMeshShader = false;
+				meshFeatures->meshShaderQueries = false;
+				break;
+			}
 			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_7_FEATURES_KHR: {
 				auto* maintenance7Features = (VkPhysicalDeviceMaintenance7FeaturesKHR*)next;
 				maintenance7Features->maintenance7 = true;
@@ -1682,6 +1691,57 @@ void MVKPhysicalDevice::getProperties(VkPhysicalDeviceProperties2* properties) {
                 barycentricProperties->triStripVertexOrderIndependentOfProvokingVertex = false;
                 break;
             }
+			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT: {
+				// Metal mesh render pipelines: at most 256 vertices and 512 primitives per mesh threadgroup.
+				// Task (object) shaders are not exposed, but their limits are reported at the Vulkan minimums.
+				auto* meshProps = (VkPhysicalDeviceMeshShaderPropertiesEXT*)next;
+				uint32_t maxTGInvocations = (uint32_t)_mtlDevice.maxThreadsPerThreadgroup.width;
+				meshProps->maxTaskWorkGroupTotalCount = 1u << 22;
+				meshProps->maxTaskWorkGroupCount[0] = 65535;
+				meshProps->maxTaskWorkGroupCount[1] = 65535;
+				meshProps->maxTaskWorkGroupCount[2] = 65535;
+				meshProps->maxTaskWorkGroupInvocations = 128;
+				meshProps->maxTaskWorkGroupSize[0] = 128;
+				meshProps->maxTaskWorkGroupSize[1] = 128;
+				meshProps->maxTaskWorkGroupSize[2] = 128;
+				meshProps->maxTaskPayloadSize = 16384;
+				meshProps->maxTaskSharedMemorySize = 32768;
+				meshProps->maxTaskPayloadAndSharedMemorySize = 32768;
+				meshProps->maxMeshWorkGroupTotalCount = 1u << 22;
+				meshProps->maxMeshWorkGroupCount[0] = 65535;
+				meshProps->maxMeshWorkGroupCount[1] = 65535;
+				meshProps->maxMeshWorkGroupCount[2] = 65535;
+				meshProps->maxMeshWorkGroupInvocations = maxTGInvocations;
+				meshProps->maxMeshWorkGroupSize[0] = maxTGInvocations;
+				meshProps->maxMeshWorkGroupSize[1] = maxTGInvocations;
+				meshProps->maxMeshWorkGroupSize[2] = maxTGInvocations;
+				// Metal keeps mesh outputs in the 32 KB of threadgroup memory, together with any shared memory
+				// and a small header, so a shader cannot use both maximums at once. Metal also limits threadgroup
+				// memory plus the mesh vertex data to 60 KB, which caps the outputs at about 30 KB.
+				// This output limit is below the Vulkan minimum of 32768 bytes, which Metal cannot provide.
+				meshProps->maxMeshSharedMemorySize = 28672;
+				meshProps->maxMeshPayloadAndSharedMemorySize = 28672 + 16384;
+				meshProps->maxMeshOutputMemorySize = 30720 - 512;
+				// Without task shaders a mesh shader has no payload, so only maxMeshOutputMemorySize limits its outputs.
+				meshProps->maxMeshPayloadAndOutputMemorySize = 48128;
+				// Metal allows 124 unique mesh output scalars, including the position.
+				// This is below the Vulkan minimum of 128 components, which Metal cannot provide.
+				meshProps->maxMeshOutputComponents = 120;
+				meshProps->maxMeshOutputVertices = 256;
+				meshProps->maxMeshOutputPrimitives = 256;
+				// A mesh primitive selects its layer with render_target_array_index.
+				meshProps->maxMeshOutputLayers = _properties.limits.maxFramebufferLayers;
+				meshProps->maxMeshMultiviewViewCount = 1;
+				meshProps->meshOutputPerVertexGranularity = 32;
+				meshProps->meshOutputPerPrimitiveGranularity = 32;
+				meshProps->maxPreferredTaskWorkGroupInvocations = 32;
+				meshProps->maxPreferredMeshWorkGroupInvocations = 32;
+				meshProps->prefersLocalInvocationVertexOutput = true;
+				meshProps->prefersLocalInvocationPrimitiveOutput = true;
+				meshProps->prefersCompactVertexOutput = false;
+				meshProps->prefersCompactPrimitiveOutput = false;
+				break;
+			}
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_PROPERTIES_LIST_KHR: {
                 auto* layeredApiPropertiesList = (VkPhysicalDeviceLayeredApiPropertiesListKHR*)next;
                 if (layeredApiPropertiesList->pLayeredApis == nullptr) {
@@ -1944,6 +2004,9 @@ void MVKPhysicalDevice::populateSubgroupProperties(VkPhysicalDeviceVulkan11Prope
 	pVk11Props->subgroupSupportedStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	if (_features.tessellationShader) {
 		pVk11Props->subgroupSupportedStages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+	}
+	if (_supportsMeshShaders) {
+		pVk11Props->subgroupSupportedStages |= VK_SHADER_STAGE_MESH_BIT_EXT;
 	}
 	pVk11Props->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if (_metalFeatures.simdPermute || _metalFeatures.quadPermute) {
@@ -3123,6 +3186,16 @@ void MVKPhysicalDevice::initMetalFeatures() {
 		setMSLVersion(2, 4);
 	}
 
+	// VK_EXT_mesh_shader wherever Metal mesh render pipelines exist.
+	_supportsMeshShaders = false;
+#if MVK_MACOS_OR_IOS
+	if (_metalFeatures.mslVersion >= SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::make_msl_version(3, 0)) {
+		if (@available(macOS 13.0, iOS 16.0, *)) {
+			_supportsMeshShaders = [_mtlDevice supportsFamily: MTLGPUFamilyApple7] || [_mtlDevice supportsFamily: MTLGPUFamilyMac2];
+		}
+	}
+#endif
+
 	_metalFeatures.programmableSamplePositions = _mtlDevice.areProgrammableSamplePositionsSupported;
 	_metalFeatures.rasterOrderGroups = _mtlDevice.areRasterOrderGroupsSupported;
 	_metalFeatures.pullModelInterpolation = _mtlDevice.supportsPullModelInterpolation;
@@ -4043,6 +4116,9 @@ void MVKPhysicalDevice::initExtensions() {
 	if (!_metalFeatures.shaderBarycentricCoordinates) {
 		pWritableExtns->vk_KHR_fragment_shader_barycentric.enabled = false;
 		pWritableExtns->vk_NV_fragment_shader_barycentric.enabled = false;
+	}
+	if (!_supportsMeshShaders) {
+		pWritableExtns->vk_EXT_mesh_shader.enabled = false;
 	}
 	if (!_metalFeatures.arrayOfTextures || !_metalFeatures.arrayOfSamplers) {
 		pWritableExtns->vk_EXT_descriptor_indexing.enabled = false;

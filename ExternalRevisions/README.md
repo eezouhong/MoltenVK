@@ -82,6 +82,21 @@ the value held in the corresponding `*_repo_revision` file listed above.
 Once you have made changes to the `*_repo_revision` files, you can retrieve the updated 
 library versions by running the `fetchDependencies` script, as described above, again.
 
+### Local Patches
+
+Patches in `ExternalRevisions/patches/<library>/*.patch` are applied by `fetchDependencies`
+and by the CMake build, in name order, after the library has been checked out at its pinned
+revision. Currently only _SPIRV-Cross_ patches are applied, and they are not applied to a
+directory given with `--spirv-cross-root` (or, in the CMake build, with `CPM_SPIRV-Cross_SOURCE`).
+
+When updating a library revision, remove any patch that is already included upstream, and
+refresh any patch that no longer applies; `fetchDependencies` and the CMake configuration stop
+if a patch fails to apply.
+
+- **_SPIRV-Cross_** `0001-MSL-Resolve-LocalSizeId-workgroup-size.patch`: shaders that declare
+  their workgroup size with `LocalSizeId` were translated with a zero workgroup size, which hung
+  the GPU in mesh shaders and broke `vkCmdDispatchBase` offsets in compute shaders.
+
 >***Note:*** If, after updating to new versions of the external libraries, you encounter 
 >build errors when building **MoltenVK**, review the instructions in the sections below 
 >to ensure all necessary external library files are included in the **MoltenVK** builds.

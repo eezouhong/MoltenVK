@@ -1,0 +1,84 @@
+From 108820b3c41330f3b7b3e87821e023a81601a91f Mon Sep 17 00:00:00 2001
+From: Hong Zou <hong@turn.app>
+Date: Mon, 28 Sep 2026 22:49:30 -0700
+Subject: [PATCH] MSL: Resolve LocalSizeId workgroup size in literal code
+ paths.
+
+With ExecutionModeLocalSizeId the workgroup size is declared through
+constant IDs, and the literal workgroup_size.x/y/z fields stay 0. Two MSL
+code paths only read the literal fields:
+
+- The mesh shader gl_WorkGroupSize constant was emitted as uint3(0, 0, 0),
+  so the vertex/primitive output copy loops stepped by zero and hung the GPU.
+- The dispatch_base fixup of gl_GlobalInvocationID multiplied the base
+  workgroup by zero.
+
+Evaluate the size constants in both places.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ spirv_msl.cpp | 32 +++++++++++++++++++++++++++-----
+ 1 file changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index c5a9d433..eb874c9b 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -36,6 +36,25 @@ static const uint32_t k_unknown_location = ~0u;
+ static const uint32_t k_unknown_component = ~0u;
+ static const char *force_inline = "static inline __attribute__((always_inline))";
+ 
++// Returns the workgroup size of an entry point that does not use a workgroup size constant.
++// LocalSizeId only records the IDs of the size constants, so the literal sizes are resolved from them.
++static void get_literal_workgroup_size(const Compiler &compiler, const SPIREntryPoint &execution, uint32_t (&size)[3])
++{
++	const auto &wg_size = execution.workgroup_size;
++	if (execution.flags.get(ExecutionModeLocalSizeId) && !wg_size.constant)
++	{
++		size[0] = wg_size.id_x ? compiler.evaluate_constant_u32(wg_size.id_x) : wg_size.x;
++		size[1] = wg_size.id_y ? compiler.evaluate_constant_u32(wg_size.id_y) : wg_size.y;
++		size[2] = wg_size.id_z ? compiler.evaluate_constant_u32(wg_size.id_z) : wg_size.z;
++	}
++	else
++	{
++		size[0] = wg_size.x;
++		size[1] = wg_size.y;
++		size[2] = wg_size.z;
++	}
++}
++
+ CompilerMSL::CompilerMSL(std::vector<uint32_t> spirv_)
+     : CompilerGLSL(std::move(spirv_))
+ {
+@@ -8444,10 +8463,10 @@ void CompilerMSL::emit_specialization_constants_and_structs()
+ 	ID workgroup_size_id = get_work_group_size_specialization_constants(wg_x, wg_y, wg_z);
+ 	if (workgroup_size_id == 0 && is_mesh_shader())
+ 	{
+-		auto &execution = get_entry_point();
++		uint32_t wg_size[3];
++		get_literal_workgroup_size(*this, get_entry_point(), wg_size);
+ 		statement("constant uint3 ", builtin_to_glsl(BuiltInWorkgroupSize, StorageClassWorkgroup),
+-		          " [[maybe_unused]] = ", "uint3(", execution.workgroup_size.x, ", ", execution.workgroup_size.y, ", ",
+-		          execution.workgroup_size.z, ");");
++		          " [[maybe_unused]] = ", "uint3(", wg_size[0], ", ", wg_size[1], ", ", wg_size[2], ");");
+ 		statement("");
+ 	}
+ 
+@@ -15946,9 +15965,12 @@ void CompilerMSL::fix_up_shader_inputs_outputs()
+ 						statement(to_expression(var_id), " += ", to_dereferenced_expression(builtin_dispatch_base_id),
+ 						          " * ", to_expression(workgroup_size_id), ";");
+ 					else
++					{
++						uint32_t wg_size[3];
++						get_literal_workgroup_size(*this, execution, wg_size);
+ 						statement(to_expression(var_id), " += ", to_dereferenced_expression(builtin_dispatch_base_id),
+-						          " * uint3(", execution.workgroup_size.x, ", ", execution.workgroup_size.y, ", ",
+-						          execution.workgroup_size.z, ");");
++						          " * uint3(", wg_size[0], ", ", wg_size[1], ", ", wg_size[2], ");");
++					}
+ 				});
+ 				break;
+ 			case BuiltInVertexId:
+-- 
+2.37.3
+

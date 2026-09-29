@@ -255,6 +255,28 @@ function update_repo() {
 	fi
 }
 
+# Apply the local patches for a repository, if any.
+# Patches are read from ExternalRevisions/patches/<repo name>/*.patch and applied in name order.
+# update_repo() force-checks out the pinned revision, so patches are applied to a clean tree.
+# A patch that is already applied is skipped.
+# $1 repo name
+function apply_repo_patches() {
+	local patch_dir="$(cd "${EXT_REV_DIR}" && pwd)/patches/$1"
+	if [ ! -d "${patch_dir}" ]; then
+		return
+	fi
+
+	for patch_file in "${patch_dir}"/*.patch; do
+		[ -e "${patch_file}" ] || continue
+		if git -C $1 apply --reverse --check "${patch_file}" > /dev/null 2>&1; then
+			echo "$1 patch already applied: $(basename "${patch_file}")"
+		else
+			echo "$1 applying patch: $(basename "${patch_file}")"
+			git -C $1 apply "${patch_file}"
+		fi
+	done
+}
+
 # Build a repository
 # $1 repo name
 function build_repo() {
@@ -335,11 +357,13 @@ REPO_NAME=SPIRV-Cross
 if [ ! "$SPIRV_CROSS_ROOT" = "" ]; then
 	rm -rf ${REPO_NAME}
 	ln -sfn ${SPIRV_CROSS_ROOT} ${REPO_NAME}
+	echo "Using ${SPIRV_CROSS_ROOT} as-is; ExternalRevisions/patches/${REPO_NAME} is not applied to it."
 else
 	REPO_URL="https://github.com/KhronosGroup/${REPO_NAME}.git"
 	REPO_REV=$(cat "${EXT_REV_DIR}/${REPO_NAME}_repo_revision")
 
 	update_repo ${REPO_NAME} ${REPO_URL} ${REPO_REV}
+	apply_repo_patches ${REPO_NAME}
 fi
 
 

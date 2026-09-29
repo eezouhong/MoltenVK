@@ -84,13 +84,14 @@ library versions by running the `fetchDependencies` script, as described above, 
 
 ### Local Patches
 
-Patches in `ExternalRevisions/patches/<library>/*.patch` are applied by `fetchDependencies`,
-in name order, after the library has been checked out at its pinned revision. Currently only
-_SPIRV-Cross_ patches are applied, and they are not applied to a directory given with
-`--spirv-cross-root`.
+Patches in `ExternalRevisions/patches/<library>/*.patch` are applied by `fetchDependencies`
+and by the CMake build, in name order, after the library has been checked out at its pinned
+revision. Currently only _SPIRV-Cross_ patches are applied, and they are not applied to a
+directory given with `--spirv-cross-root` (or, in the CMake build, with `CPM_SPIRV-Cross_SOURCE`).
 
 When updating a library revision, remove any patch that is already included upstream, and
-refresh any patch that no longer applies; `fetchDependencies` stops if a patch fails to apply.
+refresh any patch that no longer applies; `fetchDependencies` and the CMake configuration stop
+if a patch fails to apply.
 
 - **_SPIRV-Cross_** `0001-MSL-Resolve-LocalSizeId-workgroup-size.patch`: shaders that declare
   their workgroup size with `LocalSizeId` were translated with a zero workgroup size, which hung

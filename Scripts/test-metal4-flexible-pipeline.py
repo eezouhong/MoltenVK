@@ -174,31 +174,34 @@ def main() -> int:
     )
     require(
         pipeline_mm,
+        r"logMetal4FlexiblePipelineTelemetry\s*\([^)]*\)\s*\{.*?"
+        r'MELONX_PERF_TELEMETRY.*?return\s*;.*?snapshotMetal4TelemetryMessages',
+        "disabled Performance Log must bypass Metal 4 summary formatting",
+    )
+    require(
+        pipeline_mm,
         r"slotContended.*?queueWaitCount\+\+.*?waitersHighWater.*?"
         r"compilerSlotWaitersHighWater.*?compilerSlotReady\.wait_for",
         "Metal 4 slot waiters are not measured at the production gate",
     )
     require(
         pipeline_mm,
-        r"isOptionalMetal4CompilerWork.*?STARTUP_PRECOMPILE.*?BACKGROUND_WARMUP",
-        "optional compiler work classification must cover startup precompile and background warmup",
-    )
-    reject(
-        pipeline_mm,
-        r"isOptionalMetal4CompilerWork.*?RUNTIME_DEMAND",
-        "current-frame runtime demand must never be classified as optional Metal 4 work",
+        r"getMetal4AdmissionUrgency.*?FOREGROUND.*?Blocking.*?"
+        r"STARTUP_PRECOMPILE.*?BACKGROUND_WARMUP.*?Lifecycle.*?"
+        r"RUNTIME_DEMAND.*?Demanded",
+        "legacy work origins must map onto all three admission urgency levels",
     )
     require(
         pipeline_mm,
-        r"optionalWork.*?foregroundCompilerSlotWaiters.*?compilerSlotReady\.wait_for.*?"
-        r"!optionalWork\s*\|\|\s*impl->foregroundCompilerSlotWaiters\s*==\s*0",
-        "optional Metal 4 work must yield compiler-slot admission while preferred work is waiting",
+        r"compilerAdmissionQueue\.enqueue.*?compilerSlotReady\.wait_for.*?"
+        r"compilerAdmissionQueue\.canAdmit.*?compilerAdmissionQueue\.erase",
+        "Metal 4 work must use the shared ordered admission queue",
     )
     require(
         pipeline_mm,
-        r"foregroundCompilerSlotWaiters\s*==\s*0.*?compilerTasksInFlight\s*<\s*impl->compilerTaskMax.*?"
+        r"compilerTasksInFlight\+\+.*?compilerTasksInFlight\s*<\s*impl->compilerTaskMax.*?"
         r"compilerSlotReady\.notify_all",
-        "the last preferred waiter must wake optional work when spare compiler capacity remains",
+        "ordered admission must wake another waiter when spare compiler capacity remains",
     )
     require(
         pipeline_mm,

@@ -21,6 +21,7 @@
 #include "MVKInlineObjectConstructor.h"
 #include "MVKImage.h"
 #include "MVKFoundation.h"
+#include "MVKMetal4CompilerAdmission.h"
 #include "MVKOSExtensions.h"
 #include "MVKStrings.h"
 #include "MTLRenderPipelineDescriptor+MoltenVK.h"
@@ -151,9 +152,22 @@ struct MVKMetal4CompilerLaneStats {
 	uint64_t directLegacyCompiles = 0;
 };
 
+struct MVKMetal4PriorityScope {
+	Metal4AdmissionScope admission;
+	bool collectStatistics = false;
+	Metal4AdmissionUrgency initialUrgency = Metal4AdmissionUrgency::Demanded;
+	uint64_t initialOrderingSequence = 0;
+	uint64_t firstEnqueueSequence = 0;
+	uint64_t firstAdmissionSequence = 0;
+	uint64_t lastAdmissionSequence = 0;
+	uint64_t priorityUpdateCount = 0;
+};
+
 struct MVKMetal4DiagnosticWorkContext {
 	MVKDevice* device = nullptr;
 	bool active = false;
+	bool registeredPriorityScope = false;
+	shared_ptr<MVKMetal4PriorityScope> priorityScope;
 	MVKMetal4CompilerWorkStatistics stats = {};
 };
 
@@ -174,6 +188,7 @@ struct MVKMetal4CompilerService::Impl {
 		uint64_t frequency = 1;
 		uint64_t score = 0;
 		uint64_t lastUse = 0;
+		shared_ptr<MVKMetal4PriorityScope> priorityScope;
 		condition_variable ready;
 
 		~BaseEntry() {
@@ -196,6 +211,11 @@ struct MVKMetal4CompilerService::Impl {
 	mutex cacheLock;
 	condition_variable compilerSlotReady;
 	condition_variable baseCandidateReady;
+	Metal4AdmissionQueue compilerAdmissionQueue;
+	unordered_map<uint64_t, shared_ptr<MVKMetal4PriorityScope>> priorityScopes;
+	uint64_t nextLegacyScopeId = 0;
+	uint64_t nextCompilerEnqueueSequence = 0;
+	uint64_t nextCompilerAdmissionSequence = 0;
 	size_t compilerTasksInFlight = 0;
 	size_t compilerSlotWaiters = 0;
 	size_t compilerSlotWaitersHighWater = 0;
@@ -595,20 +615,69 @@ static void shutdownMetal4Compiler(const shared_ptr<MVKMetal4CompilerService::Im
 	notifyMetal4CompilerWaiters(impl.get());
 }
 
-static MVKMetal4CompilerWorkOrigin getCurrentMetal4CompilerWorkOrigin(
+static shared_ptr<MVKMetal4PriorityScope> getCurrentMetal4PriorityScope(
 	MVKMetal4CompilerService::Impl* impl) {
 	if (!_mvkMetal4DiagnosticWork.active ||
 		_mvkMetal4DiagnosticWork.device != impl->device) {
-		return MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN;
+		return {};
 	}
-	return static_cast<MVKMetal4CompilerWorkOrigin>(
-		_mvkMetal4DiagnosticWork.stats.origin);
+	return _mvkMetal4DiagnosticWork.priorityScope;
 }
 
-static bool isOptionalMetal4CompilerWork(
+static Metal4AdmissionUrgency getMetal4AdmissionUrgency(
 	MVKMetal4CompilerWorkOrigin origin) {
-	return origin == MVK_METAL4_COMPILER_WORK_ORIGIN_STARTUP_PRECOMPILE ||
-		origin == MVK_METAL4_COMPILER_WORK_ORIGIN_BACKGROUND_WARMUP;
+	switch (origin) {
+		case MVK_METAL4_COMPILER_WORK_ORIGIN_FOREGROUND:
+			return Metal4AdmissionUrgency::Blocking;
+		case MVK_METAL4_COMPILER_WORK_ORIGIN_STARTUP_PRECOMPILE:
+		case MVK_METAL4_COMPILER_WORK_ORIGIN_BACKGROUND_WARMUP:
+			return Metal4AdmissionUrgency::Lifecycle;
+		case MVK_METAL4_COMPILER_WORK_ORIGIN_RUNTIME_DEMAND:
+		case MVK_METAL4_COMPILER_WORK_ORIGIN_UNKNOWN:
+		default:
+			return Metal4AdmissionUrgency::Demanded;
+	}
+}
+
+static bool isValidMetal4CompilerWorkUrgency(
+	MVKMetal4CompilerWorkUrgency urgency) {
+	return urgency >= MVK_METAL4_COMPILER_WORK_URGENCY_LIFECYCLE &&
+		urgency <= MVK_METAL4_COMPILER_WORK_URGENCY_BLOCKING;
+}
+
+static Metal4AdmissionUrgency getMetal4AdmissionUrgency(
+	MVKMetal4CompilerWorkUrgency urgency) {
+	return static_cast<Metal4AdmissionUrgency>(urgency);
+}
+
+static bool promoteMetal4PriorityScope(
+	MVKMetal4PriorityScope& scope,
+	Metal4AdmissionUrgency urgency,
+	uint64_t orderingSequence) {
+	bool changed = promoteMetal4AdmissionScope(
+		scope.admission,
+		urgency,
+		orderingSequence);
+	if (changed && scope.collectStatistics) {
+		scope.priorityUpdateCount = saturatingMetal4Add(
+			scope.priorityUpdateCount,
+			1);
+	}
+	return changed;
+}
+
+static void snapshotMetal4PriorityScopeStatistics(
+	MVKMetal4DiagnosticWorkContext& context) {
+	if (!context.stats.available || !context.priorityScope) { return; }
+	const MVKMetal4PriorityScope& scope = *context.priorityScope;
+	context.stats.initialUrgency = static_cast<uint32_t>(scope.initialUrgency);
+	context.stats.finalUrgency = static_cast<uint32_t>(scope.admission.urgency);
+	context.stats.initialOrderingSequence = scope.initialOrderingSequence;
+	context.stats.finalOrderingSequence = scope.admission.orderingSequence;
+	context.stats.firstEnqueueSequence = scope.firstEnqueueSequence;
+	context.stats.firstAdmissionSequence = scope.firstAdmissionSequence;
+	context.stats.lastAdmissionSequence = scope.lastAdmissionSequence;
+	context.stats.priorityUpdateCount = scope.priorityUpdateCount;
 }
 
 static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
@@ -626,11 +695,27 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (attemptedMetal4) { *attemptedMetal4 = true; }
 	MVKMetal4CompilerLaneStats& stats = getMetal4CompilerLaneStats(impl, lane);
 	stats.attempts++;
-	MVKMetal4CompilerWorkOrigin origin = getCurrentMetal4CompilerWorkOrigin(impl);
-	bool optionalWork = isOptionalMetal4CompilerWork(origin);
-	bool blockedByForeground = optionalWork && impl->foregroundCompilerSlotWaiters > 0;
-	bool slotContended = impl->compilerTasksInFlight >= impl->compilerTaskMax || blockedByForeground;
+	shared_ptr<MVKMetal4PriorityScope> activeScope = getCurrentMetal4PriorityScope(impl);
+	Metal4AdmissionScope fallbackScope;
+	Metal4AdmissionScope* admissionScope = activeScope
+		? &activeScope->admission
+		: &fallbackScope;
+	bool optionalWork = admissionScope->urgency == Metal4AdmissionUrgency::Lifecycle;
+	bool slotContended = impl->compilerTasksInFlight >= impl->compilerTaskMax ||
+		!impl->compilerAdmissionQueue.empty();
+	Metal4AdmissionWaiter waiter;
 	if (slotContended) {
+		impl->nextCompilerEnqueueSequence++;
+		if (impl->nextCompilerEnqueueSequence == 0) {
+			impl->nextCompilerEnqueueSequence++;
+		}
+		waiter.scope = admissionScope;
+		waiter.enqueueSequence = impl->nextCompilerEnqueueSequence;
+		impl->compilerAdmissionQueue.enqueue(waiter);
+		if (activeScope && activeScope->collectStatistics &&
+			activeScope->firstEnqueueSequence == 0) {
+			activeScope->firstEnqueueSequence = waiter.enqueueSequence;
+		}
 		stats.queueWaitCount++;
 		stats.waiters++;
 		stats.waitersHighWater = max(stats.waitersHighWater, stats.waiters);
@@ -643,7 +728,6 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 			impl->optionalCompilerSlotWaitersHighWater = max(
 				impl->optionalCompilerSlotWaitersHighWater,
 				impl->optionalCompilerSlotWaiters);
-			if (blockedByForeground) { impl->optionalPriorityDeferrals++; }
 		} else {
 			impl->foregroundCompilerSlotWaiters++;
 			impl->foregroundCompilerSlotWaitersHighWater = max(
@@ -651,27 +735,30 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 				impl->foregroundCompilerSlotWaiters);
 		}
 	}
-	bool slotReady = false;
+	bool slotReady = !slotContended;
 	while (!slotReady) {
 		slotReady = impl->compilerSlotReady.wait_for(
 			lock,
 			chrono::nanoseconds(impl->compilerTimeoutNs),
 			[&] {
 				return impl->shuttingDown || impl->fatalCompilerTimeout || breaker ||
-					(impl->compilerTasksInFlight < impl->compilerTaskMax &&
-					 (!optionalWork || impl->foregroundCompilerSlotWaiters == 0));
+					impl->compilerAdmissionQueue.canAdmit(
+						waiter,
+						impl->compilerTasksInFlight,
+						impl->compilerTaskMax);
 			});
-		if (!slotReady && optionalWork &&
-			impl->foregroundCompilerSlotWaiters > 0 &&
+		if (!slotReady &&
+			impl->compilerAdmissionQueue.best() != &waiter &&
 			!impl->shuttingDown && !impl->fatalCompilerTimeout && !breaker) {
-			// Intentional yielding is not a stuck compiler. A preferred waiter owns
-			// the timeout responsibility while optional work waits behind it.
-			impl->optionalPriorityDeferrals++;
+			// A lower-priority waiter is intentionally deferred. Only the current
+			// winner can diagnose a full compiler pool as stuck.
+			if (optionalWork) { impl->optionalPriorityDeferrals++; }
 			continue;
 		}
 		break;
 	}
 	if (slotContended) {
+		impl->compilerAdmissionQueue.erase(waiter);
 		if (stats.waiters > 0) { stats.waiters--; }
 		if (impl->compilerSlotWaiters > 0) { impl->compilerSlotWaiters--; }
 		if (optionalWork) {
@@ -703,12 +790,22 @@ static bool acquireMetal4CompilerSlot(MVKMetal4CompilerService::Impl* impl,
 	if (impl->fatalCompilerTimeout || breaker) { return false; }
 	impl->compilerTasksInFlight++;
 	impl->asyncInflightHighWater = max(impl->asyncInflightHighWater, impl->compilerTasksInFlight);
-	if (!optionalWork && slotContended &&
-		impl->foregroundCompilerSlotWaiters == 0 &&
-		impl->compilerTasksInFlight < impl->compilerTaskMax) {
-		// The last preferred waiter may leave spare capacity behind. Wake optional
-		// work that yielded while preferred work was queued so that capacity is not
-		// artificially stranded until another compiler task finishes.
+	if (activeScope && activeScope->collectStatistics) {
+		impl->nextCompilerAdmissionSequence++;
+		if (impl->nextCompilerAdmissionSequence == 0) {
+			impl->nextCompilerAdmissionSequence++;
+		}
+		if (activeScope->firstAdmissionSequence == 0) {
+			activeScope->firstAdmissionSequence =
+				impl->nextCompilerAdmissionSequence;
+		}
+		activeScope->lastAdmissionSequence =
+			impl->nextCompilerAdmissionSequence;
+	}
+	if (slotContended &&
+		impl->compilerTasksInFlight < impl->compilerTaskMax &&
+		!impl->compilerAdmissionQueue.empty()) {
+		// One admission may leave more than one device slot available.
 		impl->compilerSlotReady.notify_all();
 	}
 	return true;
@@ -1267,6 +1364,7 @@ static MVKMetal4TelemetryMessages snapshotMetal4TelemetryMessages(
 
 static void logMetal4FlexiblePipelineTelemetry(MVKMetal4CompilerService::Impl* impl,
 											 bool finalSummary) {
+	if (mvkGetEnvVarNumber("MELONX_PERF_TELEMETRY", 0.0) == 0.0) { return; }
 	MVKMetal4TelemetryMessages messages = snapshotMetal4TelemetryMessages(impl, finalSummary);
 	for (const string* message : {&messages.unified, &messages.scheduling, &messages.flexible, &messages.cache, &messages.fields}) {
 		if (!message->empty()) {
@@ -1384,12 +1482,93 @@ VkResult MVKMetal4CompilerService::beginDiagnosticWork(
 	if (_mvkMetal4DiagnosticWork.active) {
 		return VK_ERROR_TOO_MANY_OBJECTS;
 	}
+	uint64_t scopeId;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		impl->nextLegacyScopeId++;
+		if (impl->nextLegacyScopeId == 0) { impl->nextLegacyScopeId++; }
+		scopeId = impl->nextLegacyScopeId;
+	}
 	_mvkMetal4DiagnosticWork = {};
 	_mvkMetal4DiagnosticWork.device = impl->device;
 	_mvkMetal4DiagnosticWork.active = true;
+	_mvkMetal4DiagnosticWork.priorityScope = make_shared<MVKMetal4PriorityScope>();
+	_mvkMetal4DiagnosticWork.priorityScope->admission =
+		Metal4AdmissionScope{scopeId, getMetal4AdmissionUrgency(origin), 0};
+	_mvkMetal4DiagnosticWork.priorityScope->collectStatistics = requestId != 0;
+	_mvkMetal4DiagnosticWork.priorityScope->initialUrgency =
+		getMetal4AdmissionUrgency(origin);
 	_mvkMetal4DiagnosticWork.stats.available = requestId != 0 ? VK_TRUE : VK_FALSE;
 	_mvkMetal4DiagnosticWork.stats.origin = static_cast<uint32_t>(origin);
 	_mvkMetal4DiagnosticWork.stats.requestId = requestId;
+	return VK_SUCCESS;
+#else
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
+VkResult MVKMetal4CompilerService::beginPriorityWork(
+	MVKMetal4CompilerWorkOrigin origin,
+	MVKMetal4CompilerWorkUrgency urgency,
+	uint64_t scopeId,
+	uint64_t orderingSequence,
+	bool collectStatistics) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !impl->device) { return VK_ERROR_FEATURE_NOT_PRESENT; }
+	if (scopeId == 0 || !isValidMetal4CompilerWorkUrgency(urgency)) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	if (_mvkMetal4DiagnosticWork.active) { return VK_ERROR_TOO_MANY_OBJECTS; }
+	auto priorityScope = make_shared<MVKMetal4PriorityScope>();
+	priorityScope->admission = Metal4AdmissionScope{
+		scopeId, getMetal4AdmissionUrgency(urgency), orderingSequence};
+	priorityScope->collectStatistics = collectStatistics;
+	priorityScope->initialUrgency = getMetal4AdmissionUrgency(urgency);
+	priorityScope->initialOrderingSequence = orderingSequence;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		if (!impl->priorityScopes.emplace(scopeId, priorityScope).second) {
+			return VK_ERROR_TOO_MANY_OBJECTS;
+		}
+	}
+	_mvkMetal4DiagnosticWork = {};
+	_mvkMetal4DiagnosticWork.device = impl->device;
+	_mvkMetal4DiagnosticWork.active = true;
+	_mvkMetal4DiagnosticWork.registeredPriorityScope = true;
+	_mvkMetal4DiagnosticWork.priorityScope = std::move(priorityScope);
+	_mvkMetal4DiagnosticWork.stats.available = collectStatistics ? VK_TRUE : VK_FALSE;
+	_mvkMetal4DiagnosticWork.stats.origin = static_cast<uint32_t>(origin);
+	_mvkMetal4DiagnosticWork.stats.requestId = scopeId;
+	return VK_SUCCESS;
+#else
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
+VkResult MVKMetal4CompilerService::promotePriorityWork(
+	uint64_t scopeId,
+	MVKMetal4CompilerWorkUrgency urgency,
+	uint64_t orderingSequence) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl) { return VK_ERROR_FEATURE_NOT_PRESENT; }
+	if (scopeId == 0 || !isValidMetal4CompilerWorkUrgency(urgency)) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	bool changed = false;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		auto found = impl->priorityScopes.find(scopeId);
+		if (found == impl->priorityScopes.end()) {
+			return VK_ERROR_INITIALIZATION_FAILED;
+		}
+		changed = promoteMetal4PriorityScope(
+			*found->second,
+			getMetal4AdmissionUrgency(urgency),
+			orderingSequence);
+	}
+	if (changed) { impl->compilerSlotReady.notify_all(); }
 	return VK_SUCCESS;
 #else
 	return VK_ERROR_FEATURE_NOT_PRESENT;
@@ -1406,7 +1585,42 @@ VkResult MVKMetal4CompilerService::endDiagnosticWork(
 		_mvkMetal4DiagnosticWork.stats.requestId != requestId) {
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
-	*pStats = _mvkMetal4DiagnosticWork.stats;
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		snapshotMetal4PriorityScopeStatistics(_mvkMetal4DiagnosticWork);
+		*pStats = _mvkMetal4DiagnosticWork.stats;
+	}
+	_mvkMetal4DiagnosticWork = {};
+	return VK_SUCCESS;
+#else
+	if (pStats) { *pStats = {}; }
+	return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
+}
+
+VkResult MVKMetal4CompilerService::endPriorityWork(
+	uint64_t scopeId,
+	MVKMetal4CompilerWorkStatistics* pStats) {
+#if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+	auto impl = _impl;
+	if (!impl || !pStats || !_mvkMetal4DiagnosticWork.active ||
+		!_mvkMetal4DiagnosticWork.registeredPriorityScope ||
+		_mvkMetal4DiagnosticWork.device != impl->device ||
+		!_mvkMetal4DiagnosticWork.priorityScope ||
+		_mvkMetal4DiagnosticWork.priorityScope->admission.scopeId != scopeId) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	{
+		lock_guard<mutex> lock(impl->cacheLock);
+		auto found = impl->priorityScopes.find(scopeId);
+		if (found == impl->priorityScopes.end() ||
+			found->second != _mvkMetal4DiagnosticWork.priorityScope) {
+			return VK_ERROR_INITIALIZATION_FAILED;
+		}
+		snapshotMetal4PriorityScopeStatistics(_mvkMetal4DiagnosticWork);
+		*pStats = _mvkMetal4DiagnosticWork.stats;
+		impl->priorityScopes.erase(found);
+	}
 	_mvkMetal4DiagnosticWork = {};
 	return VK_SUCCESS;
 #else
@@ -1856,6 +2070,16 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 			auto found = impl->baseCache.find(key);
 			if (found != impl->baseCache.end()) {
 				entry = found->second;
+				shared_ptr<MVKMetal4PriorityScope> waitingScope =
+					getCurrentMetal4PriorityScope(impl);
+				if (entry->compiling && entry->priorityScope && waitingScope &&
+					promoteMetal4PriorityScope(
+						*entry->priorityScope,
+						waitingScope->admission.urgency,
+						waitingScope->admission.orderingSequence)) {
+					// The shared base owner may itself be waiting for a compiler slot.
+					impl->compilerSlotReady.notify_all();
+				}
 				bool entryReady = entry->ready.wait_for(
 					lock,
 					chrono::nanoseconds(impl->compilerTimeoutNs),
@@ -1943,6 +2167,7 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 			}
 
 			entry = make_shared<BaseEntry>();
+			entry->priorityScope = getCurrentMetal4PriorityScope(impl);
 			entry->vertexFunction = [vertexFunction retain];
 			entry->fragmentFunction = [fragmentFunction retain];
 			entry->fingerprint = keyFingerprint;
@@ -2005,6 +2230,7 @@ getMetal4FlexibleBase(MVKMetal4CompilerService::Impl* impl,
 		}
 		entry->failed = basePipeline == nil;
 		entry->compiling = false;
+		entry->priorityScope.reset();
 		entry->compileTaskNs = compilerTaskDuration;
 		entry->allocatedBytes = allocatedBytes;
 		impl->useClock = saturatingMetal4Add(impl->useClock, 1, &impl->scoreSaturations);

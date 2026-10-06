@@ -161,12 +161,17 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
         input=IRObjectCreateFromDXIL((const uint8_t*)dxil.binary.buffer,dxil.binary.size,IRBytecodeOwnershipNone);
         compiler=IRCompilerCreate();IRCompilerSetGlobalRootSignature(compiler,root);IRCompilerIgnoreRootSignature(compiler,true);
 #if TARGET_OS_IPHONE
-        IRCompilerSetMinimumDeploymentTarget(compiler,IROperatingSystem_iOS,"26.0");
+        IRCompilerSetMinimumDeploymentTarget(compiler,IROperatingSystem_iOS,"17.0");
 #else
         IRCompilerSetMinimumDeploymentTarget(compiler,IROperatingSystem_macOS,"26.0");
 #endif
         IRCompilerSetMinimumGPUFamily(compiler,IRGPUFamilyMetal3);
-        uint32_t flags=request->strictMath?IRCompatibilityFlagDisableNanInfOptimization:0;
+        uint32_t flags=0;
+#if IR_SUPPORTS_VERSION(4, 0, 0)
+        // MSC 4 introduced default NaN/Inf optimization. Earlier MSC versions
+        // have no opt-out flag; their behavior is covered by the NaN/Inf oracle.
+        if(request->strictMath)flags|=IRCompatibilityFlagDisableNanInfOptimization;
+#endif
         if(request->preserveInvariance)flags|=IRCompatibilityFlagPositionInvariance;
         IRCompilerSetCompatibilityFlags(compiler,(IRCompatibilityFlags)flags);
         start=std::chrono::steady_clock::now(); { ReplayCompilerPhase trace("apple_converter",request->executionModel); output=IRCompilerAllocCompileAndLink(compiler,nullptr,input,&error); } result->converterMs=elapsed(start);

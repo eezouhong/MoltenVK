@@ -47,8 +47,8 @@ def main():
         parser.error("jobs must be positive")
     args.msc_dir = args.msc_dir.resolve()
     args.llvm_config = args.llvm_config.resolve()
-    msc = args.msc_dir / "libmetalirconverter.dylib"
     pin = json.loads((ROOT / "msc/VERSION").read_text())
+    msc = args.msc_dir / pin.get("hostLibrary", "libmetalirconverter.dylib")
     if not msc.is_file() or sha(msc) != pin["librarySHA256"]:
         parser.error("MSC library does not match msc/VERSION")
     for header in pin["headers"]:

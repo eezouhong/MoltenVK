@@ -17,9 +17,10 @@ separate work.
   dependencies. This is a dependency SDK; its standard archives are not rebuilt by
   the host script. The custom AIR writer and adapter are always rebuilt from source.
   Use a static macOS zstd archive if the SDK reports `-lzstd`.
-- MSC **4.0-beta2**, macOS library and matching headers. `msc/VERSION` records the
-  download URL and SHA-256 values. Supply it externally; no Apple binaries belong
-  in this repository. This baseline MSC library **does not run on iOS**.
+- MSC **3.1.1**, exactly the Apple-signed macOS/iOS libraries and headers pinned by
+  XeniOS at `2bbd3665b0143c1f18043ddd9a20de77ba65e834`. `msc/VERSION` records both
+  library paths, download URLs and SHA-256 values. Supply the SDK root containing
+  `include/`, `lib/`, and `lib_iOS/`; no Apple binaries belong in this repository.
 - Python 3, Meson, Ninja, Git, pkg-config, Python Mako, PyYAML and packaging.
   Use an external virtual environment if these are not installed.
 
@@ -67,8 +68,8 @@ patches as the host, compiled with the iPhoneOS SDK. A local Mesa source cache c
 be supplied as `--mesa-repository`, exactly as in the host build.
 
 This mode does not produce a usable plugin or install/run a phone app. Framework
-linking awaits the unified host/device MSC version. Do not embed the macOS
-baseline in a phone app. Device installation needs the user's authorization.
+linking uses the iOS MSC slice; the macOS slice must never be embedded in a phone
+app. Device installation needs the user's authorization.
 
 ## Source and distribution notices
 

@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) buffer Values { uint values[]; };
+layout(set = 0, binding = 1, std140) uniform Params { uvec4 parameters; };
+
+// The buffer gate expects i*3+7. A wrong NaN/Inf simplification returns a
+// different integer. Signs come from the input buffer, not shader constants.
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= parameters.z) return;
+    uint source = values[i];
+    uint sign = (source & 1u) << 31;
+    float infinity = uintBitsToFloat(sign | 0x7f800000u);
+    float nanValue = uintBitsToFloat(sign | 0x7fc00000u);
+    precise float zeroProduct = infinity * 0.0;
+    precise float infDifference = infinity - infinity;
+    precise float nanDifference = nanValue - nanValue;
+    bool correct = isinf(infinity) && isnan(nanValue) &&
+                   isnan(zeroProduct) && isnan(infDifference) && isnan(nanDifference);
+    values[i] = correct ? source * parameters.x + parameters.y : 0xffffffffu;
+}

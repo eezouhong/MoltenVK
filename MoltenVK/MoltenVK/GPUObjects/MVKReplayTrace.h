@@ -6,4 +6,5 @@ enum Region : uint32_t { SPIRVToMSL,MSLLibrary,MSLFunction,IRLibrary,IRFunction,
 class Timer {public: explicit Timer(Region) {}};
 inline void indirectRuntime(uint32_t,uint64_t,bool,bool) {}
 inline void directRuntimeUpload() {}
+inline void encoderStarted(unsigned) {}
 }

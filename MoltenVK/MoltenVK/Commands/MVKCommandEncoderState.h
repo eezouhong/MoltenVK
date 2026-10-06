@@ -250,6 +250,37 @@ struct MVKMetalSharedCommandEncoderState {
 #pragma mark - MVKMetalRenderCommandEncoderState
 
 struct MVKStageResourceBindings {
+	bool metalIR = false;
+	/** Only reusable within one Metal encoder and one shader stage. The command
+	 * buffer owns the temporary push allocation; this state does not retain it. */
+	struct MetalIRArguments {
+		/** The descriptor allocation is stable while its set remains bound.
+		 * descriptorSetData invalidation refreshes these addresses on rebind. */
+		uint64_t descriptorSetBases[kMVKMaxDescriptorSetCount] = {};
+		uint64_t pushConstantAddress = 0;
+		id<MTLBuffer> pushConstantBuffer = nil;
+		uint32_t pushConstantSize = 0;
+		uint32_t argumentBytes = 0;
+		uint64_t arguments[kMVKMaxDescriptorSetCount * 2 + 2] = {};
+		id<MTLBuffer> runtimeBuffer = nil;
+		id<MTLBuffer> drawIndirectBuffer = nil;
+		NSUInteger drawIndirectOffset = 0;
+		uint32_t drawArguments[5] = {};
+		uint16_t drawIndexType = 0;
+		bool drawArgumentsValid = false, drawIndexTypeValid = false;
+		MVKShaderStage stage = kMVKShaderStageCount;
+
+		void reset() {
+			memset(descriptorSetBases, 0, sizeof(descriptorSetBases));
+			pushConstantSize = 0;
+			pushConstantBuffer = nil;
+			argumentBytes = 0;
+			stage = kMVKShaderStageCount;
+			runtimeBuffer = nil;
+			drawIndirectBuffer = nil;
+			drawArgumentsValid = drawIndexTypeValid = false;
+		}
+	} metalIRArguments;
 	id<MTLTexture> textures[kMVKMaxTextureCount];
 	struct Buffer {
 		id<MTLBuffer> buffer;
@@ -268,6 +299,10 @@ struct MVKStageResourceBindings {
 	}
 	static Buffer NullBuffer() { return { nil, 0 }; }
 	static Buffer InvalidBuffer() { return { nil, ~0ull }; }
+	/** Distinguishes IR root bytes from helper draws and ordinary buffer binds. */
+	static Buffer MetalIRRootBuffer() { return { nil, ~1ull }; }
+	static Buffer MetalIRDrawBuffer() { return { nil, ~2ull }; }
+	static Buffer MetalIRDrawInfoBuffer() { return { nil, ~3ull }; }
 };
 
 template <typename T>
@@ -583,5 +618,3 @@ private:
 	/// If true, accumulation will be run at the end of the next render pass.
 	bool _shouldAccumulate = false;
 };
-
-

@@ -22,6 +22,7 @@
 #include "MVKBuffer.h"
 #include "MVKPipeline.h"
 #include "MVKFoundation.h"
+#include "MVKMetalIR.h"
 #include "mvk_datatypes.hpp"
 
 
@@ -139,18 +140,20 @@ void MVKCmdDraw::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 	pIndArg->indexCount = _vertexCount;
 	// let the indirect index point to the beginning of vertex index buffer below
 	pIndArg->indexStart = 0;
-	pIndArg->baseVertex = 0;
+	// Preserve Vulkan BaseVertex for the original non-indexed draw. Relative
+	// indices plus this base fetch the same vertices as absolute indices did.
+	pIndArg->baseVertex = static_cast<int32_t>(_firstVertex);
 	pIndArg->instanceCount = _instanceCount;
 	pIndArg->baseInstance = _firstInstance;
 
 	// Create an index buffer populated with synthetic indexes.
-	// Start populating indexes directly from the beginning and align with corresponding vertexes by adding _firstVertex
+	// Keep synthetic indices relative; the indirect command carries firstVertex.
 	MTLIndexType mtlIdxType = MTLIndexTypeUInt32;
 	auto* vtxIdxBuff = cmdEncoder->getTempMTLBuffer(mvkMTLIndexTypeSizeInBytes(mtlIdxType) * _vertexCount);
 	auto* pIdxBuff = (uint32_t*)vtxIdxBuff->getContents();
 
 	for (uint32_t idx = 0; idx < _vertexCount; idx++) {
-		pIdxBuff[idx] = _firstVertex + idx;
+		pIdxBuff[idx] = idx;
 	}
 
 	MVKIndexMTLBufferBinding ibb;
@@ -186,6 +189,10 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 	}
 
     cmdEncoder->_isIndexedDraw = false;
+    if (const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get()) {
+        cmdEncoder->metalIR().prepareDraw(artifact,
+            mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
+    }
 
 	MVKPiplineStages stages;
     pipeline->getStages(stages);
@@ -472,6 +479,11 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 
     size_t idxSize = mvkMTLIndexTypeSizeInBytes((MTLIndexType)ibb.mtlIndexType);
     VkDeviceSize idxBuffOffset = ibb.offset + (_firstIndex * idxSize);
+    if (const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get()) {
+        cmdEncoder->metalIR().prepareDraw(artifact,
+            mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
+                _vertexOffset, _firstInstance, ibb.mtlIndexType));
+    }
 
     const MVKMTLBufferAllocation* vtxOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcOutBuff = nullptr;
@@ -812,6 +824,11 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
             drawIDs[i] = i;
         }
     }
+    const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR,
+        _mtlIndirectBuffer, _mtlIndirectBufferOffset, _mtlIndirectBufferStride, _drawCount, false)
+        : MVKMetalIRCommandEncoding::RuntimeBatch{};
+    if (runtimeBatch.buffer) cmdEncoder->restartMetalRenderPassIfNeeded();
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -868,6 +885,9 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
                 cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
             }
 
+            if (vertexIR && vertexIR->runtimeFlags) {
+                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlIndBuffOfst, 0);
+            }
             cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
 			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
@@ -1143,6 +1163,11 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
             drawIDs[i] = i;
         }
     }
+    const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR,
+        _mtlIndirectBuffer, _mtlIndirectBufferOffset, _mtlIndirectBufferStride, _drawCount, true)
+        : MVKMetalIRCommandEncoding::RuntimeBatch{};
+    if (runtimeBatch.buffer) cmdEncoder->restartMetalRenderPassIfNeeded();
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -1211,7 +1236,10 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
                 cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
             }
 
-	        cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
+	        if (vertexIR && vertexIR->runtimeFlags) {
+                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlTempIndBuffOfst, uint16_t(ibb.mtlIndexType + 1));
+            }
+            cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
 			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
 

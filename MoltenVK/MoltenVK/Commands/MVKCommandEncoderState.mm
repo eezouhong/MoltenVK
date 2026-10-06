@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * MVKCommandEncoderState.mm
  *
@@ -22,6 +23,7 @@
 #include "MVKImage.h"
 #include "MVKRenderPass.h"
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
 #include "MVKQueryPool.h"
 #include "mvk_datatypes.hpp"
 
@@ -577,6 +579,7 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
                            MVKStageResourceBits& exists,
                            MVKStageResourceBindings& bindings,
                            const MVKResourceBinder& RESTRICT binder) {
+	mvkreplay::Timer replayTrace(mvkreplay::DescriptorBinding);
 	bool didUseResource = false;
 	for (const MVKDescriptorBindOperation& op : ops) {
 		MVKDescriptorSet* set = common._descriptorSets[op.set];
@@ -657,6 +660,120 @@ static MVKResourceUsageStages combineStages(MVKResourceUsageStages a, MVKResourc
 	return MVKResourceUsageStages::All;
 }
 
+static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
+                               MVKCommandEncoder& mvkEncoder,
+                               const MVKVulkanCommonEncoderState& common,
+                               const MVKPipelineStageResourceInfo& resources,
+                               const MVKImplicitBufferData& implicitBufferData,
+                               const uint8_t* pushConstants,
+                               MVKShaderStage vkStage,
+                               MVKResourceUsageStages useResourceStage,
+                               MVKStageResourceBits& exists,
+                               MVKStageResourceBindings& bindings,
+                               const MVKResourceBinder& RESTRICT binder) {
+	mvkreplay::Timer replayTrace(mvkreplay::IRRootBinding);
+	const auto& artifact = *resources.metalIR;
+	auto& cached = bindings.metalIRArguments;
+	uint64_t args[kMVKMaxDescriptorSetCount * 2 + 2] = {};
+	MVKMetalSharedCommandEncoderState& shared = mvkEncoder.getState().mtlShared();
+	if (!bindings.metalIR) {
+		exists.descriptorSetData.reset();
+		bindings.metalIR = true;
+		cached.reset();
+	}
+	if (cached.stage != vkStage) {
+		cached.reset();
+		cached.stage = vkStage;
+	}
+	for (uint32_t idx = 0; idx < artifact.setCount; ++idx) {
+		if (!(artifact.usedSets & (1ull << idx))) continue;
+		MVKDescriptorSet* set = common._descriptorSets[idx];
+		if (!set || !set->gpuBufferObject) continue;
+		const auto* layout = set->layout;
+		bool refreshAddress = !exists.descriptorSetData.get(idx) || !cached.descriptorSetBases[idx];
+		if (!exists.descriptorSetData.get(idx)) {
+			bindings.descriptorSetResourceUse[idx].resizeAndClear(layout->bindings().size());
+			exists.descriptorSetData.set(idx);
+			// Residency lasts for the encoder, just like the descriptor resources
+			// tracked by executeBindOps. Rebinding the set invalidates this bit.
+			shared._useResource.add(set->gpuBufferObject, useResourceStage, false);
+		}
+		if (refreshAddress) {
+			cached.descriptorSetBases[idx] = set->gpuBufferObject.gpuAddress + set->gpuBufferOffset + layout->metalIRShadowBase();
+		}
+		// Descriptor contents may change without changing their allocation. Keep
+		// reading the table itself on the GPU; only reuse its encoder-local address.
+		uint64_t base = cached.descriptorSetBases[idx];
+		args[idx * 2] = base;
+		args[idx * 2 + 1] = base + artifact.descriptorCounts[idx] * 3 * 24;
+	}
+	executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+	if (artifact.pushConstantSize && artifact.usesPushConstants) {
+		if (cached.pushConstantSize != artifact.pushConstantSize) {
+			const auto slice = mvkEncoder.metalIR().copyBytes(pushConstants, artifact.pushConstantSize);
+			cached.pushConstantAddress = slice.gpuAddress;
+			cached.pushConstantSize = artifact.pushConstantSize;
+			// A chunk can serve many draws. Residency is already registered for
+			// this stage until the Metal encoder (and this cache) is reset.
+			if (cached.pushConstantBuffer != slice.buffer) {
+				shared._useResource.add(slice.buffer, useResourceStage, false);
+				cached.pushConstantBuffer = slice.buffer;
+			}
+		}
+		args[artifact.setCount * 2] = cached.pushConstantAddress;
+	}
+	// Keep the compiler's full root-table ABI. An unused stage gets a stable
+	// zero push pointer, so unrelated updates neither allocate nor rebind it.
+	uint32_t argumentCount = artifact.setCount * 2 + (artifact.pushConstantSize ? 1 : 0);
+	if (artifact.runtimeFlags & MVK_METAL_IR_RUNTIME_DATA) {
+		const auto runtime = mvkEncoder.metalIR().runtimeBinding(vkStage == kMVKShaderStageCompute);
+		assert(runtime.buffer && runtime.gpuAddress);
+		args[argumentCount++] = runtime.gpuAddress;
+		if (cached.runtimeBuffer != runtime.buffer) {
+			shared._useResource.add(runtime.buffer, useResourceStage, false);
+			cached.runtimeBuffer = runtime.buffer;
+		}
+	}
+	uint32_t argumentBytes = argumentCount * sizeof(uint64_t);
+	if (argumentBytes && (!exists.buffers.get(2) ||
+		bindings.buffers[2] != MVKStageResourceBindings::MetalIRRootBuffer() ||
+		cached.argumentBytes != argumentBytes || memcmp(cached.arguments, args, argumentBytes))) {
+		binder.setBytes(encoder, args, argumentBytes, 2);
+		memcpy(cached.arguments, args, argumentBytes);
+		cached.argumentBytes = argumentBytes;
+		exists.buffers.set(2);
+		bindings.buffers[2] = MVKStageResourceBindings::MetalIRRootBuffer();
+	}
+	if (artifact.runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS) {
+		assert(vkStage == kMVKShaderStageVertex);
+		const auto& draw = mvkEncoder.metalIR().drawBinding();
+		bool sameArguments = cached.drawArgumentsValid &&
+			cached.drawIndirectBuffer == draw.indirectBuffer &&
+			(draw.indirectBuffer ? cached.drawIndirectOffset == draw.indirectOffset :
+			 !memcmp(cached.drawArguments, draw.arguments.words, sizeof(cached.drawArguments)));
+		if (!sameArguments || !exists.buffers.get(4) || bindings.buffers[4] != MVKStageResourceBindings::MetalIRDrawBuffer()) {
+			if (draw.indirectBuffer) {
+				binder.setBuffer(encoder, draw.indirectBuffer, draw.indirectOffset, 4);
+				shared._useResource.add(draw.indirectBuffer, useResourceStage, false);
+			} else binder.setBytes(encoder, &draw.arguments, sizeof(draw.arguments), 4);
+			memcpy(cached.drawArguments, draw.arguments.words, sizeof(cached.drawArguments));
+			cached.drawIndirectBuffer = draw.indirectBuffer;
+			cached.drawIndirectOffset = draw.indirectOffset;
+			cached.drawArgumentsValid = true;
+			exists.buffers.set(4);
+			bindings.buffers[4] = MVKStageResourceBindings::MetalIRDrawBuffer();
+		}
+		if (!cached.drawIndexTypeValid || cached.drawIndexType != draw.indexType ||
+			!exists.buffers.get(5) || bindings.buffers[5] != MVKStageResourceBindings::MetalIRDrawInfoBuffer()) {
+			binder.setBytes(encoder, &draw.indexType, sizeof(draw.indexType), 5);
+			cached.drawIndexType = draw.indexType;
+			cached.drawIndexTypeValid = true;
+			exists.buffers.set(5);
+			bindings.buffers[5] = MVKStageResourceBindings::MetalIRDrawInfoBuffer();
+		}
+	}
+}
+
 static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKCommandEncoder& mvkEncoder,
                                const MVKVulkanCommonEncoderState& common,
@@ -668,6 +785,17 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
                                const MVKResourceBinder& RESTRICT binder) {
+	if (resources.metalIR) {
+		bindMetalIRResources(encoder, mvkEncoder, common, resources, implicitBufferData, pushConstants,
+		                     vkStage, useResourceStage, exists, bindings, binder);
+		return;
+	}
+	if (bindings.metalIR) {
+		bindings.metalIR = false;
+		exists.descriptorSetData.reset();
+		exists.buffers.clear(0); exists.buffers.clear(1); exists.buffers.clear(2);
+		exists.buffers.clear(4); exists.buffers.clear(5);
+	}
 	// Clear descriptor set resource use bitarray for new sets and bind them
 	MVKStaticBitSet<kMVKMaxDescriptorSetCount> setsNeeded = resources.resources.descriptorSetData.clearingAllIn(exists.descriptorSetData);
 	exists.descriptorSetData |= resources.resources.descriptorSetData;
@@ -856,6 +984,9 @@ static void bindVertexBuffers(id<MTLCommandEncoder> encoder,
 
 /** If the contents of an implicit buffer changes, call this to ensure that the contents will be rebound before the next draw. */
 static void invalidateImplicitBuffer(MVKStageResourceBindings& bindings, MVKNonVolatileImplicitBuffer buffer) {
+	if (buffer == MVKNonVolatileImplicitBuffer::PushConstant) {
+		bindings.metalIRArguments.pushConstantSize = 0;
+	}
 	uint32_t idx = bindings.implicitBufferIndices[buffer];
 	if (bindings.buffers[idx] == MVKStageResourceBindings::ImplicitBuffer(buffer)) {
 		bindings.buffers[idx] = MVKStageResourceBindings::NullBuffer();
@@ -1084,6 +1215,10 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
 
 void MVKMetalGraphicsCommandEncoderState::reset(VkSampleCountFlags sampleCount) {
 	memset(static_cast<MVKMetalGraphicsCommandEncoderStateQuickReset*>(this), 0, offsetof(MVKMetalGraphicsCommandEncoderStateQuickReset, MEMSET_RESET_LINE));
+	// A previous command buffer may already have recycled its temporary buffers.
+	for (uint32_t i = 0; i < static_cast<uint32_t>(MVKMetalGraphicsStage::Count); ++i) {
+		_bindings[static_cast<MVKMetalGraphicsStage>(i)].metalIRArguments.reset();
+	}
 	_lineWidth = 1;
 	_sampleCount = getSampleCount(sampleCount);
 	_depthStencil.reset();
@@ -1505,6 +1640,7 @@ void MVKMetalGraphicsCommandEncoderState::setVertexStageIsMesh(bool isMesh) {
 	if (_flags.has(MVKMetalRenderEncoderStateFlag::MeshStageBound) != isMesh) {
 		_flags.set(MVKMetalRenderEncoderStateFlag::MeshStageBound, isMesh);
 		_exists.vertex() = MVKStageResourceBits();
+		_bindings.vertex().metalIRArguments.reset();
 	}
 }
 
@@ -1720,6 +1856,7 @@ void MVKMetalComputeCommandEncoderState::prepareRenderDispatch(
 void MVKMetalComputeCommandEncoderState::reset() {
 	memset((void*)this, 0, offsetof(MVKMetalComputeCommandEncoderState, MEMSET_RESET_LINE));
 	_vkStage = kMVKShaderStageCount;
+	_bindings.metalIRArguments.reset();
 }
 
 #pragma mark - MVKCommandEncoderState

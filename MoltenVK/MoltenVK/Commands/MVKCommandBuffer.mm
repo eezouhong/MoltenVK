@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * MVKCommandBuffer.mm
  *
@@ -431,12 +432,16 @@ void MVKCommandEncoder::beginEncoding(id<MTLCommandBuffer> mtlCmdBuff, MVKComman
     _canUseLayeredRendering = false;
 
     _mtlCmdBuffer = mtlCmdBuff;        // not retained
+	// Never reuse a slice from an earlier command buffer, even if its GPU work
+	// has not finished. Its completion handlers still own the old allocations.
+	_metalIRCommands.reset();
 
 	_cmdBuffer->setMetalObjectLabel(_mtlCmdBuffer, _cmdBuffer->_debugName);
 }
 
 // Multithread autorelease prefill style uses a dedicated autorelease pool when encoding each command.
 void MVKCommandEncoder::encodeCommands(MVKCommand* command) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalCommandEncoding);
 	if (_prefillStyle == MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS_STYLE_IMMEDIATE_ENCODING) {
 		@autoreleasepool {
 			encodeCommandsImpl(command);
@@ -836,6 +841,7 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 	}
 
     _mtlRenderEncoder = [_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
+    if (_mtlRenderEncoder) mvkreplay::encoderStarted(0);
 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
 	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, getMTLRenderCommandEncoderName(cmdUse));
 	getState().beginGraphicsEncoding(getSampleCount());
@@ -1118,6 +1124,7 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
 		needWaits = true;
 		endCurrentMetalEncoding();
 		_mtlComputeEncoder = [_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+		if (_mtlComputeEncoder) mvkreplay::encoderStarted(1);
 		retainIfImmediatelyEncoding(_mtlComputeEncoder);
 		beginMetalComputeEncoding(cmdUse);
 	}
@@ -1138,6 +1145,7 @@ id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmd
 		needWaits = true;
 		endCurrentMetalEncoding();
 		_mtlBlitEncoder = [_mtlCmdBuffer blitCommandEncoder];
+		if (_mtlBlitEncoder) mvkreplay::encoderStarted(2);
 		retainIfImmediatelyEncoding(_mtlBlitEncoder);
 	}
     if (_mtlBlitEncoderUse != cmdUse) {
@@ -1216,6 +1224,7 @@ const MVKMTLBufferAllocation* MVKCommandEncoder::copyToTempMTLBufferAllocation(c
 
     return mtlBuffAlloc;
 }
+
 
 
 #pragma mark Queries

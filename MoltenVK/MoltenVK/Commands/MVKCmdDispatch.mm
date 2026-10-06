@@ -22,6 +22,7 @@
 #include "MVKBuffer.h"
 #include "MVKPipeline.h"
 #include "MVKFoundation.h"
+#include "MVKMetalIR.h"
 #include "mvk_datatypes.hpp"
 
 
@@ -44,10 +45,16 @@ VkResult MVKCmdDispatch::setContent(MVKCommandBuffer* cmdBuff,
 
 void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 	MTLRegion mtlThreadgroupCount = MTLRegionMake3D(_baseGroupX, _baseGroupY, _baseGroupZ, _groupCountX, _groupCountY, _groupCountZ);
+	auto* pipeline = cmdEncoder->getComputePipeline();
+	const auto* artifact = pipeline->getStageResources().metalIR.get();
+	if (artifact) {
+		mvkir::ComputeData runtime{{_groupCountX, _groupCountY, _groupCountZ}, 0,
+			{_baseGroupX, _baseGroupY, _baseGroupZ}};
+		cmdEncoder->metalIR().prepareDispatch(artifact, runtime);
+	}
 	cmdEncoder->finalizeDispatchState();	// Ensure all updated state has been submitted to Metal
 	id<MTLComputeCommandEncoder> mtlEncoder = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDispatch);
-	auto* pipeline = cmdEncoder->getComputePipeline();
-	if (pipeline->allowsDispatchBase()) {
+	if (pipeline->allowsDispatchBase() && !artifact) {
 		// We'll use the stage-input region to pass the base along to the shader.
 		// Hopefully Metal won't complain that we didn't set up a stage-input descriptor.
 		[mtlEncoder setStageInRegion: mtlThreadgroupCount];
@@ -69,9 +76,11 @@ VkResult MVKCmdDispatchIndirect::setContent(MVKCommandBuffer* cmdBuff, VkBuffer 
 }
 
 void MVKCmdDispatchIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+    if (const auto* artifact = cmdEncoder->getComputePipeline()->getStageResources().metalIR.get()) {
+        cmdEncoder->metalIR().prepareIndirectDispatch(artifact, _mtlIndirectBuffer, _mtlIndirectBufferOffset);
+    }
     cmdEncoder->finalizeDispatchState();	// Ensure all updated state has been submitted to Metal
     [cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDispatch) dispatchThreadgroupsWithIndirectBuffer: _mtlIndirectBuffer
 																				indirectBufferOffset: _mtlIndirectBufferOffset
 																			   threadsPerThreadgroup: cmdEncoder->getComputePipeline()->getThreadgroupSize()];
 }
-

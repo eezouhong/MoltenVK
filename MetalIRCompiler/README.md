@@ -50,8 +50,24 @@ new plugin path for validation. Builds do not execute GPU workloads.
 
 ## iOS
 
-Not yet validated. `build-ios.sh` and the unified host/device MSC version will be
-added in phase 1, before the device compilation gate. Do not embed this macOS
+Device loading and performance are not yet validated. The first part of
+`build-ios.sh` builds dependencies only, independently of MSC version selection:
+
+```sh
+DEVELOPER_DIR="$XCODE_27_DEVELOPER_DIR" ./build-ios.sh --dependencies-only \
+  --output "$IOS_BUILD_OUTPUT" --llvm-source "$LLVM_SOURCE_ROOT" \
+  --meson "$TOOLS_VENV/bin/meson" --jobs 4
+```
+
+`LLVM_SOURCE_ROOT` contains sibling `llvm/` and `cmake/` directories extracted from
+the official 17.0.6 archives recorded in `llvm/SOURCE.json`. This builds a host
+LLVM 17 tablegen first, then iOS 17+ arm64 core/bitreader/bitwriter and their
+dependencies, with zstd/zlib/terminfo/libxml2 disabled. Mesa uses the same pin and
+patches as the host, compiled with the iPhoneOS SDK. A local Mesa source cache can
+be supplied as `--mesa-repository`, exactly as in the host build.
+
+This mode does not produce a usable plugin or install/run a phone app. Framework
+linking awaits the unified host/device MSC version. Do not embed the macOS
 baseline in a phone app. Device installation needs the user's authorization.
 
 ## Source and distribution notices

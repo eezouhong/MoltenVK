@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <time.h>
+#include <mutex>
+#include "MVKReplayFrameTrace.h"
 
 namespace mvkreplay {
 enum Region : uint32_t {
@@ -21,16 +23,22 @@ struct Counter {
 };
 inline Counter counters[RegionCount];
 enum class Mode { Off, Detailed, Coarse };
-inline Mode mode() {
-    static Mode value=[] {
+inline std::atomic<Mode>& modeStorage() {
+    static std::atomic<Mode> value{[] {
         const char* p=getenv("MELONX_PIPELINE_REPLAY_TRACE");
         if (p && !strcmp(p,"1")) return Mode::Detailed;
         if (p && !strcmp(p,"coarse")) return Mode::Coarse;
         return Mode::Off;
-    }();
+    }()};
     return value;
 }
+inline Mode mode() { return modeStorage().load(std::memory_order_relaxed); }
+inline Mode setMode(Mode value) { return modeStorage().exchange(value,std::memory_order_relaxed); }
 inline bool enabled() { return mode()!=Mode::Off; }
+inline bool descriptorTimingEnabled() {
+    static bool value=[] {const char* p=getenv("MELONX_REPLAY_DESCRIPTOR_TIMING");return p&&!strcmp(p,"1");}();
+    return value;
+}
 inline uint64_t nanoseconds(clockid_t clock,bool& valid) {
     timespec time{};valid=clock_gettime(clock,&time)==0;
     return valid?uint64_t(time.tv_sec)*1000000000+time.tv_nsec:0;
@@ -42,7 +50,8 @@ public:
         const auto traceMode=mode();
         // Game speed comparisons time complete command encoding batches, not
         // every tiny draw/descriptor operation. Detailed replay remains opt-in.
-        if (traceMode==Mode::Off || (traceMode==Mode::Coarse && r>=DescriptorUpdate && r!=MetalCommandEncoding)) return;
+        bool descriptor=(r==DescriptorUpdate || r==IRShadowUpdate)&&descriptorTimingEnabled();
+        if (traceMode==Mode::Off || (traceMode==Mode::Coarse && r>=DescriptorUpdate && r!=MetalCommandEncoding && !descriptor)) return;
         bool valid;wall=nanoseconds(CLOCK_MONOTONIC,valid);
         cpu=nanoseconds(CLOCK_THREAD_CPUTIME_ID,cpuValid);
     }
@@ -71,6 +80,7 @@ struct GPUCounter {
     std::atomic<uint64_t> calls{0},wallNs{0},unavailable{0},errors{0},lastDumpNs{0};
     std::atomic<uint64_t> irIndirectBatches{0},irIndirectDraws{0},irIndirectDispatches{0},irPassBreaks{0},irTemporaryBytes{0},irDirectUploads{0};
     std::atomic<uint64_t> renderEncoders{0},computeEncoders{0},blitEncoders{0};
+    std::atomic<uint64_t> renderPassBreaks{0};
 };
 inline GPUCounter gpu;
 struct SubmissionSample {
@@ -104,6 +114,70 @@ inline void indirectRuntime(uint32_t draws,uint64_t bytes,bool passBreak,bool co
 }
 inline void directRuntimeUpload() {
     if (mode()==Mode::Coarse) gpu.irDirectUploads.fetch_add(1,std::memory_order_relaxed);
+}
+inline void renderPassInterrupted() {
+    if (mode()==Mode::Coarse) gpu.renderPassBreaks.fetch_add(1,std::memory_order_relaxed);
+}
+struct FrameTraceState {
+    std::mutex lock;
+    FrameAssembler frames;
+    FrameValues previous;
+};
+inline FrameTraceState& frameTrace() { static FrameTraceState state; return state; }
+inline void emitFrame(const std::optional<FrameRecord>& result) {
+    if (!result) return;
+    const auto& r=*result;const auto& v=r.values;
+    // Compact, one record per fully completed present epoch, never per draw.
+    // GPU intervals include waits. Overlaps within an epoch are merged.
+    fprintf(stderr,"MELONX_REPLAY_FRAME {\"v\":1,\"descriptorTimed\":%s,\"f\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu]}\n",
+        descriptorTimingEnabled()?"true":"false",
+        (unsigned long long)r.id,(unsigned long long)v.sealedNs,
+        (unsigned long long)r.gpuUnionNs,(unsigned long long)r.gpuSumNs,
+        (unsigned long long)r.buffers,(unsigned long long)r.unavailable,(unsigned long long)r.errors,
+        (unsigned long long)v.encodeNs,(unsigned long long)v.descriptorNs,(unsigned long long)v.shadowNs,
+        (unsigned long long)v.renderEncoders,(unsigned long long)v.blitEncoders,(unsigned long long)v.computeEncoders,
+        (unsigned long long)v.passBreaks,(unsigned long long)v.irPassBreaks,
+        (unsigned long long)v.indirectDraws,(unsigned long long)v.indirectDispatches,
+        (unsigned long long)v.parameterBytes,(unsigned long long)v.directUploads,(unsigned long long)r.dropped,
+        (unsigned long long)v.encodeCpuNs,(unsigned long long)v.encodeCpuUnavailable);
+}
+inline uint64_t frameBufferCreated() {
+    if (mode()!=Mode::Coarse) return 0;
+    auto& state=frameTrace();std::lock_guard<std::mutex> lock(state.lock);
+    return state.frames.beginBuffer();
+}
+inline void frameBufferCompleted(uint64_t token,double start,double end,bool success) {
+    if (!token) return;
+    const bool valid=std::isfinite(start)&&std::isfinite(end)&&start>0&&end>=start;
+    auto& state=frameTrace();std::optional<FrameRecord> result;
+    { std::lock_guard<std::mutex> lock(state.lock);
+      result=state.frames.complete(token,valid?uint64_t(start*1e9):0,valid?uint64_t(end*1e9):0,success); }
+    emitFrame(result);
+}
+inline void framePresented() {
+    if (mode()!=Mode::Coarse) return;
+    auto load=[](const std::atomic<uint64_t>& value){return value.load(std::memory_order_relaxed);};
+    bool valid;FrameValues now;
+    now.sealedNs=nanoseconds(CLOCK_MONOTONIC,valid);
+    now.encodeNs=load(counters[MetalCommandEncoding].wallNs);
+    now.encodeCpuNs=load(counters[MetalCommandEncoding].threadCpuNs);now.encodeCpuUnavailable=load(counters[MetalCommandEncoding].cpuUnavailable);
+    now.descriptorNs=load(counters[DescriptorUpdate].wallNs);now.shadowNs=load(counters[IRShadowUpdate].wallNs);
+    now.renderEncoders=load(gpu.renderEncoders);now.blitEncoders=load(gpu.blitEncoders);now.computeEncoders=load(gpu.computeEncoders);
+    now.passBreaks=load(gpu.renderPassBreaks);now.irPassBreaks=load(gpu.irPassBreaks);
+    now.indirectDraws=load(gpu.irIndirectDraws);now.indirectDispatches=load(gpu.irIndirectDispatches);
+    now.parameterBytes=load(gpu.irTemporaryBytes);now.directUploads=load(gpu.irDirectUploads);
+    auto& state=frameTrace();std::optional<FrameRecord> result;
+    { std::lock_guard<std::mutex> lock(state.lock);
+      FrameValues delta=now;
+#define MVK_FRAME_DELTA(field) delta.field-=state.previous.field
+      MVK_FRAME_DELTA(encodeNs);MVK_FRAME_DELTA(descriptorNs);MVK_FRAME_DELTA(shadowNs);
+      MVK_FRAME_DELTA(renderEncoders);MVK_FRAME_DELTA(blitEncoders);MVK_FRAME_DELTA(computeEncoders);
+      MVK_FRAME_DELTA(passBreaks);MVK_FRAME_DELTA(irPassBreaks);MVK_FRAME_DELTA(indirectDraws);
+      MVK_FRAME_DELTA(indirectDispatches);MVK_FRAME_DELTA(parameterBytes);MVK_FRAME_DELTA(directUploads);
+      MVK_FRAME_DELTA(encodeCpuNs);MVK_FRAME_DELTA(encodeCpuUnavailable);
+#undef MVK_FRAME_DELTA
+      state.previous=now;result=state.frames.seal(delta); }
+    emitFrame(result);
 }
 inline void commandBufferCompleted(double start,double end,bool success) {
     if (mode()!=Mode::Coarse) return;

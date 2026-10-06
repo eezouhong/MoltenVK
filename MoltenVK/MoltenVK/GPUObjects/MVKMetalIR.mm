@@ -51,10 +51,11 @@ Plugin& plugin() {
         return p;
     }();return result;
 }
-bool telemetryEnabled() {
-    static bool enabled=[] {const char* v=getenv("MELONX_METAL_IR_TELEMETRY");return v&&strcmp(v,"1")==0;}();
+std::atomic<bool>& telemetryStorage() {
+    static std::atomic<bool> enabled{[] {const char* v=getenv("MELONX_METAL_IR_TELEMETRY");return v&&strcmp(v,"1")==0;}()};
     return enabled;
 }
+bool telemetryEnabled() { return telemetryStorage().load(std::memory_order_relaxed); }
 using IRClock=std::chrono::steady_clock;
 static uint64_t elapsedNs(IRClock::time_point start) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now()-start).count();
@@ -116,6 +117,38 @@ std::string keyFor(const MVKMetalIRCompileRequest& request) {
 
 bool mvkMetalIRCompilerAvailable() {
     return plugin().compile && plugin().release;
+}
+
+uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
+    // The probe runs outside a game. Return a token for exact restoration;
+    // never leave detailed timers enabled for subsequent game sessions.
+    if ((flags & ~7u) || (flags & 6u) == 6u) return UINT32_MAX;
+    const auto nextMode = flags & 2u ? mvkreplay::Mode::Detailed :
+                          flags & 4u ? mvkreplay::Mode::Coarse : mvkreplay::Mode::Off;
+    const auto oldMode = mvkreplay::setMode(nextMode);
+    const bool oldTelemetry = telemetryStorage().exchange(flags & 1u,std::memory_order_relaxed);
+    return (oldTelemetry ? 1u : 0u) |
+           (oldMode == mvkreplay::Mode::Detailed ? 2u : oldMode == mvkreplay::Mode::Coarse ? 4u : 0u);
+}
+
+uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
+    if (!device || !output || capacity < 7 || !telemetryEnabled()) return 0;
+    std::fill(output, output + 7, 0);
+    std::shared_ptr<DeviceArtifacts> state;
+    {
+        std::lock_guard<std::mutex> lock(devicesLock);
+        auto found = devices.find(device);
+        if (found == devices.end()) return 7;
+        state = found->second;
+    }
+    output[0] = state->compilerCalls.load(std::memory_order_relaxed);
+    output[1] = state->diskHits.load(std::memory_order_relaxed);
+    output[2] = state->mesaNs.load(std::memory_order_relaxed);
+    output[3] = state->converterNs.load(std::memory_order_relaxed);
+    output[4] = state->rasterAdapterNs.load(std::memory_order_relaxed);
+    output[5] = state->libraryNs.load(std::memory_order_relaxed);
+    output[6] = state->reflectionNs.load(std::memory_order_relaxed);
+    return 7;
 }
 
 void mvkMetalIRDestroyDevice(MVKDevice* device) {

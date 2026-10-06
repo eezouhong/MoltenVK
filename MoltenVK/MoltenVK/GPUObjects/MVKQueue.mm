@@ -179,7 +179,14 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 	addPerformanceInterval(getPerformanceStats().queue.retrieveMTLCommandBuffer, startTime);
 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
 	setMetalObjectLabel(mtlCmdBuff, mtlCmdBuffLabel);
-	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { handleMTLCommandBufferError(mtlCB); }];
+	uint64_t frameToken=mtlCmdBuff?mvkreplay::frameBufferCreated():0;
+	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
+		handleMTLCommandBufferError(mtlCB);
+		if(frameToken) {
+			mvkreplay::commandBufferCompleted(mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
+			mvkreplay::frameBufferCompleted(frameToken,mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
+		}
+	}];
 
 	if ( !mtlCmdBuff ) { reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "%s could not be acquired.", mtlCmdBuffLabel.UTF8String); }
 	return mtlCmdBuff;
@@ -549,9 +556,6 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 	uint64_t startTime = getPerformanceTimestamp();
 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
 		addPerformanceInterval(getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
-		if (mvkreplay::mode()==mvkreplay::Mode::Coarse) {
-			mvkreplay::commandBufferCompleted(mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
-		}
 		if (signalCompletion) { this->finish(); }	// Must be the last thing the completetion callback does.
 	}];
 
@@ -746,6 +750,7 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 	// or if the MTLCommandBuffer could not be created, call finish() directly.
 	// Retrieve the result first, because finish() will destroy this instance.
 	VkResult rslt = getConfigurationResult();
+	mvkreplay::framePresented();
 	if (mtlCmdBuff) {
 		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { this->finish(); }];
 		[mtlCmdBuff commit];

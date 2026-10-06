@@ -163,6 +163,15 @@ MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
     return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity) {
+    return device ? mvkMetalIRCompilerStatistics(MVKDevice::getMVKDevice(device), output, capacity) : 0;
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags) {
+    return mvkMetalIRSetProbeDiagnostics(flags);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(
     VkDevice                                  device,
     MVKMetal4CompilerConcurrencyStatistics*   pStats,

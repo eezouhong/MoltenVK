@@ -565,6 +565,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
 /** Nonzero compiler ABI only when the explicit IR compiler plugin is available. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
 
+/** Opt-in, read-only compiler counters; see MVKMetalIR.h for the seven fields. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity);
+
+/** Diagnostic scope only: bit0 IR counters, bit1 detailed/bit2 coarse replay.
+ * Returns previous flags for restoration, or UINT32_MAX for invalid flags.
+ * Caller must exclude game activity while switching this diagnostic scope. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4CompilerConcurrencyStatisticsMVK(
     VkDevice                                   device,
     MVKMetal4CompilerConcurrencyStatistics*    pStats,

@@ -862,6 +862,7 @@ void MVKCommandEncoder::restartMetalRenderPassIfNeeded() {
 }
 
 void MVKCommandEncoder::encodeStoreActions(bool storeOverride) {
+    if (storeOverride && _mtlRenderEncoder) mvkreplay::renderPassInterrupted();
 	getSubpass()->encodeStoreActions(this,
 									 _isRenderingEntireAttachment,
 									 _attachments.contents(),

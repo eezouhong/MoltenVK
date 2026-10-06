@@ -1,0 +1,18 @@
+diff --git a/src/compiler/nir/nir_lower_clip_halfz.c b/src/compiler/nir/nir_lower_clip_halfz.c
+--- a/src/compiler/nir/nir_lower_clip_halfz.c
++++ b/src/compiler/nir/nir_lower_clip_halfz.c
+@@ -30,8 +30,12 @@
+    if (intr->intrinsic != nir_intrinsic_store_deref)
+       return false;
+ 
+-   nir_variable *var = nir_intrinsic_get_var(intr, 0);
+-   if (var->data.mode != nir_var_shader_out ||
++   nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
++   if (!nir_deref_mode_is(deref, nir_var_shader_out))
++      return false;
++
++   nir_variable *var = nir_deref_instr_get_variable(deref);
++   if (!var || var->data.mode != nir_var_shader_out ||
+        var->data.location != VARYING_SLOT_POS)
+       return false;
+ 

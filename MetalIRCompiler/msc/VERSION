@@ -1,0 +1,92 @@
+{
+  "version": "4.0-beta2",
+  "downloadURL": "https://github.com/has207/xenia-edge/releases/download/deps-metal-shader-converter-4.0-beta2/libmetalirconverter-4.0-beta2-macos.zip",
+  "archiveSHA256": "4b007174a7d67d7122d4b0230781ce344b6ee5273c8c27cd2b1ab20c0537ea69",
+  "librarySHA256": "1af7a62b73330e56e7e47ad7cf3582b3b79b5cdee1c8fef9ab1387fb15b71d2e",
+  "libraryBytes": 60039344,
+  "signatureVerified": true,
+  "headerSourceRevision": "6b79d562690c2e64d6908c3ffdc7943e6ae438e5",
+  "headers": [
+    {
+      "path": "include/metal_irconverter/ir_comparison_function.h",
+      "sha256": "4c28be7de78172a636b26950c1d870ff9528008fcb45fddf4c9cfff8e345c382",
+      "bytes": 1412
+    },
+    {
+      "path": "include/metal_irconverter/ir_descriptor_range_flags.h",
+      "sha256": "fb5dd9cb4887efcf0864042294fe0378e1dbca3c2cc75030916ca1d5e09a035c",
+      "bytes": 1538
+    },
+    {
+      "path": "include/metal_irconverter/ir_filter.h",
+      "sha256": "1c49c699b0394b1c30f69e7e968061e7ff8f63f7199aa9937c1a9d36562e8eff",
+      "bytes": 3080
+    },
+    {
+      "path": "include/metal_irconverter/ir_format.h",
+      "sha256": "a5c5dc3b4fb62d50094e249411a84d9292d9f94186942ea31faacaf8c5ea232d",
+      "bytes": 7501
+    },
+    {
+      "path": "include/metal_irconverter/ir_input_classification.h",
+      "sha256": "aaed03daacc97e09e1549e0f4aea2e26c5c1ef2f00b8075bb4c13886dba7f90b",
+      "bytes": 1173
+    },
+    {
+      "path": "include/metal_irconverter/ir_input_primitive.h",
+      "sha256": "5024e02b551c8d7f8e9c29d7c7e95000d46cb36e2699371f5607b390a5fee0e2",
+      "bytes": 2796
+    },
+    {
+      "path": "include/metal_irconverter/ir_input_topology.h",
+      "sha256": "a9e348895d56c28dce102e6a89a44b463f69242e99adda4bcab62f5503ed769c",
+      "bytes": 1271
+    },
+    {
+      "path": "include/metal_irconverter/ir_root_descriptor_flags.h",
+      "sha256": "8a12a6978ac40709a25d0d304d3dedc0a2465d2104818ce9ac72aca92ad185ee",
+      "bytes": 1315
+    },
+    {
+      "path": "include/metal_irconverter/ir_root_signature_flags.h",
+      "sha256": "b831373e53a245e6fdc1270b990224d15096c49d4d8090b4858c962efe9392f2",
+      "bytes": 1918
+    },
+    {
+      "path": "include/metal_irconverter/ir_shader_visibility.h",
+      "sha256": "afc564b04bce32b2ef8784acaf08a9b5a79e2f70ad883f7d368c4fa695e7501e",
+      "bytes": 1394
+    },
+    {
+      "path": "include/metal_irconverter/ir_tessellator_domain.h",
+      "sha256": "c92ee473bb141ce882e855aa76446d846317aad81d915401fbdeaca93c633cb1",
+      "bytes": 1223
+    },
+    {
+      "path": "include/metal_irconverter/ir_tessellator_output_primitive.h",
+      "sha256": "8d9a0f5b0bee0432ef7c4c481e6389e762ecb437d47cbf99c9f05c3c8238ae0a",
+      "bytes": 1316
+    },
+    {
+      "path": "include/metal_irconverter/ir_tessellator_partitioning.h",
+      "sha256": "3dbdf5dcb68a17267e6cdeabda9287d88d0485262831af80b5266dfa379539cc",
+      "bytes": 1346
+    },
+    {
+      "path": "include/metal_irconverter/ir_texture_address_mode.h",
+      "sha256": "7f4539f270127323290d62beda0cea774a37e47de7cc1e6e11f879a955811cdc",
+      "bytes": 1276
+    },
+    {
+      "path": "include/metal_irconverter/ir_version.h",
+      "sha256": "1820306d8a7f12e838f2862d86b13106d2c90f6f710ccf80e000cd6706e4d948",
+      "bytes": 1309
+    },
+    {
+      "path": "include/metal_irconverter/metal_irconverter.h",
+      "sha256": "a78cf9126295e4613cbafd8d3d8e5d62329f773dfc7358d507609886cd3177be",
+      "bytes": 67477
+    }
+  ],
+  "appleAnchorRequirementVerified": true
+}

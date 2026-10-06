@@ -1,0 +1,70 @@
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+@@ -28,6 +28,10 @@
+ #include "shader_enums.h"
+ #include "spirv/nir_spirv.h"
+ #include "util/blob.h"
++#include <time.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ #include "git_sha1.h"
+ #include "vulkan/vulkan.h"
+@@ -40,6 +44,20 @@
+ static_assert((mesa_shader_stage)DXIL_SPIRV_SHADER_FRAGMENT == MESA_SHADER_FRAGMENT, "must match");
+ static_assert((mesa_shader_stage)DXIL_SPIRV_SHADER_COMPUTE == MESA_SHADER_COMPUTE, "must match");
+ static_assert((mesa_shader_stage)DXIL_SPIRV_SHADER_KERNEL == MESA_SHADER_KERNEL, "must match");
++
++// Local timing is opt-in and emitted once per compilation region, not per NIR pass.
++static uint64_t replay_clock(clockid_t kind) {
++   struct timespec value;
++   return clock_gettime(kind, &value) == 0 ? (uint64_t)value.tv_sec * 1000000000 + value.tv_nsec : 0;
++}
++static void replay_phase(const char *region, dxil_spirv_shader_stage stage,
++                         uint64_t wall, uint64_t cpu) {
++   if (!wall) return;
++   uint64_t end_cpu = replay_clock(CLOCK_THREAD_CPUTIME_ID);
++   fprintf(stderr, "MESA_REPLAY_PHASE region=%s stage=%u wall_ns=%llu thread_cpu_ns=%llu cpu_valid=%u\n",
++           region, stage, (unsigned long long)(replay_clock(CLOCK_MONOTONIC) - wall),
++           (unsigned long long)(cpu && end_cpu >= cpu ? end_cpu - cpu : 0), cpu && end_cpu >= cpu);
++}
+ 
+ // Lower textures and samplers to SM 6.6+ descriptor-heap indexing when the
+ // caller asked for it. Buffers (UBO/SSBO) are left as direct descriptors, and
+@@ -166,9 +184,16 @@
+                                       &specializations[i].value, false);
+       }
+    }
++   const char *trace_env = getenv("MELONX_PIPELINE_REPLAY_TRACE");
++   bool replay_trace = trace_env && strcmp(trace_env, "1") == 0;
++   uint64_t replay_wall = replay_trace ? replay_clock(CLOCK_MONOTONIC) : 0;
++   uint64_t replay_cpu = replay_trace ? replay_clock(CLOCK_THREAD_CPUTIME_ID) : 0;
+    nir_shader *nir = spirv_to_nir(words, word_count, spec,
+                                   (mesa_shader_stage)stage, entry_point_name,
+                                   spirv_opts, &nir_options);
++   replay_phase("spirv_to_nir", stage, replay_wall, replay_cpu);
++   replay_wall = replay_trace ? replay_clock(CLOCK_MONOTONIC) : 0;
++   replay_cpu = replay_trace ? replay_clock(CLOCK_THREAD_CPUTIME_ID) : 0;
+    vtn_free_specialization(spec);
+    if (!nir) {
+       glsl_type_singleton_decref();
+@@ -207,6 +232,9 @@
+    struct dxil_logger logger_inner = {.priv = logger->priv,
+                                       .log = logger->log};
+ 
++   replay_phase("nir_prep_lower_opt", stage, replay_wall, replay_cpu);
++   replay_wall = replay_trace ? replay_clock(CLOCK_MONOTONIC) : 0;
++   replay_cpu = replay_trace ? replay_clock(CLOCK_THREAD_CPUTIME_ID) : 0;
+    struct blob dxil_blob;
+    if (!nir_to_dxil(nir, &opts, &logger_inner, &dxil_blob)) {
+       if (dxil_blob.allocated)
+@@ -216,6 +244,7 @@
+       return false;
+    }
+ 
++   replay_phase("nir_to_dxil", stage, replay_wall, replay_cpu);
+    ralloc_free(nir);
+    blob_finish_get_buffer(&dxil_blob, &out_dxil->binary.buffer,
+                           &out_dxil->binary.size);

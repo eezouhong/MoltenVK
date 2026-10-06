@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * MVKPipeline.mm
  *
@@ -17,6 +18,7 @@
  */
 
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
 #include "MVKCommandBuffer.h"
 #include "MVKInlineObjectConstructor.h"
 #include "MVKImage.h"
@@ -2181,6 +2183,7 @@ id<MTLComputePipelineState> MVKMetal4CompilerService::newMTLComputePipelineState
 	MTL4FunctionDescriptor* functionDescriptor,
 	NSError** error,
 	bool* attemptedMetal4) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalComputePSO);
 	if (attemptedMetal4) { *attemptedMetal4 = false; }
 	auto impl = _impl;
 	if (!impl || !legacyDescriptor || !functionDescriptor) { return nil; }
@@ -2428,29 +2431,6 @@ static bool hasDynamicBuffer(VkDescriptorType type) {
 	}
 }
 
-static bool hasBuffer(MVKDescriptorGPULayout layout) {
-	switch (layout) {
-		case MVKDescriptorGPULayout::Buffer:
-		case MVKDescriptorGPULayout::BufferAuxSize:
-		case MVKDescriptorGPULayout::TexBufSoA:
-			return true;
-		default:
-			return false;
-	}
-}
-
-static bool isWriteable(VkDescriptorType type) {
-	switch (type) {
-		case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-		case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-			return true;
-		default:
-			return false;
-	}
-}
-
 bool MVKPipelineLayout::boundsCheckBindOp(uint32_t bind, uint32_t count, uint32_t limit, const char *type) {
 	if (bind + count > limit) {
 		char desc[32];
@@ -2526,11 +2506,11 @@ void MVKPipelineLayout::populateBindOperations(MVKPipelineBindScript& script, co
 			MVKDescriptorBindOperationCode useTex = partiallyBound ? MVKDescriptorBindOperationCode::UseTextureWithLiveCheck : MVKDescriptorBindOperationCode::UseResource;
 			MVKDescriptorBindOperationCode useBuf = partiallyBound ? MVKDescriptorBindOperationCode::UseBufferWithLiveCheck  : MVKDescriptorBindOperationCode::UseResource;
 			MVKDescriptorGPULayout gpuLayout = desc.gpuLayout;
-			uint32_t target = isWriteable(desc.descriptorType);
+			uint32_t target = descriptorIsWriteable(desc.descriptorType);
 			for (uint32_t i = 0, n = descriptorTextureCount(gpuLayout); i < n; i++) {
 				script.ops.push_back({ useTex, set, target, descIdx, sizeof(id) * i });
 			}
-			if (hasBuffer(gpuLayout)) {
+			if (descriptorHasBuffer(gpuLayout)) {
 				script.ops.push_back({ useBuf, set, target, descIdx, nonTexOffset });
 			}
 		}
@@ -3141,6 +3121,16 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		}
 	}
 
+	// Tessellation has a separate Metal construction path below. Reject it here,
+	// before that path can compile a guest shader with the MSL compiler.
+	if (device->isMetalIRShaderCompilerEnabled() &&
+		(pTessCtlSS || pTessEvalSS || _isMeshPipeline)) {
+		_hasValidMTLPipelineStates = false;
+		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+			"MetalIR tessellation/mesh shader stages are unsupported; MSL fallback disabled."));
+		return;
+	}
+
 	_vertexModule = getOrCreateShaderModule(device, pVertexSS, _ownsVertexModule);
 	_tessCtlModule = getOrCreateShaderModule(device, pTessCtlSS, _ownsTessCtlModule);
 	_tessEvalModule = getOrCreateShaderModule(device, pTessEvalSS, _ownsTessEvalModule);
@@ -3367,6 +3357,7 @@ void MVKGraphicsPipeline::populateRenderingAttachmentInfo(const VkGraphicsPipeli
 id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPipelineDescriptor* plDesc,
 																		 id<MTLRenderPipelineState>& plState,
 																		 bool allowMetal4Flexible) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 	if ( !plState ) {
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
@@ -3607,6 +3598,90 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	}
 
 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
+	bool irSelected = getDevice()->isMetalIRShaderCompilerEnabled();
+	uint32_t conflictingVertexBinding = UINT32_MAX;
+	bool tryMetalIR = irSelected && !isTessellationPipeline() && !isMeshPipeline() &&
+		!pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
+		!mvkIsMultiview(getRenderingCreateInfo(pCreateInfo)->viewMask);
+	if (tryMetalIR && pCreateInfo->pVertexInputState) {
+		for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
+		                                     pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
+			if (getMetalBufferIndexForVertexAttributeBinding(binding.binding) <= 2) {
+				tryMetalIR = false;
+				conflictingVertexBinding = binding.binding;
+			}
+		}
+	}
+	if (tryMetalIR && pCreateInfo->pMultisampleState && pCreateInfo->pMultisampleState->sampleShadingEnable &&
+		pCreateInfo->pMultisampleState->minSampleShading != 0.0f) tryMetalIR = false;
+	if (irSelected && !tryMetalIR) {
+        setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+            "MetalIR graphics pipeline rejected: topology=%u, polygon=%u, discard=%u, view_mask=0x%x, sample_shading=%u, min_sample_shading=%.3f, vertex_binding=%u, vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
+            pCreateInfo->pInputAssemblyState ? pCreateInfo->pInputAssemblyState->topology : UINT32_MAX,
+            pCreateInfo->pRasterizationState->polygonMode,
+            pCreateInfo->pRasterizationState->rasterizerDiscardEnable,
+            getRenderingCreateInfo(pCreateInfo)->viewMask,
+            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->sampleShadingEnable : 0,
+            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->minSampleShading : 0.0f,
+            conflictingVertexBinding, _vertexModule->getKey().codeHash,
+            _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
+        [plDesc release]; return nil;
+    }
+	if (tryMetalIR) {
+		uint32_t transforms = (shaderConfig.options.shouldFlipVertexY ? MVK_METAL_IR_FLIP_Y : 0) |
+			(shaderConfig.options.shouldFixupClipSpace ? MVK_METAL_IR_CLIP_HALF_Z : 0);
+        uint32_t rasterOptions = getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint
+            ? MVK_METAL_IR_RENDERING_POINTS : 0;
+        auto vertexIR = mvkCompileMetalIR(this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions);
+		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
+            !(vertexIR->runtimeFlags & (MVK_METAL_IR_UNIT_POINT_SIZE | MVK_METAL_IR_NATIVE_POINT_SIZE))) {
+			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+                "MetalIR point pipeline has no native point size or proven one-pixel default: vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
+				_vertexModule->getKey().codeHash, _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
+			[plDesc release]; return nil;
+		}
+		if (vertexIR && (vertexIR->runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS) && pCreateInfo->pVertexInputState) {
+			for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
+				pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
+				uint32_t index = getMetalBufferIndexForVertexAttributeBinding(binding.binding);
+				if (index == 4 || index == 5) {
+					setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "MetalIR runtime draw buffer conflicts with vertex binding; MSL fallback disabled."));
+					vertexIR.reset(); break;
+				}
+			}
+		}
+        auto fragmentIR = vertexIR && pFragmentSS ? mvkCompileMetalIR(this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions) : nullptr;
+        if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
+            !(fragmentIR->runtimeFlags & MVK_METAL_IR_NATIVE_POINT_COORDINATES)) {
+			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+                "MetalIR point coordinates have no native rasterizer input; MSL fallback disabled."));
+			[plDesc release]; return nil;
+		}
+		if (vertexIR && (!pFragmentSS || fragmentIR)) {
+			_stageResources[kMVKShaderStageVertex].metalIR = vertexIR;
+			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR;
+			plDesc.vertexFunction = vertexIR->function;
+			plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
+			_isRasterizing = true;
+			addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
+			shaderConfig.markAllInterfaceVarsAndResourcesUsed();
+			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources[kMVKShaderStageVertex]);
+			if(fragmentIR)mvkPopulateMetalIRResidencyOperations(_layout,_stageResources[kMVKShaderStageFragment]);
+			for (auto& input : shaderConfig.shaderInputs)
+				input.outIsUsedByShader = input.shaderVar.location < 32 && (vertexIR->vertexLocations & (1ull << input.shaderVar.location));
+			if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) {
+				_stageResources[kMVKShaderStageVertex].metalIR.reset();
+				_stageResources[kMVKShaderStageFragment].metalIR.reset();
+				[plDesc release];return nil;
+			}
+			addFragmentOutputToPipeline(plDesc, pCreateInfo);
+			setMetalObjectLabel(plDesc, _layout->getDebugName());
+			return plDesc;
+		}
+		_stageResources[kMVKShaderStageVertex].metalIR.reset();
+		_stageResources[kMVKShaderStageFragment].metalIR.reset();
+        [plDesc release]; return nil;
+	}
 	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
 
 	// Vertex input
@@ -4274,7 +4349,8 @@ bool MVKGraphicsPipeline::addVertexInputToPipeline(T* inputDesc,
 		if (shaderConfig.isShaderInputLocationUsed(pVKVA->location)) {
 			uint32_t vaBinding = pVKVA->binding;
 			uint32_t vaOffset = pVKVA->offset;
-			auto vaDesc = inputDesc.attributes[pVKVA->location];
+			auto& artifact = _stageResources[kMVKShaderStageVertex].metalIR;
+			auto vaDesc = inputDesc.attributes[artifact ? artifact->vertexAttributes[pVKVA->location] : pVKVA->location];
 			auto mtlFormat = (decltype(vaDesc.format))getPixelFormats()->getMTLVertexFormat(pVKVA->format);
 
 			// Vulkan allows offsets to exceed the buffer stride, but Metal doesn't.
@@ -4958,6 +5034,7 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 	} else {
 		_hasValidMTLPipelineStates = false;
 	}
+
 	if (pPipelineFB) {
 		if (_hasValidMTLPipelineStates) { mvkEnableFlags(pPipelineFB->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 		pPipelineFB->duration = mvkGetElapsedNanoseconds(pipelineStart);
@@ -4974,7 +5051,17 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
     const VkPipelineShaderStageCreateInfo* pSS = &pCreateInfo->stage;
     if ( !mvkAreAllFlagsEnabled(pSS->stage, VK_SHADER_STAGE_COMPUTE_BIT) ) { return MVKMTLFunctionNull; }
 
-	_module = getOrCreateShaderModule(_device, pSS, _ownsModule);
+	if (!_module) _module = getOrCreateShaderModule(_device, pSS, _ownsModule);
+	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
+		auto artifact = mvkCompileMetalIR(this, _layout, _module, pSS, 0,
+			_allowsDispatchBase ? MVK_METAL_IR_ALLOW_DISPATCH_BASE : 0);
+		if (artifact) {
+			_stageResources.metalIR = artifact;
+			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources);
+			return MVKMTLFunction(artifact->function, {}, MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2]));
+		}
+        return MVKMTLFunctionNull;
+	}
 
 	warnIfUnsupportedRobustnessEnabled(this, pSS);
 
@@ -5795,6 +5882,7 @@ MVKRenderPipelineCompiler::~MVKRenderPipelineCompiler() {
 #pragma mark MVKComputePipelineCompiler
 
 id<MTLComputePipelineState> MVKComputePipelineCompiler::newMTLComputePipelineState(MTLComputePipelineDescriptor* plDesc) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalComputePSO);
 	unique_lock<mutex> lock(_completionLock);
 
 	compile(lock, ^{

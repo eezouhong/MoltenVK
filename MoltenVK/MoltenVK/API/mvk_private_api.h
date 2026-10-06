@@ -562,6 +562,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
     size_t*                                    pStatsSize);
 
 /** Returns a nonblocking snapshot of current Metal 4 compiler admission usage. */
+/** Nonzero compiler ABI only when the explicit IR compiler plugin is available. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4CompilerConcurrencyStatisticsMVK(
     VkDevice                                   device,
     MVKMetal4CompilerConcurrencyStatistics*    pStats,

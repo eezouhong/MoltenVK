@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * mvk_api.mm
  *
@@ -26,6 +27,7 @@
 #include "MVKFoundation.h"
 #include "MVKShaderModule.h"
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
 #include "MVKQueue.h"
 #include <string>
 
@@ -147,6 +149,10 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
         return result;
     }
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
+    return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;
 }
 
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(

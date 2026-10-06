@@ -759,6 +759,9 @@ public:
 	/** Returns the optional device-wide physical shader-library repository. */
 	MVKShaderLibraryRepository* getShaderLibraryRepository() const { return _shaderLibraryRepository; }
 
+	/** Shader compiler choice is fixed for this device; IR never retries with MSL. */
+	bool isMetalIRShaderCompilerEnabled() const { return _metalIRShaderCompilerEnabled; }
+
 	/** Returns whether the unified Metal 4 compiler path is active. */
 	bool isMetal4CompilerEnabled() const { return _metal4CompilerService != nullptr; }
 
@@ -1185,6 +1188,7 @@ protected:
 
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;
+	bool _metalIRShaderCompilerEnabled = false;
 	MVKMetal4CompilerService* _metal4CompilerService = nullptr;
 	MVKMetal4TextureViewPool* _metal4TextureViewPool = nullptr;
 	MVKShaderLibraryRepository* _shaderLibraryRepository = nullptr;

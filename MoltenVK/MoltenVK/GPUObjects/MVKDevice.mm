@@ -25,6 +25,7 @@
 #include "MVKSwapchain.h"
 #include "MVKQueryPool.h"
 #include "MVKShaderModule.h"
+#include "MVKMetalIR.h"
 #include "MVKPipeline.h"
 #include "MVKFramebuffer.h"
 #include "MVKRenderPass.h"
@@ -5751,6 +5752,9 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 			   _physicalDevice->_isUsingMetalArgumentBuffers ? (_physicalDevice->_metalFeatures.needsArgumentBufferEncoders
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
+	_metalIRShaderCompilerEnabled = mvkMetalIREnabled();
+	reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Shader compiler selected: %s (automatic MSL fallback disabled)",
+	              _metalIRShaderCompilerEnabled ? "Metal IR" : "MSL");
 	_metal4CompilerService = MVKMetal4CompilerService::create(this);
 	_shaderLibraryRepository = MVKShaderLibraryRepository::create(this);
 	_metal4TextureViewPool = MVKMetal4TextureViewPool::create(this);
@@ -6124,6 +6128,7 @@ MVKDevice::~MVKDevice() {
 
 	delete _metal4TextureViewPool;
 	delete _shaderLibraryRepository;
+	mvkMetalIRDestroyDevice(this);
 	delete _metal4CompilerService;
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 

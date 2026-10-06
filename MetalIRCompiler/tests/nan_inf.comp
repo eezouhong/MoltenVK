@@ -15,7 +15,10 @@ void main() {
     precise float zeroProduct = infinity * 0.0;
     precise float infDifference = infinity - infinity;
     precise float nanDifference = nanValue - nanValue;
-    bool correct = isinf(infinity) && isnan(nanValue) &&
-                   isnan(zeroProduct) && isnan(infDifference) && isnan(nanDifference);
-    values[i] = correct ? source * parameters.x + parameters.y : 0xffffffffu;
+    uint failures = (isinf(infinity) ? 0u : 1u) |
+                    (isnan(nanValue) ? 0u : 2u) |
+                    (isnan(zeroProduct) ? 0u : 4u) |
+                    (isnan(infDifference) ? 0u : 8u) |
+                    (isnan(nanDifference) ? 0u : 16u);
+    values[i] = source * parameters.x + parameters.y + failures * 65536u;
 }

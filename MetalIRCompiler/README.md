@@ -71,6 +71,31 @@ This mode does not produce a usable plugin or install/run a phone app. Framework
 linking uses the iOS MSC slice; the macOS slice must never be embedded in a phone
 app. Device installation needs the user's authorization.
 
+Link completed dependency builds into the two framework slices:
+
+```sh
+DEVELOPER_DIR="$XCODE_27_DEVELOPER_DIR" ./build-ios.sh --link-frameworks \
+  --output "$FRAMEWORK_OUTPUT" \
+  --dependencies "$IOS_BUILD_OUTPUT/dependency-identity.json" \
+  --host-build "$BUILD_OUTPUT" --msc-dir "$MSC_SDK"
+```
+
+The device framework statically links Mesa and LLVM and dynamically links the
+pinned iOS MSC. `MeloNXMetalIR.xcframework` contains arm64 iOS and macOS slices;
+`ios-runtime/libmetalirconverter.dylib` is copied unchanged from the signed input.
+Embed & Sign that dylib in the app's Frameworks directory, as XeniOS does, along
+with the selected compiler slice. Only the four compiler ABI functions are
+exported. Framework linking does not establish device loading or performance.
+
+`tests/prepare_nan_inf.py --output "$NEW_TEST_DIRECTORY"` prepares a synthetic
+SPIR-V oracle from `tests/nan_inf.comp`, with explicit `SignedZeroInfNanPreserve`
+float32 execution mode and `NoContraction` operations. A Vulkan 1.2 buffer gate
+must check `shaderSignedZeroInfNanPreserveFloat32` before executing it. Each lane
+returns `i*3+7`; failures add a bit mask times 65536. Without the preserve mode,
+Vulkan permits finite-value assumptions, so that variant is not a valid strict
+NaN/Inf oracle. No captured game shaders are included here. Execute this test
+only through the shared graphics queue.
+
 ## Source and distribution notices
 
 The vendored AIR writer and ValueEnumerator retain their LLVM license headers

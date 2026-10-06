@@ -151,6 +151,14 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayPhaseStatisticsMVK(mvkreplay::Sample* output, uint32_t capacity, VkBool32 reset) {
+    return mvkreplay::snapshot(output,capacity,reset);
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(mvkreplay::SubmissionSample* output) {
+    return mvkreplay::submissionSnapshot(output);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
     return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;
 }

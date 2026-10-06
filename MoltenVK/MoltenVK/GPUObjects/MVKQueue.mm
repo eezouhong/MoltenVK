@@ -18,6 +18,7 @@
 
 #include "MVKInstance.h"
 #include "MVKQueue.h"
+#include "MVKReplayTrace.h"
 #include "MVKSurface.h"
 #include "MVKSwapchain.h"
 #include "MVKSync.h"
@@ -548,6 +549,9 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 	uint64_t startTime = getPerformanceTimestamp();
 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
 		addPerformanceInterval(getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
+		if (mvkreplay::mode()==mvkreplay::Mode::Coarse) {
+			mvkreplay::commandBufferCompleted(mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
+		}
 		if (signalCompletion) { this->finish(); }	// Must be the last thing the completetion callback does.
 	}];
 
@@ -850,4 +854,3 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 		setConfigurationResult(scRslt);
 	}
 }
-

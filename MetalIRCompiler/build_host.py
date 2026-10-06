@@ -85,15 +85,20 @@ def main():
     for patch in sorted((ROOT / "mesa/patches").glob("*.patch")):
         run(["git", "-C", source, "apply", "--check", patch])
         run(["git", "-C", source, "apply", patch])
-    env = dict(os.environ, CC=cc, CXX=cxx, SDKROOT=sdk,
+    meson = shutil.which(args.meson)
+    ninja = shutil.which(args.ninja)
+    if not meson or not ninja:
+        parser.error("Meson and Ninja must be available")
+    tool_path = os.pathsep.join([str(Path(meson).parent), str(Path(ninja).parent), os.environ["PATH"]])
+    env = dict(os.environ, CC=cc, CXX=cxx, SDKROOT=sdk, PATH=tool_path,
                MACOSX_DEPLOYMENT_TARGET="26.0",
                CFLAGS=shlex.join(["-isysroot", sdk, "-arch", "arm64"]),
                CXXFLAGS=shlex.join(["-isysroot", sdk, "-arch", "arm64"]),
                LDFLAGS=shlex.join(["-isysroot", sdk, "-arch", "arm64"]))
     options = ["-D" + line for line in (ROOT / "mesa/meson-options.txt").read_text().splitlines()
                if line and not line.startswith("#")]
-    run([args.meson, "setup", build, source, *options], env=env)
-    run([args.ninja, "-C", build, "-j", args.jobs,
+    run([meson, "setup", build, source, *options], env=env)
+    run([ninja, "-C", build, "-j", args.jobs,
          "src/microsoft/spirv_to_dxil/libspirv_to_dxil.dylib"], env=env)
     mesa = lib / "libspirv_to_dxil.dylib"
     shutil.copyfile(build / "src/microsoft/spirv_to_dxil/libspirv_to_dxil.dylib", mesa)

@@ -7,9 +7,11 @@ contain no captured game shaders or assets.
 Coverage: direct/indexed draws, negative base vertex, nonzero first instance,
 multi-draw IDs, GPU-written indirect arguments, triangle fan conversion, compute
 dispatch/base/indirect, shader switching, disk restore, missing compiler rejection,
-empty descriptor-set slots, and explicit per-device selection. The seventeen
+empty descriptor-set slots, and explicit per-device selection. The twenty-three
 cases do not cover all resource
-formats, point sprites, multiview, or end-of-buffer reads; add those separately.
+formats, point sprites, or multiview. Exact end-of-buffer draw/dispatch arguments
+and indirect triangle fans are included. Argument buffers are written by GPU
+transfer commands before consumption.
 
 Build only (no GPU execution), using the selected Xcode 27 developer directory:
 

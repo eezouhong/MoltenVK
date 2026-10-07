@@ -1,7 +1,7 @@
 # Experimental Metal IR compiler
 
 SPIR-V → pinned Mesa `spirv_to_dxil` → Apple Metal Shader Converter → metallib.
-MoltenVK loads this plugin through ABI 6 in `MVKMetalIRBridge.h`. Guest compilation
+MoltenVK loads this plugin through ABI 7 in `MVKMetalIRBridge.h`. Guest compilation
 errors fail explicitly; this plugin does not invoke the MSL source compiler.
 The AIR adapter preserves native point rasterizer I/O and exact memory attributes.
 This directory packages the existing implementation; runtime optimizations remain
@@ -140,3 +140,19 @@ The vendored AIR writer and ValueEnumerator retain their LLVM license headers
 Mesa source retains its upstream notices; distribute its applicable notices.
 Apple MSC is obtained separately under Apple's terms; distribution must include
 its LICENSE and Acknowledgements. No game shaders, saves, or captures belong here.
+
+
+## Raw indirect runtime parameters (ABI7)
+
+Pinned Mesa patch0005 lowers draw bases and compute group counts through a
+read-only raw SRV at register space28. Static runtime fields retain their CBV
+space31 and established offsets; push constants remain at space30. Live-use
+metadata decides whether each root parameter is present. The native encoder
+binds indirect argument addresses directly and declares their buffers resident;
+it never reads GPU-written arguments on the CPU or blits these fields. Direct
+commands upload/reuse their8/12-byte values through the existing arena.
+
+Rebuild Mesa and the compiler plugin together after this ABI change. ABI6
+plugins/frameworks are incompatible. Shader/cache identities include the ABI
+and dependency hashes. Source builds remain fresh-directory builds; local
+incremental repair artifacts are not a substitute for release reproducibility.

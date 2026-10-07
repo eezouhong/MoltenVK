@@ -272,14 +272,22 @@ kernel void cmdDrawIndirectPopulateIndexes(const device char* srcBuff [[buffer(0
 	const device auto& src = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);
 	device auto& dst = destBuff[idx];
 	dst.indexCount = src.vertexCount;
-	dst.indexStart = src.vertexStart;
-	dst.baseVertex = 0;
+	// Preserve Vulkan firstVertex as baseVertex, so both the hardware vertex
+	// index and the shader's BaseVertex system value survive fan conversion.
+	dst.indexStart = 0;
+	dst.baseVertex = src.vertexStart;
 	dst.instanceCount = src.instanceCount;
 	dst.baseInstance = src.baseInstance;
 
-	for (uint32_t idxIdx = 0; idxIdx < dst.indexCount; idxIdx++) {
-		uint32_t idxBuffIdx = dst.indexStart + idxIdx;
-		idxBuff[idxBuffIdx] = idxBuffIdx;
+	// One shared identity-index range serves every draw. Only one invocation
+	// writes it; overlapping draws must not race on the index buffer.
+	if (idx == 0) {
+		uint32_t maxCount = src.vertexCount;
+		for (uint32_t draw = 1; draw < drawCount; ++draw) {
+			const device auto& next = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + draw * srcStride);
+			maxCount = max(maxCount, next.vertexCount);
+		}
+		for (uint32_t vtxIdx = 0; vtxIdx < maxCount; ++vtxIdx) idxBuff[vtxIdx] = vtxIdx;
 	}
 }
 

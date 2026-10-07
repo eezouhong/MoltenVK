@@ -257,6 +257,8 @@ struct MVKStageResourceBindings {
 	struct MetalIRArguments {
 		const MVKMetalIRArtifact* rootArtifact = nullptr;
 		uint64_t runtimeAddress = 0;
+		uint64_t rawRuntimeAddress = 0;
+		id<MTLBuffer> rawRuntimeBuffer = nil;
 		/** The descriptor allocation is stable while its set remains bound.
 		 * descriptorSetData invalidation refreshes these addresses on rebind. */
 		uint64_t descriptorSetBases[kMVKMaxDescriptorSetCount] = {};
@@ -264,7 +266,7 @@ struct MVKStageResourceBindings {
 		id<MTLBuffer> pushConstantBuffer = nil;
 		uint32_t pushConstantSize = 0;
 		uint32_t argumentBytes = 0;
-		uint64_t arguments[kMVKMaxDescriptorSetCount * 2 + 2] = {};
+		uint64_t arguments[kMVKMaxDescriptorSetCount * 2 + 3] = {};
 		id<MTLBuffer> runtimeBuffer = nil;
 		id<MTLBuffer> drawIndirectBuffer = nil;
 		NSUInteger drawIndirectOffset = 0;
@@ -276,6 +278,8 @@ struct MVKStageResourceBindings {
 		void reset() {
 			rootArtifact = nullptr;
 			runtimeAddress = 0;
+			rawRuntimeAddress = 0;
+			rawRuntimeBuffer = nil;
 			memset(descriptorSetBases, 0, sizeof(descriptorSetBases));
 			pushConstantSize = 0;
 			pushConstantBuffer = nil;

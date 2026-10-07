@@ -95,6 +95,7 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     }
     dxil_spirv_runtime_conf conf={};
     conf.runtime_data_cbv.register_space=31;conf.push_constant_cbv.register_space=30;
+    conf.runtime_data_srv.register_space=28;conf.runtime_data_srv.enabled=true;
     conf.first_vertex_and_base_instance_mode=DXIL_SPIRV_SYSVAL_TYPE_RUNTIME_DATA;
     // Ordinary dispatch has a known zero base; base-enabled pipelines receive
     // the actual Vulkan origin in the runtime CBV, not Metal stage-in state.
@@ -127,12 +128,14 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     // Mesa runtime data and MSC draw arguments have separate ABIs. The native
     // encoder supplies both, and this metadata must survive disk restoration.
     bool runtimeData=dxil.metadata.requires_runtime_data;
+    bool runtimeRaw=dxil.metadata.requires_runtime_srv;
+    if(runtimeRaw)result->runtimeFlags|=request->executionModel==0?MVK_METAL_IR_DRAW_BASES:MVK_METAL_IR_DISPATCH_GROUPS;
     if(runtimeData&&request->executionModel!=0&&request->executionModel!=5){snprintf(result->error,sizeof(result->error),"runtime data for unsupported stage");return 1;}
     if(runtimeData)result->runtimeFlags|=MVK_METAL_IR_RUNTIME_DATA;
     if(request->executionModel==0&&dxil.metadata.unit_point_size)
         result->runtimeFlags|=MVK_METAL_IR_UNIT_POINT_SIZE;
     std::vector<IRDescriptorRange1> ranges(request->setCount*4);
-    std::vector<IRRootParameter1> params(request->setCount*2+(request->pushConstantSize?1:0)+(runtimeData?1:0));
+    std::vector<IRRootParameter1> params(request->setCount*2+(request->pushConstantSize?1:0)+(runtimeData?1:0)+(runtimeRaw?1:0));
     for(uint32_t set=0;set<request->setCount;++set) {
         uint32_t n=request->setSizes[set];
         for(uint32_t type=0;type<3;++type) {
@@ -148,8 +151,12 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
         push.Descriptor={0,30,IRRootDescriptorFlagDataVolatile};
     }
     if(runtimeData) {
-        auto& runtime=params.back();runtime.ParameterType=IRRootParameterTypeCBV;runtime.ShaderVisibility=IRShaderVisibilityAll;
+        auto& runtime=params[request->setCount*2+(request->pushConstantSize?1:0)];runtime.ParameterType=IRRootParameterTypeCBV;runtime.ShaderVisibility=IRShaderVisibilityAll;
         runtime.Descriptor={0,31,IRRootDescriptorFlagDataVolatile};
+    }
+    if(runtimeRaw) {
+        auto& raw=params.back();raw.ParameterType=IRRootParameterTypeSRV;raw.ShaderVisibility=IRShaderVisibilityAll;
+        raw.Descriptor={0,28,IRRootDescriptorFlagDataVolatile};
     }
     IRVersionedRootSignatureDescriptor rd={};rd.version=IRRootSignatureVersion_1_1;rd.desc_1_1.NumParameters=params.size();rd.desc_1_1.pParameters=params.data();
     auto& error=resources.error;auto& root=resources.root;

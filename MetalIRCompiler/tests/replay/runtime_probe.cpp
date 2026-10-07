@@ -1,6 +1,6 @@
 #include "vulkan_context.h"
 
-static bool graphics(const char* vertex,const char* fragment,bool fans) {
+static bool graphics(const char* vertex,const char* fragment,bool fans, bool tail=false, bool fanIndirect=false) {
     Context context; context.target();
     const uint32_t total=512;
     Buffer output=context.buffer(total*sizeof(Row),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); context.output(output,total*sizeof(Row));
@@ -9,18 +9,20 @@ static bool graphics(const char* vertex,const char* fragment,bool fans) {
     auto* i32=reinterpret_cast<uint32_t*>(static_cast<char*>(indices.mapped)+16);
     auto* i16=reinterpret_cast<uint16_t*>(static_cast<char*>(indices16.mapped)+8);
     for(uint32_t i=0;i<3;++i) { i32[2+i]=7+i; i32[8+i]=20+i; i16[2+i]=20+i; }
-    Buffer indirect=context.buffer(256,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    const uint32_t nonOffset=tail?4:32, indexedOffset=tail?8:128;
+    Buffer indirect=context.buffer(tail?indexedOffset+32+20:256,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    Buffer nonIndexed=context.buffer(tail?nonOffset+32+16:128,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     auto pipeline=context.graphics(context.shader(vertex),context.shader(fragment), fans?VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     std::vector<Row> expected(total,Row{0xcdcdcdcd,0xcdcdcdcd,0xcdcdcdcd,0xcdcdcdcd});
     context.begin();
-    uint32_t commands[16]{};
-    if(!fans) {
+    if(!fans || fanIndirect) {
         VkDrawIndirectCommand first{3,2,10,3},second{3,2,20,7};
+        uint32_t commands[16]{};
         memcpy(commands,&first,sizeof(first)); memcpy(commands+8,&second,sizeof(second));
-        vkCmdUpdateBuffer(context.command,indirect.handle,32,sizeof(commands),commands);
+        vkCmdUpdateBuffer(context.command,nonIndexed.handle,nonOffset,32+sizeof(second),commands);
         VkDrawIndexedIndirectCommand indexedFirst{3,2,2,-4,5},indexedSecond{3,2,8,6,7};
         memcpy(commands,&indexedFirst,sizeof(indexedFirst)); memcpy(commands+8,&indexedSecond,sizeof(indexedSecond));
-        vkCmdUpdateBuffer(context.command,indirect.handle,128,sizeof(commands),commands);
+        vkCmdUpdateBuffer(context.command,indirect.handle,indexedOffset,32+sizeof(indexedSecond),commands);
         context.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
     }
     VkClearValue clear{}; VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO}; begin.renderPass=context.renderPass; begin.framebuffer=context.framebuffer;
@@ -43,24 +45,25 @@ static bool graphics(const char* vertex,const char* fragment,bool fans) {
     prepare(64,{3,0},{9,0},{-4,0}); vkCmdDrawIndexed(context.command,3,2,2,-4,9);
     vkCmdBindIndexBuffer(context.command,indices16.handle,8,VK_INDEX_TYPE_UINT16);
     prepare(96,{12,0},{1,0},{-8,0}); vkCmdDrawIndexed(context.command,3,2,2,-8,1);
-    if(!fans) {
-        prepare(128,{10,20},{3,7},{10,20},2); vkCmdDrawIndirect(context.command,indirect.handle,32,2,32);
+    if(!fans || fanIndirect) {
+        prepare(128,{10,20},{3,7},{10,20},2); vkCmdDrawIndirect(context.command,nonIndexed.handle,nonOffset,2,32);
         vkCmdBindIndexBuffer(context.command,indices.handle,16,VK_INDEX_TYPE_UINT32);
-        prepare(160,{3,26},{5,7},{-4,6},2); vkCmdDrawIndexedIndirect(context.command,indirect.handle,128,2,32);
+        prepare(160,{3,26},{5,7},{-4,6},2); vkCmdDrawIndexedIndirect(context.command,indirect.handle,indexedOffset,2,32);
     }
     vkCmdEndRenderPass(context.command); context.finish();
     return checkRows(output,expected,fans?"triangle-fan-system-values":"draw-system-values");
 }
 
-static bool compute(const char* runtime,const char* unused,bool emptySets=false) {
+static bool compute(const char* runtime,const char* unused,bool emptySets=false, bool tail=false) {
     Context context(emptySets);
     auto active=context.compute(context.shader(runtime)), inactive=context.compute(context.shader(unused));
     const uint32_t total=128;
     Buffer output=context.buffer(total*sizeof(Row),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); context.output(output,total*sizeof(Row));
-    Buffer indirect=context.buffer(64,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    const uint32_t indirectOffset=tail?4:16;
+    Buffer indirect=context.buffer(tail?indirectOffset+12:64,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     std::vector<Row> expected(total,Row{0xcdcdcdcd,0xcdcdcdcd,0xcdcdcdcd,0xcdcdcdcd});
     context.begin();
-    uint32_t groups[]={2,2,2}; vkCmdUpdateBuffer(context.command,indirect.handle,16,sizeof(groups),groups);
+    uint32_t groups[]={2,2,2}; vkCmdUpdateBuffer(context.command,indirect.handle,indirectOffset,sizeof(groups),groups);
     context.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
     vkCmdBindDescriptorSets(context.command,VK_PIPELINE_BIND_POINT_COMPUTE,context.layout,0,1,&context.descriptor,0,nullptr);
     auto prepare=[&](uint32_t destination,std::array<uint32_t,3> origin) {
@@ -75,7 +78,7 @@ static bool compute(const char* runtime,const char* unused,bool emptySets=false)
     vkCmdBindPipeline(context.command,VK_PIPELINE_BIND_POINT_COMPUTE,active);
     prepare(0,{3,2,1}); vkCmdDispatchBase(context.command,3,2,1,2,2,2);
     prepare(32,{0,0,0}); vkCmdDispatch(context.command,2,2,2);
-    prepare(64,{0,0,0}); vkCmdDispatchIndirect(context.command,indirect.handle,16);
+    prepare(64,{0,0,0}); vkCmdDispatchIndirect(context.command,indirect.handle,indirectOffset);
     vkCmdBindPipeline(context.command,VK_PIPELINE_BIND_POINT_COMPUTE,inactive);
     uint32_t push[8]={96,0,0,0,0,0,0,0}; vkCmdPushConstants(context.command,context.layout,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),push);
     expected[96]={11,22,33,44}; vkCmdDispatch(context.command,1,1,1);
@@ -97,7 +100,10 @@ int main(int argc,char** argv) {
             success = graphics(argv[2],argv[3],false) && success;
             return success ? 0 : 1;
         }
-        bool success=(std::string(argv[1])=="compute" || std::string(argv[1])=="empty")?compute(argv[2],argv[3],std::string(argv[1])=="empty"):graphics(argv[2],argv[3],std::string(argv[1])=="fan");
+        const std::string mode=argv[1];
+        bool success=(mode=="compute" || mode=="empty" || mode=="compute-tail")
+            ?compute(argv[2],argv[3],mode=="empty",mode=="compute-tail")
+            :graphics(argv[2],argv[3],mode=="fan" || mode=="fan-indirect",mode=="tail",mode=="fan-indirect");
         return success?0:1;
     } catch(const std::exception& error) { fprintf(stderr,"probe failed: %s\n",error.what()); return 1; }
 }

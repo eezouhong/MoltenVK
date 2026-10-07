@@ -4,10 +4,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 6 };
+enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 7 };
 enum : uint32_t { MVK_METAL_IR_FLIP_Y = 1, MVK_METAL_IR_CLIP_HALF_Z = 2 };
 enum : uint32_t { MVK_METAL_IR_RUNTIME_DATA = 1, MVK_METAL_IR_DRAW_PARAMETERS = 2 };
 enum : uint32_t { MVK_METAL_IR_UNIT_POINT_SIZE = 4 };
+enum : uint32_t { MVK_METAL_IR_DRAW_BASES = 32, MVK_METAL_IR_DISPATCH_GROUPS = 64 };
 enum : uint32_t { MVK_METAL_IR_NATIVE_POINT_SIZE = 8, MVK_METAL_IR_NATIVE_POINT_COORDINATES = 16 };
 enum : uint32_t { MVK_METAL_IR_ALLOW_DISPATCH_BASE = 1, MVK_METAL_IR_RENDERING_POINTS = 2 };
 struct MVKMetalIRBinding {

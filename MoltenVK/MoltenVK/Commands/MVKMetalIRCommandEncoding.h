@@ -16,8 +16,9 @@ public:
         uint64_t gpuAddress = 0;
     };
     struct RuntimeBatch {
-        id<MTLBuffer> buffer = nil;
-        NSUInteger offset = 0, stride = 0;
+        bool active = false;
+        bool indexed = false;
+        uint32_t runtimeFlags = 0;
     };
     struct DrawBinding {
         mvkir::DrawArguments arguments{};
@@ -30,17 +31,18 @@ public:
     void reset();
     BufferBinding copyBytes(const void* bytes, NSUInteger length);
     void prepareDraw(const MVKMetalIRArtifact* artifact, const mvkir::DirectDraw& draw);
-    RuntimeBatch prepareIndirectDraws(const MVKMetalIRArtifact* artifact,
-        id<MTLBuffer> arguments, NSUInteger offset, NSUInteger stride, uint32_t count, bool indexed);
+    RuntimeBatch prepareIndirectDraws(const MVKMetalIRArtifact* artifact, uint32_t count, bool indexed);
     void selectIndirectDraw(const RuntimeBatch& batch, uint32_t drawId,
         id<MTLBuffer> arguments, NSUInteger offset, uint16_t indexType);
     void prepareDispatch(const MVKMetalIRArtifact* artifact, const mvkir::ComputeData& data);
     void prepareIndirectDispatch(const MVKMetalIRArtifact* artifact, id<MTLBuffer> arguments, NSUInteger offset);
     BufferBinding runtimeBinding(bool compute) const;
+    BufferBinding rawRuntimeBinding(bool compute) const;
     const DrawBinding& drawBinding() const { return _draw; }
 
 private:
     void cacheRuntimeData(bool compute, const void* bytes, uint32_t size);
+    void cacheRawRuntimeData(bool compute, const void* bytes, uint32_t size);
     MVKCommandEncoder& _encoder;
     struct Arena {
         const MVKMTLBufferAllocation* allocation = nullptr;
@@ -53,6 +55,6 @@ private:
         uint32_t byteSize = 0;
         bool cpuData = false;
         BufferBinding binding{};
-    } _runtime[2]; // vertex, compute
+    } _runtime[2], _rawRuntime[2]; // vertex, compute
     DrawBinding _draw;
 };

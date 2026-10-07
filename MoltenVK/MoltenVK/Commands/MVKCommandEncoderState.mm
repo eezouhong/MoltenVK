@@ -690,7 +690,10 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 	const auto runtime = usesRuntime
 		? mvkEncoder.metalIR().runtimeBinding(vkStage == kMVKShaderStageCompute)
 		: MVKMetalIRCommandEncoding::BufferBinding{};
-	const uint32_t argumentCount = artifact.setCount * 2 + (artifact.pushConstantSize ? 1 : 0) + (usesRuntime ? 1 : 0);
+	const bool usesRaw = artifact.runtimeFlags & (MVK_METAL_IR_DRAW_BASES | MVK_METAL_IR_DISPATCH_GROUPS);
+	const auto raw = usesRaw ? mvkEncoder.metalIR().rawRuntimeBinding(vkStage == kMVKShaderStageCompute)
+		: MVKMetalIRCommandEncoding::BufferBinding{};
+	const uint32_t argumentCount = artifact.setCount * 2 + (artifact.pushConstantSize ? 1 : 0) + (usesRuntime ? 1 : 0) + (usesRaw ? 1 : 0);
 	const uint32_t argumentBytes = argumentCount * sizeof(uint64_t);
 	// Vulkan pipeline resources outlive their encoded commands. This key is used
 	// only within one Metal encoder/stage, and reset with that encoder's state.
@@ -698,8 +701,9 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 		(artifact.usedSets & ~uint64_t(exists.descriptorSetData.bits())) ||
 		(artifact.usesPushConstants && artifact.pushConstantSize && cached.pushConstantSize != artifact.pushConstantSize) ||
 		(usesRuntime && (cached.runtimeAddress != runtime.gpuAddress || cached.runtimeBuffer != runtime.buffer)) ||
+		(usesRaw && (cached.rawRuntimeAddress != raw.gpuAddress || cached.rawRuntimeBuffer != raw.buffer)) ||
 		(argumentBytes && (!exists.buffers.get(2) || bindings.buffers[2] != MVKStageResourceBindings::MetalIRRootBuffer()));
-	uint64_t args[kMVKMaxDescriptorSetCount * 2 + 2];
+	uint64_t args[kMVKMaxDescriptorSetCount * 2 + 3];
 	if (needsRoot) {
 		memset(args, 0, sizeof(args));
 		for (uint32_t idx = 0; idx < artifact.setCount; ++idx) {
@@ -754,6 +758,14 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 				cached.runtimeBuffer = runtime.buffer;
 			}
 		}
+		if (usesRaw) {
+			assert(raw.buffer && raw.gpuAddress);
+			args[runtimeIndex + (usesRuntime ? 1 : 0)] = raw.gpuAddress;
+			if (cached.rawRuntimeBuffer != raw.buffer) {
+				shared._useResource.add(raw.buffer, useResourceStage, false);
+				cached.rawRuntimeBuffer = raw.buffer;
+			}
+		}
 		if (argumentBytes && (!exists.buffers.get(2) ||
 			bindings.buffers[2] != MVKStageResourceBindings::MetalIRRootBuffer() ||
 			cached.argumentBytes != argumentBytes || memcmp(cached.arguments, args, argumentBytes))) {
@@ -765,6 +777,7 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 		}
 		cached.rootArtifact = &artifact;
 		cached.runtimeAddress = runtime.gpuAddress;
+		cached.rawRuntimeAddress = raw.gpuAddress;
 	}
 	if (artifact.runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS) {
 		assert(vkStage == kMVKShaderStageVertex);

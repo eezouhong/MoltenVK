@@ -5,7 +5,8 @@
 
 namespace mvkir {
 
-// Mirrors the pinned Mesa vertex runtime CBV, not Metal's draw-argument block.
+// Preserves Mesa static-CBV offsets. ABI7 uploads zeros in the first8bytes;
+// draw bases are supplied separately through a four-byte-aligned raw SRV.
 // All padding is explicit so copying this object never publishes stale bytes.
 struct VertexData {
     uint32_t firstVertex = 0;
@@ -19,7 +20,8 @@ struct VertexData {
     float depthBias = 0;
 };
 
-// Mirrors the pinned Mesa compute runtime CBV.
+// Preserves Mesa compute static-CBV offsets. ABI7 group counts use a raw SRV;
+// these host input fields are zeroed when uploading the static CBV.
 struct ComputeData {
     uint32_t groupCount[3] = {};
     uint32_t padding = 0;

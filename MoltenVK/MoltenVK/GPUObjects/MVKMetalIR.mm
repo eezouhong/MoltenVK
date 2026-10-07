@@ -229,9 +229,11 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         }
         bool validResult=result.abiVersion==MVK_METAL_IR_ABI_VERSION&&result.entry[0]&&
             memchr(result.entry,0,sizeof(result.entry))&&result.metallib&&result.metallibSize&&result.metallibSize<=64*1024*1024;
-        validResult&=!(result.runtimeFlags&~(MVK_METAL_IR_RUNTIME_DATA|MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_COORDINATES));
+        validResult&=!(result.runtimeFlags&~(MVK_METAL_IR_RUNTIME_DATA|MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_COORDINATES|MVK_METAL_IR_DRAW_BASES|MVK_METAL_IR_DISPATCH_GROUPS));
         validResult&=execution==0||!(result.runtimeFlags&(MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE));
         validResult&=execution==4||!(result.runtimeFlags&MVK_METAL_IR_NATIVE_POINT_COORDINATES);
+        validResult&=execution==0||!(result.runtimeFlags&MVK_METAL_IR_DRAW_BASES);
+        validResult&=execution==5||!(result.runtimeFlags&MVK_METAL_IR_DISPATCH_GROUPS);
         validResult&=execution!=4||!(result.runtimeFlags&MVK_METAL_IR_RUNTIME_DATA);
         if(execution==5)validResult&=result.threadgroupSize[0]&&result.threadgroupSize[0]<=1024&&
             result.threadgroupSize[1]&&result.threadgroupSize[1]<=1024&&result.threadgroupSize[2]&&result.threadgroupSize[2]<=1024&&

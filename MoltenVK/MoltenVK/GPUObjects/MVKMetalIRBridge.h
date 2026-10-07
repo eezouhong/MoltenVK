@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 7 };
+enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 8 };
+enum : uint32_t { MVK_METAL_IR_MATH_FAST = 0, MVK_METAL_IR_MATH_SAFE = 1, MVK_METAL_IR_MATH_RELAXED = 2 };
 enum : uint32_t { MVK_METAL_IR_FLIP_Y = 1, MVK_METAL_IR_CLIP_HALF_Z = 2 };
 enum : uint32_t { MVK_METAL_IR_RUNTIME_DATA = 1, MVK_METAL_IR_DRAW_PARAMETERS = 2 };
 enum : uint32_t { MVK_METAL_IR_UNIT_POINT_SIZE = 4 };
@@ -30,7 +31,7 @@ struct MVKMetalIRCompileRequest {
     uint32_t setCount;
     uint32_t pushConstantSize;
     uint32_t preserveInvariance;
-    uint32_t strictMath;
+    uint32_t mathMode;
     uint32_t vertexTransformFlags;
     uint32_t runtimeOptions;
 };

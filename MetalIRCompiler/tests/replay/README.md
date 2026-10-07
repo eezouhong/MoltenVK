@@ -50,3 +50,22 @@ same queue wrapper. It defaults to IR; `--route msl` is an optional independent
 comparison and still fails if its output violates the CPU oracle. `--pool`
 requires an actual Metal 4 view-pool assignment, while `--shader-validation`
 requires the validation layer to report activation. Both can be combined.
+
+`math_probe` and `run_math.py` cover the shared Safe/Relaxed/Fast policy with
+ON_DEMAND, NEVER and ALWAYS, actual float-controls2 feature enablement, explicit
+precise operations, and permitted NaN/Inf results. The generator validates all
+synthetic SPIR-V variants. NaN/Inf is not an oracle for Fast, which permits
+finite-value assumptions; those cases use finite inputs. Mixed precise
+per-operation defaults intersect to Safe, matching the MSL policy. Every run
+requires GPU validation and verifies the exact loaded native/plugin identity.
+The runner has the same required path arguments as the other suites and must
+run through the queue. Scalar math success does not prove complete mathematical
+conformance or game performance.
+
+The expanded 48-case scalar matrix distinguishes an explicit `NoTransform`
+default from permitted transforms and keeps legacy `NoContraction` alongside
+ordinary relaxed operations in a separate variant. Isolated precise results
+must match the CPU's separated float32 multiply/add exactly; the fixture first
+proves its sentinel differs from FMA. Cases that permit contraction use a finite
+tolerance for the corresponding output. This does not turn a legal optimization
+into a precision failure.

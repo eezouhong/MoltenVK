@@ -79,16 +79,16 @@ std::shared_ptr<DeviceArtifacts> deviceArtifacts(MVKDevice* device) {
     if(!slot)slot=std::make_shared<DeviceArtifacts>();
     return slot;
 }
-uint32_t requiresStrictMath(const std::vector<uint32_t>& code, const char* entry,
-                            spv::ExecutionModel execution, MVKConfigFastMath preference) {
+uint32_t shaderMathMode(const std::vector<uint32_t>& code, const char* entry,
+                        spv::ExecutionModel execution, MVKConfigFastMath preference) {
     SPIRV_CROSS_NAMESPACE::CompilerMSL reflection(code);
     reflection.set_entry_point(entry, execution);
-    const auto mode = mvkshader::resolveMathMode(preference, reflection.get_fp_fast_math_flags(true));
-    // NoContraction remains on the original instructions. Mesa emits no unsafe
-    // algebra flags for exact operations, even when global refactoring is allowed.
-    // The current boolean DXIL adapter represents Safe/Fast. Partial Relaxed
-    // permissions retain the existing conservative behavior until mapped per-op.
-    return mode != mvkshader::MathMode::Fast;
+    switch (mvkshader::resolveMathMode(preference, reflection.get_fp_fast_math_flags(true))) {
+        case mvkshader::MathMode::Safe: return MVK_METAL_IR_MATH_SAFE;
+        case mvkshader::MathMode::Relaxed: return MVK_METAL_IR_MATH_RELAXED;
+        case mvkshader::MathMode::Fast: return MVK_METAL_IR_MATH_FAST;
+    }
+    return MVK_METAL_IR_MATH_SAFE;
 }
 
 std::string keyFor(const MVKMetalIRCompileRequest& request) {
@@ -97,7 +97,7 @@ std::string keyFor(const MVKMetalIRCompileRequest& request) {
     add(plugin().identity.data(),plugin().identity.size());add(&request.abiVersion,4);add(&request.executionModel,4);
     add(request.words,request.wordCount*4);add(request.entry,strlen(request.entry));
     add(request.bindings,request.bindingCount*sizeof(MVKMetalIRBinding));add(request.setSizes,request.setCount*4);
-    add(&request.pushConstantSize,4);add(&request.preserveInvariance,4);add(&request.strictMath,4);
+    add(&request.pushConstantSize,4);add(&request.preserveInvariance,4);add(&request.mathMode,4);
     add(&request.vertexTransformFlags,4);
     add(&request.runtimeOptions,4);
     unsigned char digest[32];CC_SHA256_Final(digest,&hash);char text[65];for(int i=0;i<32;++i)snprintf(text+i*2,3,"%02x",digest[i]);return text;
@@ -208,8 +208,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     }
     uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
     const char* strictMathOption=getenv("MELONX_METAL_IR_STRICT_MATH");
-    uint32_t strictMath=strictMathOption?(strcmp(strictMathOption,"1")==0):requiresStrictMath(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
-    MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0,strictMath,vertexTransformFlags,runtimeOptions};
+    uint32_t mathMode=strictMathOption?(strcmp(strictMathOption,"1")==0):shaderMathMode(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
+    MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0,mathMode,vertexTransformFlags,runtimeOptions};
     std::string key=keyFor(request);
     auto state=deviceArtifacts(owner->getDevice());
     auto compiled = state->cache.get(key,[&]() -> DeviceArtifacts::Cache::Result {
@@ -284,7 +284,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
                     }
                 }
                 if(telemetry)state->reflectionNs+=elapsedNs(reflectionStart);
-                if(artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR %s stage %u: Mesa %.3f ms, converter %.3f ms, raster adapter %.3f ms, active sets 0x%llx, strict math %u, push bytes %u/%u, runtime flags 0x%x",fromDisk?"restored":"compiled",execution,result.mesaMs,result.converterMs,result.rasterAdapterMs,(unsigned long long)artifact->usedSets,request.strictMath,artifact->usesPushConstants?artifact->pushConstantSize:0u,artifact->pushConstantSize,artifact->runtimeFlags);
+                if(artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR %s stage %u: Mesa %.3f ms, converter %.3f ms, raster adapter %.3f ms, active sets 0x%llx, math mode %u, push bytes %u/%u, runtime flags 0x%x",fromDisk?"restored":"compiled",execution,result.mesaMs,result.converterMs,result.rasterAdapterMs,(unsigned long long)artifact->usedSets,request.mathMode,artifact->usesPushConstants?artifact->pushConstantSize:0u,artifact->pushConstantSize,artifact->runtimeFlags);
             }
         }
         if(!artifact&&fromDisk){

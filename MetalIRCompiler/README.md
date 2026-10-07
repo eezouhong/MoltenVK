@@ -1,11 +1,27 @@
 # Experimental Metal IR compiler
 
 SPIR-V → pinned Mesa `spirv_to_dxil` → Apple Metal Shader Converter → metallib.
-MoltenVK loads this plugin through ABI 7 in `MVKMetalIRBridge.h`. Guest compilation
+MoltenVK loads this plugin through ABI 8 in `MVKMetalIRBridge.h`. Guest compilation
 errors fail explicitly; this plugin does not invoke the MSL source compiler.
 The AIR adapter preserves native point rasterizer I/O and exact memory attributes.
 This directory packages the existing implementation; runtime optimizations remain
 separate work.
+
+ABI 8 represents the shared shader mathematical policy explicitly: Fast=0,
+Safe=1, Relaxed=2. Partial Relaxed retains NaN/Inf behavior while allowing
+reassociation, contraction, signed-zero simplification and reciprocals.
+Mesa marks only non-exact floating binary operations with `nsz/arcp`; the AIR
+permission adapter adds `reassoc/contract` to those operations. It does not add
+`nnan`, `ninf`, approximate-function or legacy unsafe-algebra permissions.
+Operation-level `NoContraction` remains in the original SPIR-V.
+
+The adapter edits fixed-width flag fields in the original MSC bitstream and
+updates its checksum. It preserves the type graph, metadata and offsets, avoiding
+LLVM 17's upgrade from legacy typed pointers to opaque pointers. Unknown flag
+encodings, narrow fields, invalid ranges and checksum failures reject IR
+compilation. ABI 6/7 plugins and frameworks must be rebuilt together with Mesa;
+the native loader rejects mismatches. The cache key includes this ABI, the full
+math mode and the compiler binary/dependency identity.
 
 ## Dependencies
 
@@ -156,3 +172,36 @@ Rebuild Mesa and the compiler plugin together after this ABI change. ABI6
 plugins/frameworks are incompatible. Shader/cache identities include the ABI
 and dependency hashes. Source builds remain fresh-directory builds; local
 incremental repair artifacts are not a substitute for release reproducibility.
+
+## Mathematical-policy validation
+
+The replay CMake target also builds `math_probe` and prepares synthetic float
+control variants using glslang and SPIR-V Tools. `tests/replay/run_math.py` takes
+the same explicit build/native/plugin/output arguments as the system replay.
+It tests real per-device selection with ON_DEMAND, NEVER and ALWAYS, checks
+separate precise results and permitted finite/NaN/Inf results, requires Metal
+shader validation, and freezes source/input/binary hashes. Execute it through
+the same canonical graphics queue wrapper. These scalar checks do not establish
+whole-game visual, FPS or memory acceptance.
+
+`tests/math_adapter_test.cpp` is a CPU-only structural bitstream test. Link it
+with `src/air_math_adapter.cpp` and the pinned LLVM 17 core/bitreader/bitwriter
+dependencies; compile without `NDEBUG`. It generates its own typed-pointer
+fixture and checks that only eligible permission bits and the checksum change,
+including idempotence, no-op, invalid/truncated data, unsupported encodings and
+insufficient field widths. An optional input path repeats these checks on the
+seven-operation synthetic MSC fixture. It neither creates a Metal device nor
+proves GPU execution; the Vulkan scalar oracles provide that separate evidence.
+
+Build and run the structural checks from the repository root:
+
+```sh
+python3 MetalIRCompiler/tests/run_math_adapter.py \
+  --llvm-config "$LLVM_17_SDK/bin/llvm-config" \
+  --zstd-library "$MACOS_STATIC_ZSTD" --output "$NEW_CPU_TEST_OUTPUT"
+```
+
+The public scalar matrix separately covers defaults without `AllowTransform`,
+defaults allowing transforms, and a mixed shader with two `NoContraction`
+operations. Its precision samples include float32 inputs where explicit FMA and
+separate multiply/add differ; a CPU guard rejects an ineffective sentinel.

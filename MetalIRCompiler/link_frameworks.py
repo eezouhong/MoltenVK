@@ -89,7 +89,7 @@ def main():
              '-arch', 'arm64', '-isysroot', sdk, '-miphoneos-version-min=17.0',
              '-I' + str(ROOT / 'src'), '-I' + str(ROOT / 'src/air'),
              '-I' + str(llvm_source / 'include'), '-I' + str(llvm / 'include')]
-    sources = [ROOT / 'src/air/BitcodeWriter.cpp', ROOT / 'src/native_raster_adapter.cpp',
+    sources = [ROOT / 'src/air/BitcodeWriter.cpp', ROOT / 'src/native_raster_adapter.cpp', ROOT / 'src/air_math_adapter.cpp',
                ROOT / 'src/compiler_plugin.mm']
     identity_data = {'msc': sha(msc), 'archives': deps['archives'],
                      'sources': {str(p.relative_to(ROOT)): sha(p) for p in sources},

@@ -107,7 +107,7 @@ def main():
              "-isysroot", sdk, "-arch", "arm64", "-mmacosx-version-min=26.0",
              "-I" + str(ROOT / "src"), "-I" + str(ROOT / "src/air"), "-I" + llvm_include]
     objects = []
-    for file in (ROOT / "src/air/BitcodeWriter.cpp", ROOT / "src/native_raster_adapter.cpp"):
+    for file in (ROOT / "src/air/BitcodeWriter.cpp", ROOT / "src/native_raster_adapter.cpp", ROOT / "src/air_math_adapter.cpp"):
         target = obj / (file.stem + ".o")
         run([cxx, *flags, "-c", file, "-o", target], env=env)
         objects.append(target)

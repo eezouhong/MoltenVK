@@ -31,3 +31,53 @@ target_include_directories(descriptor_probe PRIVATE "${VULKAN_HEADERS}")
 target_link_libraries(descriptor_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(descriptor_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(descriptor_probe replay_shaders)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_program(SPIRV_DIS spirv-dis REQUIRED)
+find_program(SPIRV_AS spirv-as REQUIRED)
+find_program(SPIRV_VAL spirv-val REQUIRED)
+set(MATH_LEGACY "${CMAKE_CURRENT_BINARY_DIR}/math-legacy.spv")
+set(MATH_VARIANTS)
+foreach(KIND safe mixed-precise relaxed fast relaxed-transform mixed-no-contraction fast-transform)
+    list(APPEND MATH_VARIANTS "${CMAKE_CURRENT_BINARY_DIR}/math-${KIND}.spv")
+endforeach()
+add_custom_command(OUTPUT "${MATH_LEGACY}"
+    COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
+        "${CMAKE_CURRENT_SOURCE_DIR}/relaxed_math.comp" -o "${MATH_LEGACY}"
+    DEPENDS relaxed_math.comp VERBATIM)
+add_custom_command(OUTPUT ${MATH_VARIANTS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_math.py"
+        --input "${MATH_LEGACY}" --output "${CMAKE_CURRENT_BINARY_DIR}"
+        --disassembler "${SPIRV_DIS}" --assembler "${SPIRV_AS}" --validator "${SPIRV_VAL}"
+    DEPENDS "${MATH_LEGACY}" prepare_math.py VERBATIM)
+add_custom_target(math_shaders ALL DEPENDS ${MATH_VARIANTS})
+add_executable(math_probe math_probe.cpp)
+target_compile_features(math_probe PRIVATE cxx_std_17)
+target_compile_options(math_probe PRIVATE -ffp-contract=off)
+target_include_directories(math_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(math_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(math_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(math_probe math_shaders)
+
+set(GRAPHICS_MATH_OUTPUTS)
+foreach(STAGE vert frag)
+    list(APPEND GRAPHICS_MATH_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/math_plain.${STAGE}.spv")
+    foreach(VARIANT no-transform transform)
+        list(APPEND GRAPHICS_MATH_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/math_graphics-${VARIANT}.${STAGE}.spv")
+    endforeach()
+endforeach()
+add_custom_command(OUTPUT ${GRAPHICS_MATH_OUTPUTS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_graphics_math.py"
+        --source "${CMAKE_CURRENT_SOURCE_DIR}" --output "${CMAKE_CURRENT_BINARY_DIR}"
+        --glslang "${GLSLANG_VALIDATOR}" --disassembler "${SPIRV_DIS}"
+        --assembler "${SPIRV_AS}" --validator "${SPIRV_VAL}"
+    DEPENDS prepare_graphics_math.py prepare_math.py math_graphics.vert math_graphics.frag
+            math_plain.vert math_plain.frag VERBATIM)
+add_custom_target(graphics_math_shaders ALL DEPENDS ${GRAPHICS_MATH_OUTPUTS})
+add_executable(graphics_math_probe graphics_math_probe.cpp)
+target_compile_features(graphics_math_probe PRIVATE cxx_std_17)
+target_compile_options(graphics_math_probe PRIVATE -ffp-contract=off)
+target_include_directories(graphics_math_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(graphics_math_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(graphics_math_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(graphics_math_probe graphics_math_shaders)

@@ -26,6 +26,7 @@ public:
     VkPhysicalDevice physical{};
     uint32_t family{};
     bool negativeDepth = false;
+    bool fragmentStorage = false;
     VkPhysicalDeviceMemoryProperties memory{};
     VkDescriptorSetLayout descriptorLayout{}, emptyLayout{}, zeroCountLayout{};
     VkDescriptorPool descriptorPool{};
@@ -42,8 +43,10 @@ public:
     std::vector<VkShaderModule> modules;
     std::vector<VkPipeline> pipelines;
 
-    explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false) : negativeDepth(negativeDepthMode) {
-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = VK_API_VERSION_1_1;
+    explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
+                     bool floatControls2 = false, bool fragmentStorageMode = false)
+        : negativeDepth(negativeDepthMode), fragmentStorage(fragmentStorageMode) {
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
         VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
         VK_CHECK(vkCreateInstance(&info, nullptr, &instance));
         uint32_t count{}; VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
@@ -62,16 +65,22 @@ public:
         VkPhysicalDeviceShaderDrawParametersFeatures draw{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES};
         draw.shaderDrawParameters=VK_TRUE;
         VkPhysicalDeviceFeatures features{}; features.vertexPipelineStoresAndAtomics=VK_TRUE;
+        features.fragmentStoresAndAtomics=fragmentStorage;
         features.largePoints=largePoints;
         features.multiDrawIndirect=VK_TRUE; features.drawIndirectFirstInstance=VK_TRUE;
-        const char* extensions[]={"VK_KHR_portability_subset",VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME};
+        const char* extensions[]={"VK_KHR_portability_subset", floatControls2 ? VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME : VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
+                                  VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME};
         VkPhysicalDeviceDepthClipControlFeaturesEXT depth{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT}; depth.depthClipControl=VK_TRUE;
-        if(negativeDepth) draw.pNext=&depth;
+        VkPhysicalDeviceShaderFloatControls2FeaturesKHR math{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR}; math.shaderFloatControls2=VK_TRUE;
+        if(floatControls2) { draw.pNext=&math; if(negativeDepth) math.pNext=&depth; }
+        else if(negativeDepth) draw.pNext=&depth;
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&draw; dc.pEnabledFeatures=&features;
-        dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qi; dc.enabledExtensionCount=negativeDepth?2:1; dc.ppEnabledExtensionNames=extensions;
+        dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qi; dc.enabledExtensionCount=1+unsigned(floatControls2)+unsigned(negativeDepth); dc.ppEnabledExtensionNames=extensions;
         VK_CHECK(vkCreateDevice(physical, &dc, nullptr, &device)); vkGetDeviceQueue(device, family, 0, &queue);
         vkGetPhysicalDeviceMemoryProperties(physical, &memory);
-        VkDescriptorSetLayoutBinding binding{0,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
+        VkShaderStageFlags outputStages=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_COMPUTE_BIT;
+        if(fragmentStorage)outputStages|=VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding binding{0,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,outputStages,nullptr};
         VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; dl.bindingCount=1; dl.pBindings=&binding;
         VK_CHECK(vkCreateDescriptorSetLayout(device,&dl,nullptr,&descriptorLayout));
         VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1};
@@ -79,7 +88,7 @@ public:
         VK_CHECK(vkCreateDescriptorPool(device,&dp,nullptr,&descriptorPool));
         VkDescriptorSetAllocateInfo ds{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; ds.descriptorPool=descriptorPool; ds.descriptorSetCount=1; ds.pSetLayouts=&descriptorLayout;
         VK_CHECK(vkAllocateDescriptorSets(device,&ds,&descriptor));
-        VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_COMPUTE_BIT,0,32};
+        VkPushConstantRange push{outputStages,0,32};
         VkDescriptorSetLayoutCreateInfo empty{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         if (emptySets) {
             VK_CHECK(vkCreateDescriptorSetLayout(device,&empty,nullptr,&emptyLayout));
@@ -133,7 +142,9 @@ public:
         vkCmdPipelineBarrier(command,source,destination,0,1,&barrier,0,nullptr,0,nullptr);
     }
     void finish() {
-        barrier(VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_HOST_BIT,VK_ACCESS_HOST_READ_BIT);
+        VkPipelineStageFlags outputStages=VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        if(fragmentStorage)outputStages|=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        barrier(outputStages,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_HOST_BIT,VK_ACCESS_HOST_READ_BIT);
         VK_CHECK(vkEndCommandBuffer(command));
         VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; VkFence fence; VK_CHECK(vkCreateFence(device,&fi,nullptr,&fence));
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount=1; submit.pCommandBuffers=&command;
@@ -208,4 +219,3 @@ inline bool checkRows(Buffer output,const std::vector<Row>& expected,const char*
     printf("{\"case\":\"%s\",\"correct\":%u,\"total\":%zu,\"success\":%s}\n",name,correct,expected.size(),correct==expected.size()?"true":"false");
     return correct==expected.size();
 }
-

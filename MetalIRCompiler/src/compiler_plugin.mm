@@ -1,6 +1,7 @@
 #include "MVKMetalIRBridge.h"
 #include "spirv_to_dxil.h"
 #include "native_raster_adapter.h"
+#include "air_math_adapter.h"
 #include <metal_irconverter/metal_irconverter.h>
 #include <TargetConditionals.h>
 #include <vector>
@@ -67,7 +68,7 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     *result={};result->abiVersion=MVK_METAL_IR_ABI_VERSION;result->status=1;
     memset(result->vertexAttributes,255,sizeof(result->vertexAttributes));
     if(request->executionModel!=0&&request->executionModel!=4&&request->executionModel!=5){result->status=1;return 1;}
-    if(request->wordCount<5||request->setCount>8)return 1;
+    if(request->wordCount<5||request->setCount>8||request->mathMode>MVK_METAL_IR_MATH_RELAXED)return 1;
     std::vector<uint32_t> words(request->words,request->words+request->wordCount);
     std::unordered_map<uint32_t,uint32_t> sets,bindings;
     for(size_t pos=5;pos<words.size();) {
@@ -102,7 +103,8 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     conf.workgroup_id_mode=request->runtimeOptions&MVK_METAL_IR_ALLOW_DISPATCH_BASE
         ?DXIL_SPIRV_SYSVAL_TYPE_RUNTIME_DATA:DXIL_SPIRV_SYSVAL_TYPE_ZERO;
     conf.shader_model_max=SHADER_MODEL_6_6;conf.keep_io_vars=true;
-    conf.disable_math_refactoring=request->strictMath;
+    conf.disable_math_refactoring=request->mathMode!=MVK_METAL_IR_MATH_FAST;
+    conf.relaxed_math_refactoring=request->mathMode==MVK_METAL_IR_MATH_RELAXED;
     if(request->executionModel==0&&(request->vertexTransformFlags&MVK_METAL_IR_FLIP_Y)) {
         conf.yz_flip.mode=DXIL_SPIRV_Y_FLIP_UNCONDITIONAL;
         conf.yz_flip.y_mask=UINT16_MAX;
@@ -177,7 +179,7 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
 #if IR_SUPPORTS_VERSION(4, 0, 0)
         // MSC 4 introduced default NaN/Inf optimization. Earlier MSC versions
         // have no opt-out flag; their behavior is covered by the NaN/Inf oracle.
-        if(request->strictMath)flags|=IRCompatibilityFlagDisableNanInfOptimization;
+        if(request->mathMode!=MVK_METAL_IR_MATH_FAST)flags|=IRCompatibilityFlagDisableNanInfOptimization;
 #endif
         if(request->preserveInvariance)flags|=IRCompatibilityFlagPositionInvariance;
         IRCompilerSetCompatibilityFlags(compiler,(IRCompatibilityFlags)flags);
@@ -194,11 +196,22 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                         ReplayCompilerPhase trace("metallib_extract_and_raster_io",request->executionModel);
                         result->metallibSize=IRMetalLibGetBytecodeSize(binary);result->metallib=malloc(result->metallibSize);
                         if(result->metallib&&IRMetalLibGetBytecode(binary,(uint8_t*)result->metallib)==result->metallibSize)status=0;
+                        if(status==0&&request->mathMode==MVK_METAL_IR_MATH_RELAXED) {
+                            std::vector<uint8_t> adapted;std::string error;
+                            start=std::chrono::steady_clock::now();
+                            bool valid=melonx::air::relaxMathPermissions(result->metallib,result->metallibSize,adapted,error);
+                            result->rasterAdapterMs=elapsed(start);
+                            if(!valid) {status=1;snprintf(result->error,sizeof(result->error),"math permissions adapter: %s",error.c_str());}
+                            else if(void* bytes=malloc(adapted.size())) {
+                                memcpy(bytes,adapted.data(),adapted.size());free(result->metallib);
+                                result->metallib=bytes;result->metallibSize=adapted.size();
+                            } else {status=2;snprintf(result->error,sizeof(result->error),"math permissions adapter allocation failed");}
+                        }
                         if(status==0&&nativeRasterIO) {
                             std::vector<uint8_t> adapted;std::string error;
                             start=std::chrono::steady_clock::now();
                             bool restored=melonx::air::restoreNativeRasterIO(result->metallib,result->metallibSize,request->executionModel,nativeRasterIO,adapted,error);
-                            result->rasterAdapterMs=elapsed(start);
+                            result->rasterAdapterMs+=elapsed(start);
                             if(!restored) {status=1;snprintf(result->error,sizeof(result->error),"native raster adapter: %s",error.c_str());}
                             else if(void* bytes=malloc(adapted.size())) {
                                 memcpy(bytes,adapted.data(),adapted.size());free(result->metallib);

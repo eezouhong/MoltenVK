@@ -846,9 +846,9 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 		[mtlRPDesc setSamplePositions: sampPosns.data() count: sampPosns.size()];
 	}
 
-    mvkreplay::attachGPUStages(_mtlCmdBuffer,mtlRPDesc);
+    _replayRenderWork={};
+    _replayRenderWorkActive=mvkreplay::attachGPUStages(_mtlCmdBuffer,mtlRPDesc);
     _mtlRenderEncoder = [_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
-    _replayRenderDrawNoted=false;
     if (_mtlRenderEncoder) mvkreplay::encoderStarted(0);
 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
 	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, getMTLRenderCommandEncoderName(cmdUse));
@@ -987,9 +987,10 @@ void MVKCommandEncoder::updateAttachmentInputIndices(const MVKArrayRef<uint32_t>
 	}
 }
 
-void MVKCommandEncoder::noteReplayDraw() {
-    if(_replayRenderDrawNoted||!mvkreplay::gpuStageTracingEnabled())return;
-    _replayRenderDrawNoted=true;mvkreplay::noteGPUStageDraw(_mtlCmdBuffer);
+void MVKCommandEncoder::noteReplayDraw(uint64_t elements,uint64_t instances,bool indexed,bool known) {
+    if(!_replayRenderWorkActive)return;
+    auto* pipeline=getGraphicsPipeline();
+    _replayRenderWork.add(pipeline?pipeline->getReplayVertexHash():0,pipeline?pipeline->getReplayFragmentHash():0,elements,instances,indexed,known);
 }
 
 void MVKCommandEncoder::finalizeDrawState(MVKGraphicsStage stage) {
@@ -1080,6 +1081,10 @@ void MVKCommandEncoder::endRenderpass() {
 
 void MVKCommandEncoder::endMetalRenderEncoding() {
     if (_mtlRenderEncoder == nil) { return; }
+    if(_replayRenderWorkActive) {
+        mvkreplay::noteGPUStageRenderWork(_mtlCmdBuffer,_replayRenderWork);
+        _replayRenderWorkActive=false;
+    }
 
 	if (_cmdBuffer->_hasStageCounterTimestampCommand) { [_mtlRenderEncoder updateFence: getStageCountersMTLFence() afterStages: MTLRenderStageFragment]; }
 	encodeBarrierUpdates();

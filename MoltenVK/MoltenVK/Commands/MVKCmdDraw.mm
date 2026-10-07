@@ -337,14 +337,14 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
                     if (mtlFeats.baseVertexInstanceDrawing) {
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                           vertexStart: _firstVertex
                                                           vertexCount: _vertexCount
                                                         instanceCount: instanceCount
                                                          baseInstance: _firstInstance];
                     } else {
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                           vertexStart: _firstVertex
                                                           vertexCount: _vertexCount
@@ -633,7 +633,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
                     if (mtlFeats.baseVertexInstanceDrawing) {
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                   indexCount: _indexCount
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
@@ -643,7 +643,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                   baseVertex: _vertexOffset
                                                                 baseInstance: _firstInstance];
                     } else {
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                   indexCount: _indexCount
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
@@ -1346,7 +1346,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
                                                                     offset: tempDrawIDBuff->_offset + drawIdx * sizeof(uint32_t)
                                                                    atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                         }
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(0,0,true,false);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
                                                                  indexBuffer: ibb.mtlBuffer

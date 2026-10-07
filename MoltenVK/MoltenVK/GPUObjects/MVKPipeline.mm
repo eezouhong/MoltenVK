@@ -3029,6 +3029,15 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 {
 	// Extract dynamic state first, as it can affect many configurations.
 	initDynamicState(pCreateInfo);
+    if(mvkreplay::gpuStageTracingEnabled()) {
+        for(uint32_t i=0;i<pCreateInfo->stageCount;++i) {
+            const auto& stage=pCreateInfo->pStages[i];
+            auto* module=(MVKShaderModule*)stage.module;
+            if(!module)continue;
+            if(stage.stage==VK_SHADER_STAGE_VERTEX_BIT)_replayVertexHash=module->getKey().codeHash;
+            if(stage.stage==VK_SHADER_STAGE_FRAGMENT_BIT)_replayFragmentHash=module->getKey().codeHash;
+        }
+    }
 
 	_primitiveTopologyClass = MTLPrimitiveTopologyClassUnspecified;
 	if (pCreateInfo->pInputAssemblyState)

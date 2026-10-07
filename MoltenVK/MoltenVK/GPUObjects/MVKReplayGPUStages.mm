@@ -81,6 +81,8 @@ public:
     std::array<uint8_t,256> kinds{};
     std::array<bool,256> draws{};
     std::array<GPUComputeWork,256> computeWork{};
+    std::array<GPUDrawWork,256> drawWork{};
+    std::array<std::array<uint64_t,3>,256> renderExtent{};
     std::array<uint64_t,256> fenceWaits{},fenceHash{};
     uint32_t sampledEncoders=0,unavailable=0;
     std::array<unsigned,256> indices{};
@@ -137,16 +139,24 @@ static StageAttachment reserveAttachment(id<MTLCommandBuffer> buffer,uint8_t kin
     capture->indices[index]=allocation->index;
     return {pool.buffers[allocation->slot],allocation->index};
 }
-void attachGPUStages(id<MTLCommandBuffer> buffer,MTLRenderPassDescriptor* pass) {
-    if(!stagesEnabled()||!pass)return;
+bool attachGPUStages(id<MTLCommandBuffer> buffer,MTLRenderPassDescriptor* pass) {
+    if(!stagesEnabled()||!pass)return false;
     if (@available(macOS 11.0,iOS 14.0,tvOS 14.0,*)) {
         auto attachment=pass.sampleBufferAttachments[0];
         auto sample=reserveAttachment(buffer,0,attachment.sampleBuffer!=nil);
-        if(!sample.buffer)return;
+        if(!sample.buffer)return false;
         attachment.sampleBuffer=sample.buffer;
         attachment.startOfVertexSampleIndex=sample.index;attachment.endOfVertexSampleIndex=sample.index+1;
         attachment.startOfFragmentSampleIndex=sample.index+2;attachment.endOfFragmentSampleIndex=sample.index+3;
+        std::shared_ptr<GPUStageCapture> capture;
+        {auto& r=registry();std::lock_guard<std::mutex> guard(r.lock);auto i=r.captures.find((void*)buffer);if(i!=r.captures.end())capture=i->second.lock();}
+        if(capture) {
+            std::lock_guard<std::mutex> guard(capture->lock);
+            capture->renderExtent[capture->sampledEncoders-1]={pass.renderTargetWidth,pass.renderTargetHeight,pass.renderTargetArrayLength};
+        }
+        return true;
     }
+    return false;
 }
 MTLComputePassDescriptor* computeGPUStagePass(id<MTLCommandBuffer> buffer,MTLDispatchType dispatch) {
     if(!stagesEnabled())return nil;
@@ -190,7 +200,28 @@ void noteGPUStageDraw(id<MTLCommandBuffer> buffer) {
     {auto& r=registry();std::lock_guard<std::mutex> guard(r.lock);auto i=r.captures.find((void*)buffer);if(i!=r.captures.end())capture=i->second.lock();}
     if(!capture)return;
     std::lock_guard<std::mutex> guard(capture->lock);
-    if(capture->sampledEncoders&&capture->kinds[capture->sampledEncoders-1]==0)capture->draws[capture->sampledEncoders-1]=true;
+    if(capture->sampledEncoders&&capture->kinds[capture->sampledEncoders-1]==0) {
+        auto i=capture->sampledEncoders-1;capture->draws[i]=true;
+        capture->drawWork[i].add(0,0,0,0,false,false);
+    }
+}
+void noteGPUStageRenderWork(id<MTLCommandBuffer> buffer,const GPUDrawWork& work) {
+    if(!stagesEnabled()||!buffer||!work.draws)return;
+    std::shared_ptr<GPUStageCapture> capture;
+    {auto& r=registry();std::lock_guard<std::mutex> guard(r.lock);auto i=r.captures.find((void*)buffer);if(i!=r.captures.end())capture=i->second.lock();}
+    if(!capture)return;
+    std::lock_guard<std::mutex> guard(capture->lock);
+    if(capture->sampledEncoders&&capture->kinds[capture->sampledEncoders-1]==0) {
+        auto i=capture->sampledEncoders-1;capture->draws[i]=true;
+        // Internal clears/blits are recorded directly. Preserve their unknown
+        // work marker instead of replacing it with the Vulkan draw aggregate.
+        auto internal=capture->drawWork[i];capture->drawWork[i]=work;
+        if(internal.draws) {
+            capture->drawWork[i].draws+=internal.draws;
+            capture->drawWork[i].unknownDraws+=internal.draws;
+            capture->drawWork[i].mixedPrograms=true;
+        }
+    }
 }
 void noteGPUStageDispatch(id<MTLCommandBuffer> buffer,uint64_t program,uint64_t x,uint64_t y,uint64_t z,
                           uint64_t tx,uint64_t ty,uint64_t tz,bool indirect) {
@@ -254,6 +285,14 @@ void finishGPUStages(const std::shared_ptr<GPUStageCapture>& capture,id<MTLComma
         line<<",\"encoderKinds\":[";for(unsigned i=0;i<capture->sampledEncoders;++i){if(i)line<<",";line<<unsigned(capture->kinds[i]);}line<<"]";
         line<<",\"unmeasuredEncoders\":["<<capture->unmeasured[0]<<","<<capture->unmeasured[1]<<","<<capture->unmeasured[2]<<"]";
         line<<",\"encodedDraw\":[";for(unsigned i=0;i<capture->sampledEncoders;++i){if(i)line<<",";line<<(capture->draws[i]?1:0);}line<<"]";
+        line<<",\"graphicsWork\":[";
+        for(unsigned i=0;i<capture->sampledEncoders;++i) {
+            if(i)line<<",";
+            if(capture->kinds[i]!=0){line<<"null";continue;}
+            const auto& w=capture->drawWork[i];const auto& e=capture->renderExtent[i];
+            line<<"["<<w.vertexProgram<<","<<w.fragmentProgram<<","<<w.sequenceHash<<","<<w.draws<<","<<w.inputElements<<","<<w.indexedDraws<<","<<w.unknownDraws<<","<<(w.mixedPrograms?1:0)<<","<<(w.overflow?1:0)<<","<<e[0]<<","<<e[1]<<","<<e[2]<<"]";
+        }
+        line<<"]";
         line<<",\"computeWork\":[";for(unsigned i=0;i<capture->sampledEncoders;++i){if(i)line<<",";const auto& w=capture->computeWork[i];line<<"["<<w.firstProgram<<","<<w.sequenceHash<<","<<w.dispatches<<","<<w.groups<<","<<w.invocations<<","<<w.indirect<<","<<(w.mixedPrograms?1:0)<<","<<(w.overflow?1:0)<<","<<capture->fenceWaits[i]<<","<<capture->fenceHash[i]<<"]";}line<<"]";
         line<<",\"timestamps\":[";for(unsigned i=0;i<4*capture->sampledEncoders;++i){if(i)line<<",";line<<ticks[i];}line<<"]}";
         fprintf(stderr,"%s\n",line.str().c_str());

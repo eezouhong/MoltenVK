@@ -365,6 +365,8 @@ struct MVKPipelineStageResourceInfo {
 class MVKGraphicsPipeline : public MVKPipeline {
 
 public:
+    uint64_t getReplayVertexHash() const { return _replayVertexHash; }
+    uint64_t getReplayFragmentHash() const { return _replayFragmentHash; }
 
 	/** Returns the number and order of stages in this pipeline. Draws commands must encode this pipeline once per stage. */
 	void getStages(MVKPiplineStages& stages);
@@ -553,6 +555,7 @@ protected:
 	MTLSize _meshThreadgroupSize = {1, 1, 1};
 
 	MVKShaderModule* _vertexModule = nullptr;
+    uint64_t _replayVertexHash=0,_replayFragmentHash=0;
 	MVKShaderModule* _tessCtlModule = nullptr;
 	MVKShaderModule* _tessEvalModule = nullptr;
 	MVKShaderModule* _fragmentModule = nullptr;

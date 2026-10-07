@@ -27,6 +27,7 @@
 #include "MVKQueryPool.h"
 #include "MVKSmallVector.h"
 #include "MVKMetalIRCommandEncoding.h"
+#include "MVKReplayDrawWork.h"
 #include <unordered_map>
 
 class MVKCommandPool;
@@ -336,7 +337,7 @@ public:
 
 	/** Called by each graphics draw command to establish any outstanding state just prior to performing the draw. */
 	void finalizeDrawState(MVKGraphicsStage stage);
-	void noteReplayDraw();
+	void noteReplayDraw(uint64_t elements=0,uint64_t instances=0,bool indexed=false,bool known=false);
 
     /** Called by each compute dispatch command to establish any outstanding state just prior to performing the dispatch. */
     void finalizeDispatchState();
@@ -497,7 +498,8 @@ public:
 
 	/** The current Metal render encoder. */
 	id<MTLRenderCommandEncoder> _mtlRenderEncoder;
-	bool _replayRenderDrawNoted=false;
+	bool _replayRenderWorkActive=false;
+	mvkreplay::GPUDrawWork _replayRenderWork{};
 
 	/** Tracks the state of command encoding. */
 	MVKCommandEncoderState _state;

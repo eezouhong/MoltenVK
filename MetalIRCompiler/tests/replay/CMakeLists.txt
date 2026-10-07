@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.20)
+project(MetalIRSystemValueReplay LANGUAGES CXX)
+
+set(VULKAN_HEADERS "" CACHE PATH "Directory containing vulkan/vulkan.h")
+set(MOLTENVK_LIBRARY "" CACHE FILEPATH "Built macOS MoltenVK dylib")
+if(NOT EXISTS "${VULKAN_HEADERS}/vulkan/vulkan.h" OR NOT EXISTS "${MOLTENVK_LIBRARY}")
+    message(FATAL_ERROR "Set VULKAN_HEADERS and MOLTENVK_LIBRARY explicitly")
+endif()
+find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+add_executable(runtime_probe runtime_probe.cpp)
+target_compile_features(runtime_probe PRIVATE cxx_std_17)
+target_include_directories(runtime_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(runtime_probe PRIVATE "${MOLTENVK_LIBRARY}")
+get_filename_component(MOLTENVK_DIRECTORY "${MOLTENVK_LIBRARY}" DIRECTORY)
+set_target_properties(runtime_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+
+set(SHADER_OUTPUTS)
+foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp)
+    set(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv")
+    add_custom_command(OUTPUT "${OUTPUT}"
+        COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
+            "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}" -o "${OUTPUT}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}" VERBATIM)
+    list(APPEND SHADER_OUTPUTS "${OUTPUT}")
+endforeach()
+add_custom_target(replay_shaders ALL DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(runtime_probe replay_shaders)

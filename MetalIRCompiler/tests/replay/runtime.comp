@@ -1,0 +1,10 @@
+#version 460
+layout(local_size_x=1,local_size_y=1,local_size_z=1) in;
+layout(set=0,binding=0,std430) buffer Output { uvec4 rows[]; } outputData;
+layout(push_constant) uniform Params { uint destination; uint padding; uvec3 origin; } params;
+void main() {
+    uvec3 local = gl_WorkGroupID - params.origin;
+    uint index = (local.z*gl_NumWorkGroups.y+local.y)*gl_NumWorkGroups.x+local.x;
+    outputData.rows[params.destination+index*2u] = uvec4(gl_WorkGroupID,gl_NumWorkGroups.x);
+    outputData.rows[params.destination+index*2u+1u] = uvec4(gl_NumWorkGroups.yz,gl_GlobalInvocationID.x,0xcafeu);
+}

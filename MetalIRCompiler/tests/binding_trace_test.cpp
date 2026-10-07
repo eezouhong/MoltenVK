@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdio>
 #include <thread>
+#include <limits>
 using namespace mvkreplay;
 
 static void emptyCalls(unsigned count, bool enabled) {
@@ -39,6 +40,16 @@ int main() {
     }
     bindingSnapshot(after, bindingCounterCount);
     for (unsigned i = 4; i < bindingCounterCount; ++i) assert(after[i].calls == 1);
+    BindingSample maximum[bindingCounterCount];
+    const auto max = std::numeric_limits<uint64_t>::max();
+    for (auto& s : maximum) s = {max, max, max, max, max, {max, max, max}};
+    const auto text = bindingSamplesJSON(max, maximum);
+    assert(text.size() < 2048 && text.back() == '}' && text.find('\n') == std::string::npos);
+    assert(text.find("\"inverseProbability\":128") != std::string::npos);
+    assert(text.find("\"maxPendingCallsPerThread\":255") != std::string::npos);
+    size_t position = 0, matches = 0;
+    while ((position = text.find("18446744073709551615", position)) != std::string::npos) { ++matches; position += 20; }
+    assert(matches == bindingCounterCount * 8 + 1);
     for (bool enabled : {false, true}) {
         bindingSnapshot(before, bindingCounterCount);
         auto start = descriptorClock(CLOCK_THREAD_CPUTIME_ID);

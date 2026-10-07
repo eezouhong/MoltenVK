@@ -106,6 +106,9 @@ and graphics residency submission. Each record contains exact observed calls,
 sampled calls, raw inclusive wall/CPU nanoseconds, unavailable samples, and three
 wall-time components. Resource components are preparation, descriptor script,
 and remaining binding. Other groups put the observed operation in component 1.
+In coarse tracing mode the same records are emitted as `MELONX_BINDING_TOTALS`
+at the existing one-second batch boundary. The JSON array uses the same group
+order and field order as the struct; counters are cumulative, not per-frame.
 
 Counters accumulate; subtract snapshots around completed work. Synchronous
 local replay flushes its current encoder thread at snapshot. Other active

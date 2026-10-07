@@ -3,6 +3,7 @@
 #include "MVKReplayDescriptorTrace.h"
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 
 namespace mvkreplay {
 // Each group has MSL/IR counters. Parts: preparation, descriptor script, remaining binding.
@@ -99,5 +100,21 @@ inline uint32_t bindingSnapshot(BindingSample* output, uint32_t capacity) {
     bindingThreadState().flush();
     for (unsigned i = 0; i < bindingCounterCount; ++i) output[i] = bindingCounters[i].snapshot();
     return bindingCounterCount;
+}
+// Called only at the existing one-second diagnostics boundary. The payload is
+// bounded by eight fixed-size records; it does not allocate per draw or binding.
+inline std::string bindingSamplesJSON(uint64_t now, const BindingSample (&samples)[bindingCounterCount]) {
+    std::ostringstream line;
+    line << "MELONX_BINDING_TOTALS {\"v\":1,\"monotonicNs\":" << now
+         << ",\"inverseProbability\":" << DescriptorSampler::inverseProbability
+         << ",\"maxPendingCallsPerThread\":255,\"groups\":[";
+    for (unsigned i = 0; i < bindingCounterCount; ++i) {
+        const auto& s = samples[i];
+        if (i) line << ',';
+        line << '[' << s.calls << ',' << s.samples << ',' << s.wallNs << ',' << s.cpuNs << ','
+             << s.unavailable << ',' << s.parts[0] << ',' << s.parts[1] << ',' << s.parts[2] << ']';
+    }
+    line << "]}";
+    return line.str();
 }
 }

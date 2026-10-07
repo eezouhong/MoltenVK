@@ -10,6 +10,7 @@
 #include <mutex>
 #include "MVKReplayFrameTrace.h"
 #include "MVKReplayDescriptorTrace.h"
+#include "MVKReplayBindingTrace.h"
 
 namespace mvkreplay {
 enum Region : uint32_t {
@@ -236,6 +237,13 @@ inline void commandBufferCompleted(double start,double end,bool success) {
             (unsigned long long)d.ranges[0].wallNs,(unsigned long long)d.ranges[0].unavailable,
             (unsigned long long)d.ranges[1].calls,(unsigned long long)d.ranges[1].samples,
             (unsigned long long)d.ranges[1].wallNs,(unsigned long long)d.ranges[1].unavailable);
+    }
+    if (bindingSamplingEnabled()) {
+        BindingSample bindings[bindingCounterCount];
+        if (bindingSnapshot(bindings, bindingCounterCount)) {
+            const auto bindingLine = bindingSamplesJSON(now, bindings);
+            fprintf(stderr, "%s\n", bindingLine.c_str());
+        }
     }
     // Cumulative counters, one line per second; concurrent batches may overlap.
     // GPUStartTime..GPUEndTime is buffer elapsed time, including GPU waits, not

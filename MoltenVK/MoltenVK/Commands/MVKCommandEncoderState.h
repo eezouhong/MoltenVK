@@ -33,6 +33,7 @@ class MVKDescriptorSet;
 class MVKOcclusionQueryPool;
 
 struct MVKShaderImplicitRezBinding;
+struct MVKMetalIRArtifact;
 
 enum class MVKMetalGraphicsStage {
 	Vertex,
@@ -254,6 +255,8 @@ struct MVKStageResourceBindings {
 	/** Only reusable within one Metal encoder and one shader stage. The command
 	 * buffer owns the temporary push allocation; this state does not retain it. */
 	struct MetalIRArguments {
+		const MVKMetalIRArtifact* rootArtifact = nullptr;
+		uint64_t runtimeAddress = 0;
 		/** The descriptor allocation is stable while its set remains bound.
 		 * descriptorSetData invalidation refreshes these addresses on rebind. */
 		uint64_t descriptorSetBases[kMVKMaxDescriptorSetCount] = {};
@@ -271,6 +274,8 @@ struct MVKStageResourceBindings {
 		MVKShaderStage stage = kMVKShaderStageCount;
 
 		void reset() {
+			rootArtifact = nullptr;
+			runtimeAddress = 0;
 			memset(descriptorSetBases, 0, sizeof(descriptorSetBases));
 			pushConstantSize = 0;
 			pushConstantBuffer = nil;

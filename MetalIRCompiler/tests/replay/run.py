@@ -41,7 +41,7 @@ def main():
             env['MELONX_METAL_IR_CACHE'] = str(cache)
         if missing:
             env['MELONX_METAL_IR_PLUGIN'] = str(out / 'missing-plugin.dylib')
-        names = ('runtime.comp.spv', 'unused.comp.spv') if kind == 'compute' else ('runtime.vert.spv', 'runtime.frag.spv')
+        names = ('runtime.comp.spv', 'unused.comp.spv') if kind in ('compute', 'empty') else ('runtime.vert.spv', 'runtime.frag.spv')
         process = subprocess.run([str(build / 'runtime_probe'), kind, *(str(build / p) for p in names)],
                                  env=env, capture_output=True, text=True, timeout=70)
         text = process.stdout + process.stderr
@@ -76,7 +76,7 @@ def main():
         if not result['passed']:
             raise RuntimeError('Replay failed: ' + label)
 
-    for kind in ('graphics', 'compute', 'fan'):
+    for kind in ('graphics', 'compute', 'fan', 'empty'):
         run('msl-' + kind, kind, False)
         run('ir-' + kind, kind, True)
     for kind in ('graphics', 'compute'):

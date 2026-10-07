@@ -7,7 +7,8 @@ contain no captured game shaders or assets.
 Coverage: direct/indexed draws, negative base vertex, nonzero first instance,
 multi-draw IDs, GPU-written indirect arguments, triangle fan conversion, compute
 dispatch/base/indirect, shader switching, disk restore, missing compiler rejection,
-and explicit per-device selection. The fifteen cases do not cover all resource
+empty descriptor-set slots, and explicit per-device selection. The seventeen
+cases do not cover all resource
 formats, point sprites, multiview, or end-of-buffer reads; add those separately.
 
 Build only (no GPU execution), using the selected Xcode 27 developer directory:

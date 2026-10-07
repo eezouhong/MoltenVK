@@ -109,6 +109,13 @@ and remaining binding. Other groups put the observed operation in component 1.
 In coarse tracing mode the same records are emitted as `MELONX_BINDING_TOTALS`
 at the existing one-second batch boundary. The JSON array uses the same group
 order and field order as the struct; counters are cumulative, not per-frame.
+Version 2 also includes `calibration`: an empty scope immediately before each
+selected real scope, on the same thread, using the same clock/checkpoint path.
+Its calls equal sampled calls, rather than all calls. Subtract the empty mean
+from the work mean before scaling by call count. The control adds observer work
+outside the timed region; retain off/on checks and small negative corrected
+values rather than clamping them. Concurrent publication can briefly skew the
+two cumulative tables, so compare sufficiently long completed windows.
 
 Counters accumulate; subtract snapshots around completed work. Synchronous
 local replay flushes its current encoder thread at snapshot. Other active

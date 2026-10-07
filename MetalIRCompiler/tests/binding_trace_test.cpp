@@ -40,6 +40,12 @@ int main() {
     }
     bindingSnapshot(after, bindingCounterCount);
     for (unsigned i = 4; i < bindingCounterCount; ++i) assert(after[i].calls == 1);
+    BindingSample calibration[bindingCounterCount];
+    assert(bindingCalibrationSnapshot(calibration, bindingCounterCount) == bindingCounterCount);
+    for (unsigned i = 0; i < bindingCounterCount; ++i) {
+        assert(calibration[i].calls == after[i].samples);
+        assert(calibration[i].samples == after[i].samples && !calibration[i].unavailable);
+    }
     BindingSample maximum[bindingCounterCount];
     const auto max = std::numeric_limits<uint64_t>::max();
     for (auto& s : maximum) s = {max, max, max, max, max, {max, max, max}};
@@ -50,6 +56,11 @@ int main() {
     size_t position = 0, matches = 0;
     while ((position = text.find("18446744073709551615", position)) != std::string::npos) { ++matches; position += 20; }
     assert(matches == bindingCounterCount * 8 + 1);
+    const auto calibratedText = bindingSamplesJSON(max, maximum, maximum);
+    assert(calibratedText.size() < 4096 && calibratedText.find("\"calibration\":[") != std::string::npos);
+    position = 0; matches = 0;
+    while ((position = calibratedText.find("18446744073709551615", position)) != std::string::npos) { ++matches; position += 20; }
+    assert(matches == bindingCounterCount * 16 + 1);
     for (bool enabled : {false, true}) {
         bindingSnapshot(before, bindingCounterCount);
         auto start = descriptorClock(CLOCK_THREAD_CPUTIME_ID);

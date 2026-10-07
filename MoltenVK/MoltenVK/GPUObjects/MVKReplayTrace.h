@@ -239,9 +239,10 @@ inline void commandBufferCompleted(double start,double end,bool success) {
             (unsigned long long)d.ranges[1].wallNs,(unsigned long long)d.ranges[1].unavailable);
     }
     if (bindingSamplingEnabled()) {
-        BindingSample bindings[bindingCounterCount];
-        if (bindingSnapshot(bindings, bindingCounterCount)) {
-            const auto bindingLine = bindingSamplesJSON(now, bindings);
+        BindingSample bindings[bindingCounterCount], calibration[bindingCounterCount];
+        if (bindingSnapshot(bindings, bindingCounterCount) &&
+            bindingCalibrationSnapshot(calibration, bindingCounterCount)) {
+            const auto bindingLine = bindingSamplesJSON(now, bindings, calibration);
             fprintf(stderr, "%s\n", bindingLine.c_str());
         }
     }

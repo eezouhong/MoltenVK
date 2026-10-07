@@ -33,15 +33,20 @@ struct BindingCounters {
     }
 };
 inline BindingCounters bindingCounters[bindingCounterCount];
+inline BindingCounters bindingCalibrationCounters[bindingCounterCount];
 struct BindingThreadState {
     BindingSample data[bindingCounterCount];
+    BindingSample calibration[bindingCounterCount];
     DescriptorSampler sampler;
     uint64_t pending = 0;
     BindingThreadState() : sampler(uint32_t(descriptorClock(CLOCK_MONOTONIC)) ^
                                   uint32_t(reinterpret_cast<uintptr_t>(this))) {}
     void flush() {
         if (!pending) return;
-        for (unsigned i = 0; i < bindingCounterCount; ++i) { bindingCounters[i].add(data[i]); data[i] = {}; }
+        for (unsigned i = 0; i < bindingCounterCount; ++i) {
+            bindingCounters[i].add(data[i]); bindingCalibrationCounters[i].add(calibration[i]);
+            data[i] = {}; calibration[i] = {};
+        }
         pending = 0;
     }
     ~BindingThreadState() { flush(); }
@@ -56,19 +61,29 @@ class BindingTrace {
     uint64_t wall = 0, cpu = 0, partStart = 0, parts[3] = {};
     unsigned nextPart = 0;
     bool valid = true;
+    void beginSample(BindingSample& destination) {
+        sample = &destination; ++sample->samples;
+        wall = descriptorClock(CLOCK_MONOTONIC);
+        cpu = descriptorClock(CLOCK_THREAD_CPUTIME_ID);
+        partStart = descriptorClock(CLOCK_MONOTONIC);
+        valid = wall && cpu && partStart;
+    }
+    // Forced sample with no TLS publication or recursive calibration. Uses the
+    // same clock/checkpoint/destructor path as the immediately following scope.
+    explicit BindingTrace(BindingSample& empty) { ++empty.calls; beginSample(empty); }
 public:
     explicit BindingTrace(bool ir, bool enabled = bindingSamplingEnabled(), BindingGroup group = BindingGroup::Resources) {
         if (!enabled || group >= BindingGroup::Count) return;
         state = &bindingThreadState();
-        auto& data = state->data[unsigned(group) * 2 + (ir ? 1 : 0)];
+        const unsigned index = unsigned(group) * 2 + (ir ? 1 : 0);
+        auto& data = state->data[index];
         ++data.calls; ++state->pending;
         if (!state->sampler.next()) return;
-        sample = &data; ++sample->samples;
-        wall = descriptorClock(CLOCK_MONOTONIC);
-        cpu = descriptorClock(CLOCK_THREAD_CPUTIME_ID);
-        // Exclude the CPU clock read from the first component's wall timing.
-        partStart = descriptorClock(CLOCK_MONOTONIC);
-        valid = wall && cpu && partStart;
+        {
+            BindingTrace empty(state->calibration[index]);
+            empty.checkpoint(); empty.checkpoint();
+        }
+        beginSample(data);
     }
     void checkpoint() {
         if (!sample) return;
@@ -78,7 +93,6 @@ public:
         partStart = now;
     }
     ~BindingTrace() {
-        if (!state) return;
         if (sample) {
             checkpoint();
             const uint64_t endCpu = descriptorClock(CLOCK_THREAD_CPUTIME_ID);
@@ -88,7 +102,7 @@ public:
                 for (unsigned i = 0; i < 3; ++i) sample->parts[i] += parts[i];
             } else ++sample->unavailable;
         }
-        if (state->pending >= 256) state->flush();
+        if (state && state->pending >= 256) state->flush();
     }
     BindingTrace(const BindingTrace&) = delete;
     BindingTrace& operator=(const BindingTrace&) = delete;
@@ -101,20 +115,32 @@ inline uint32_t bindingSnapshot(BindingSample* output, uint32_t capacity) {
     for (unsigned i = 0; i < bindingCounterCount; ++i) output[i] = bindingCounters[i].snapshot();
     return bindingCounterCount;
 }
-// Called only at the existing one-second diagnostics boundary. The payload is
-// bounded by eight fixed-size records; it does not allocate per draw or binding.
-inline std::string bindingSamplesJSON(uint64_t now, const BindingSample (&samples)[bindingCounterCount]) {
+inline uint32_t bindingCalibrationSnapshot(BindingSample* output, uint32_t capacity) {
+    if (!bindingSamplingEnabled() || !output || capacity < bindingCounterCount) return 0;
+    bindingThreadState().flush();
+    for (unsigned i = 0; i < bindingCounterCount; ++i) output[i] = bindingCalibrationCounters[i].snapshot();
+    return bindingCounterCount;
+}
+// The two bounded tables are emitted only at the one-second diagnostics gate.
+inline std::string bindingSamplesJSON(uint64_t now, const BindingSample (&samples)[bindingCounterCount],
+                                     const BindingSample* calibration = nullptr) {
     std::ostringstream line;
-    line << "MELONX_BINDING_TOTALS {\"v\":1,\"monotonicNs\":" << now
+    line << "MELONX_BINDING_TOTALS {\"v\":" << (calibration ? 2 : 1) << ",\"monotonicNs\":" << now
          << ",\"inverseProbability\":" << DescriptorSampler::inverseProbability
-         << ",\"maxPendingCallsPerThread\":255,\"groups\":[";
-    for (unsigned i = 0; i < bindingCounterCount; ++i) {
-        const auto& s = samples[i];
-        if (i) line << ',';
-        line << '[' << s.calls << ',' << s.samples << ',' << s.wallNs << ',' << s.cpuNs << ','
-             << s.unavailable << ',' << s.parts[0] << ',' << s.parts[1] << ',' << s.parts[2] << ']';
-    }
-    line << "]}";
+         << ",\"maxPendingCallsPerThread\":255";
+    auto table = [&](const char* name, const BindingSample* records) {
+        line << ",\"" << name << "\":[";
+        for (unsigned i = 0; i < bindingCounterCount; ++i) {
+            const auto& s = records[i];
+            if (i) line << ',';
+            line << '[' << s.calls << ',' << s.samples << ',' << s.wallNs << ',' << s.cpuNs << ','
+                 << s.unavailable << ',' << s.parts[0] << ',' << s.parts[1] << ',' << s.parts[2] << ']';
+        }
+        line << ']';
+    };
+    table("groups", samples);
+    if (calibration) table("calibration", calibration);
+    line << '}';
     return line.str();
 }
 }

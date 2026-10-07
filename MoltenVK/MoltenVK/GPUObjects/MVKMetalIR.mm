@@ -4,6 +4,7 @@
 #include "MVKMetalIRResidentCache.h"
 #include "MVKPipeline.h"
 #include "MVKShaderModule.h"
+#include "MVKShaderMathPolicy.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
 #include <mutex>
@@ -78,30 +79,18 @@ std::shared_ptr<DeviceArtifacts> deviceArtifacts(MVKDevice* device) {
     if(!slot)slot=std::make_shared<DeviceArtifacts>();
     return slot;
 }
-uint32_t requiresStrictMath(const std::vector<uint32_t>& code,const char* entry,spv::ExecutionModel execution) {
+uint32_t requiresStrictMath(const std::vector<uint32_t>& code, const char* entry,
+                            spv::ExecutionModel execution, MVKConfigFastMath preference) {
     SPIRV_CROSS_NAMESPACE::CompilerMSL reflection(code);
-    reflection.set_entry_point(entry,execution);
-    // Missing fast-math permissions are not permission for DXIL-wide unsafe
-    // algebra. Unlike generated MSL, DXIL does not retain precise:: wrappers.
-    // Only opt in when this entry explicitly permits the complete fast mode.
-    const auto& defaults=reflection.get_entry_point(entry,execution).fp_fast_math_defaults;
-    if(defaults.empty())return 1;
-    uint32_t flags=reflection.get_fp_fast_math_flags(true);
-    uint32_t required=spv::FPFastMathModeNSZMask|spv::FPFastMathModeNotInfMask|spv::FPFastMathModeNotNaNMask|
-        spv::FPFastMathModeAllowRecipMask|spv::FPFastMathModeAllowReassocMask|spv::FPFastMathModeAllowContractMask;
-    if(flags&spv::FPFastMathModeFastMask)flags|=required;
-    if((flags&required)!=required)return 1;
-    // Preserve operation-level precision as well as entry-point math modes.
-    // MSC's shader-wide refactoring permission must not override NoContraction.
-    for(size_t pos=5;pos<code.size();) {
-        uint32_t count=code[pos]>>16,op=code[pos]&65535;
-        if(!count||pos+count>code.size())return 1;
-        if(op==spv::OpTypeFloat&&count>=3&&defaults.find(code[pos+1])==defaults.end())return 1;
-        if(op==spv::OpDecorate&&count>=3&&code[pos+2]==spv::DecorationNoContraction)return 1;
-        pos+=count;
-    }
-    return 0;
+    reflection.set_entry_point(entry, execution);
+    const auto mode = mvkshader::resolveMathMode(preference, reflection.get_fp_fast_math_flags(true));
+    // NoContraction remains on the original instructions. Mesa emits no unsafe
+    // algebra flags for exact operations, even when global refactoring is allowed.
+    // The current boolean DXIL adapter represents Safe/Fast. Partial Relaxed
+    // permissions retain the existing conservative behavior until mapped per-op.
+    return mode != mvkshader::MathMode::Fast;
 }
+
 std::string keyFor(const MVKMetalIRCompileRequest& request) {
     CC_SHA256_CTX hash;CC_SHA256_Init(&hash);
     auto add=[&](const void* data,size_t size){CC_SHA256_Update(&hash,data,(CC_LONG)size);};
@@ -219,7 +208,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     }
     uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
     const char* strictMathOption=getenv("MELONX_METAL_IR_STRICT_MATH");
-    uint32_t strictMath=strictMathOption?(strcmp(strictMathOption,"1")==0):requiresStrictMath(code,stage->pName,(spv::ExecutionModel)execution);
+    uint32_t strictMath=strictMathOption?(strcmp(strictMathOption,"1")==0):requiresStrictMath(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
     MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0,strictMath,vertexTransformFlags,runtimeOptions};
     std::string key=keyFor(request);
     auto state=deviceArtifacts(owner->getDevice());

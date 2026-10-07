@@ -25,6 +25,7 @@
 #include "MVKSwapchain.h"
 #include "MVKQueryPool.h"
 #include "MVKShaderModule.h"
+#include "MVKShaderMathPolicy.h"
 #include "MVKMetalIR.h"
 #include "MVKPipeline.h"
 #include "MVKFramebuffer.h"
@@ -5500,16 +5501,7 @@ MTLCompileOptions* MVKDevice::getMTLCompileOptions(uint32_t fpFastMathFlags,
 	MTLCompileOptions* mtlCompOpt = [MTLCompileOptions new];
 	mtlCompOpt.languageVersion = _physicalDevice->_metalFeatures.mslVersionEnum;
 
-	switch (getMVKConfig().fastMathEnabled) {
-		case MVK_CONFIG_FAST_MATH_ALWAYS:
-			fpFastMathFlags = mvk::kSPIRVFPFastMathModesSupported;
-			break;
-		case MVK_CONFIG_FAST_MATH_NEVER:
-			fpFastMathFlags = spv::FPFastMathModeMaskNone;
-			break;
-		default:
-			break;
-	}
+	const auto mathMode = mvkshader::resolveMathMode(getMVKConfig().fastMathEnabled, fpFastMathFlags);
 
 #if MVK_XCODE_16
 	// Match Metal FP options as closely as possible to SPIR-V FPFastMathModeMask flags.
@@ -5518,20 +5510,20 @@ MTLCompileOptions* MVKDevice::getMTLCompileOptions(uint32_t fpFastMathFlags,
 	if ([mtlCompOpt respondsToSelector: @selector(mathMode)]) {
 		MTLMathMode mtlMathMode = MTLMathModeSafe;
 		MTLMathFloatingPointFunctions mtlFPFuncs = MTLMathFloatingPointFunctionsPrecise;
-		if (mvkAreAllFlagsEnabled(fpFastMathFlags, (spv::FPFastMathModeNSZMask | spv::FPFastMathModeAllowRecipMask |
-													spv::FPFastMathModeAllowReassocMask | spv::FPFastMathModeAllowContractMask))) {
+		if (mathMode != mvkshader::MathMode::Safe) {
 			mtlMathMode = MTLMathModeRelaxed;
-			if (mvkAreAllFlagsEnabled(fpFastMathFlags, (spv::FPFastMathModeNotNaNMask | spv::FPFastMathModeNotInfMask))) {
+			if (mathMode == mvkshader::MathMode::Fast) {
 				mtlMathMode = MTLMathModeFast;
 				mtlFPFuncs = MTLMathFloatingPointFunctionsFast;
 			}
 		}
+
 		mtlCompOpt.mathMode = mtlMathMode;
 		mtlCompOpt.mathFloatingPointFunctions = mtlFPFuncs;
 	} else
 #endif
 	{
-		mtlCompOpt.fastMathEnabled = mvkAreAllFlagsEnabled(fpFastMathFlags, mvk::kSPIRVFPFastMathModesSupported);
+		mtlCompOpt.fastMathEnabled = mathMode == mvkshader::MathMode::Fast;
 	}
 
 	if ([mtlCompOpt respondsToSelector: @selector(optimizationLevel)]) {

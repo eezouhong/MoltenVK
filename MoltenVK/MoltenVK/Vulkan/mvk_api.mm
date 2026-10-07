@@ -1,3 +1,4 @@
+#include "MVKReplayBindingTrace.h"
 #include "MVKReplayTrace.h"
 #include "MVKReplayGPUStages.h"
 /*
@@ -150,6 +151,10 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
         return result;
     }
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayBindingStatisticsMVK(mvkreplay::BindingSample* output, uint32_t capacity) {
+    return mvkreplay::bindingSnapshot(output, capacity);
 }
 
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayPhaseStatisticsMVK(mvkreplay::Sample* output, uint32_t capacity, VkBool32 reset) {

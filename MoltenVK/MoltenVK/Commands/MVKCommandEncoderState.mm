@@ -1,4 +1,5 @@
 #include "MVKReplayTrace.h"
+#include "MVKReplayBindingTrace.h"
 /*
  * MVKCommandEncoderState.mm
  *
@@ -670,7 +671,8 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
                                MVKResourceUsageStages useResourceStage,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
-                               const MVKResourceBinder& RESTRICT binder) {
+                               const MVKResourceBinder& RESTRICT binder,
+                               mvkreplay::BindingTrace& bindingTrace) {
 	mvkreplay::Timer replayTrace(mvkreplay::IRRootBinding);
 	const auto& artifact = *resources.metalIR;
 	auto& cached = bindings.metalIRArguments;
@@ -707,7 +709,9 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 		args[idx * 2] = base;
 		args[idx * 2 + 1] = base + artifact.descriptorCounts[idx] * 3 * 24;
 	}
+	bindingTrace.checkpoint();
 	executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+	bindingTrace.checkpoint();
 	if (artifact.pushConstantSize && artifact.usesPushConstants) {
 		if (cached.pushConstantSize != artifact.pushConstantSize) {
 			const auto slice = mvkEncoder.metalIR().copyBytes(pushConstants, artifact.pushConstantSize);
@@ -785,9 +789,10 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
                                const MVKResourceBinder& RESTRICT binder) {
+	mvkreplay::BindingTrace bindingTrace(bool(resources.metalIR));
 	if (resources.metalIR) {
 		bindMetalIRResources(encoder, mvkEncoder, common, resources, implicitBufferData, pushConstants,
-		                     vkStage, useResourceStage, exists, bindings, binder);
+		                     vkStage, useResourceStage, exists, bindings, binder, bindingTrace);
 		return;
 	}
 	if (bindings.metalIR) {
@@ -806,7 +811,9 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
 		bindBuffer(encoder, set->gpuBufferObject, set->gpuBufferOffset, idx, exists, bindings, binder);
 	}
 
+	bindingTrace.checkpoint();
 	executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+	bindingTrace.checkpoint();
 
 	MVKMetalSharedCommandEncoderState& mtlShared = mvkEncoder.getState().mtlShared();
 	if (resources.usesPhysicalStorageBufferAddresses && !isCompatible(mtlShared._gpuAddressableResourceStages, useResourceStage)) {
@@ -1632,7 +1639,13 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
 		bindVertexBuffers(encoder, vk, _exists.vertex(), _bindings.vertex(), MVKVertexBufferBinder::Vertex());
 	}
 	bindVulkanGraphicsToMetalGraphics(encoder, mvkEncoder, vk, vkShared, *this, pipeline, kMVKShaderStageFragment, MVKMetalGraphicsStage::Fragment);
-	useResource.bindAndResetGraphics(encoder);
+	{
+		mvkreplay::BindingTrace residencyTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+		    mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::Residency);
+		residencyTrace.checkpoint();
+		useResource.bindAndResetGraphics(encoder);
+		residencyTrace.checkpoint();
+	}
 	useResource.meshStage = false;
 }
 

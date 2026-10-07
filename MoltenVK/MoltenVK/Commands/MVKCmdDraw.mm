@@ -1,3 +1,4 @@
+#include "MVKReplayBindingTrace.h"
 /*
  * MVKCmdDraw.mm
  *
@@ -189,9 +190,15 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 	}
 
     cmdEncoder->_isIndexedDraw = false;
-    if (const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get()) {
-        cmdEncoder->metalIR().prepareDraw(artifact,
-            mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
+    {
+        const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+        mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint();
+        if (artifact) {
+            cmdEncoder->metalIR().prepareDraw(artifact,
+                mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
+        }
+        preparationTrace.checkpoint();
     }
 
 	MVKPiplineStages stages;
@@ -336,6 +343,9 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
+                    mvkreplay::BindingTrace drawTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+                        mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::MetalDraw);
+                    drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
@@ -350,6 +360,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                                           vertexCount: _vertexCount
                                                         instanceCount: instanceCount];
                     }
+                    drawTrace.checkpoint();
                 }
                 break;
         }
@@ -482,10 +493,16 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 
     size_t idxSize = mvkMTLIndexTypeSizeInBytes((MTLIndexType)ibb.mtlIndexType);
     VkDeviceSize idxBuffOffset = ibb.offset + (_firstIndex * idxSize);
-    if (const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get()) {
-        cmdEncoder->metalIR().prepareDraw(artifact,
-            mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
-                _vertexOffset, _firstInstance, ibb.mtlIndexType));
+    {
+        const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+        mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint();
+        if (artifact) {
+            cmdEncoder->metalIR().prepareDraw(artifact,
+                mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
+                    _vertexOffset, _firstInstance, ibb.mtlIndexType));
+        }
+        preparationTrace.checkpoint();
     }
 
     const MVKMTLBufferAllocation* vtxOutBuff = nullptr;
@@ -632,6 +649,9 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
+                    mvkreplay::BindingTrace drawTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+                        mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::MetalDraw);
+                    drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
@@ -651,6 +671,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                            indexBufferOffset: idxBuffOffset
                                                                instanceCount: instanceCount];
                     }
+                    drawTrace.checkpoint();
                 }
                 break;
         }

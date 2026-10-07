@@ -96,6 +96,32 @@ Vulkan permits finite-value assumptions, so that variant is not a valid strict
 NaN/Inf oracle. No captured game shaders are included here. Execute this test
 only through the shared graphics queue.
 
+## Local binding attribution
+
+`MELONX_REPLAY_BINDING_SAMPLING=1` enables diagnostic-only Bernoulli sampling
+(1/128 calls). It changes no binding or rendering policy and emits no per-draw
+log lines. `vkGetReplayBindingStatisticsMVK` returns eight `BindingSample`
+records: MSL/IR pairs for resources, direct-draw preparation, Metal draw calls,
+and graphics residency submission. Each record contains exact observed calls,
+sampled calls, raw inclusive wall/CPU nanoseconds, unavailable samples, and three
+wall-time components. Resource components are preparation, descriptor script,
+and remaining binding. Other groups put the observed operation in component 1.
+
+Counters accumulate; subtract snapshots around completed work. Synchronous
+local replay flushes its current encoder thread at snapshot. Other active
+threads can lag by 255 calls and flush on exit. CPU and component wall times
+overlap: do not add them. Calibrate empty scopes and compare sampling off/on;
+clock reads can exceed the cost of a tiny binding operation. Raw sampled sums
+are not whole-frame costs or FPS measurements.
+
+CPU-only contract/calibration test, from the repository root:
+
+```sh
+clang++ -std=c++17 -O2 -pthread -I MoltenVK/MoltenVK/GPUObjects \
+  MetalIRCompiler/tests/binding_trace_test.cpp -o "$TEST_OUTPUT"
+"$TEST_OUTPUT"
+```
+
 ## Source and distribution notices
 
 The vendored AIR writer and ValueEnumerator retain their LLVM license headers

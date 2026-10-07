@@ -189,7 +189,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         }
         if(dsl->isCPUAllocationVariable()||dsl->isGPUAllocationVariable())return reject("variable descriptor allocation unsupported");
         if(dsl->dynamicOffsetCount(0))return reject("dynamic descriptor offsets unsupported");
-        if(!mvkMetalIRShadowBytes(dsl))return reject("descriptor layout lacks an IR table");
+        if(!mvkMetalIRTableBytes(dsl))return reject("descriptor layout lacks an IR table");
         for(const auto& b:dsl->bindings()) {
             if(b.descriptorType==VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK||b.descriptorType==VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)return reject("descriptor type unsupported");
             if(b.gpuLayout==MVKDescriptorGPULayout::Tex2SampSoA||b.gpuLayout==MVKDescriptorGPULayout::Tex3SampSoA)return reject("multi-plane descriptor unsupported");

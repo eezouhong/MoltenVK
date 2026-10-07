@@ -15,7 +15,7 @@ get_filename_component(MOLTENVK_DIRECTORY "${MOLTENVK_LIBRARY}" DIRECTORY)
 set_target_properties(runtime_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 
 set(SHADER_OUTPUTS)
-foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp)
+foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp descriptors.comp)
     set(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv")
     add_custom_command(OUTPUT "${OUTPUT}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
@@ -25,3 +25,9 @@ foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp)
 endforeach()
 add_custom_target(replay_shaders ALL DEPENDS ${SHADER_OUTPUTS})
 add_dependencies(runtime_probe replay_shaders)
+add_executable(descriptor_probe descriptor_probe.cpp)
+target_compile_features(descriptor_probe PRIVATE cxx_std_17)
+target_include_directories(descriptor_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(descriptor_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(descriptor_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(descriptor_probe replay_shaders)

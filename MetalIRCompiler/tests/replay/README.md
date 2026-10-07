@@ -33,3 +33,18 @@ The runner freezes binary/input hashes, verifies the loaded native library and
 compiler selection, retains raw logs, and fails on unexpected fallback/rejection.
 Use the pinned MSC 3.1.1 plugin build; the supplied plugin directory's dylib hashes
 are recorded. This is correctness/cache validation, not a timing benchmark.
+
+`descriptor_probe` adds a separate 40-row CPU oracle: cross-binding writes and
+templates, zero-count binding gaps, copies between different array layouts,
+copies to/from combined immutable samplers, standalone sampled images/samplers,
+immutable-to-mutable sampler copy, and a swizzled image view. Repeat
+addressing and clamp addressing produce different colors, so copying over an
+immutable sampler cannot silently pass. The expectations follow the
+[Vulkan descriptor-copy rules](https://docs.vulkan.org/refpages/latest/refpages/source/VkCopyDescriptorSet.html)
+and do not assume that another renderer is correct.
+
+Run `run_descriptors.py` with the same required arguments as `run.py`, under the
+same queue wrapper. It defaults to IR; `--route msl` is an optional independent
+comparison and still fails if its output violates the CPU oracle. `--pool`
+requires an actual Metal 4 view-pool assignment, while `--shader-validation`
+requires the validation layer to report activation. Both can be combined.

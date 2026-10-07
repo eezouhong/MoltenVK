@@ -1,8 +1,10 @@
-#include "MVKReplayTrace.h"
 #include "MVKMetalIR.h"
 #include "MVKPipeline.h"
+#include "MVKImage.h"
 #include "MVKPixelFormats.h"
 #include "mvk_datatypes.h"
+#include <algorithm>
+#include <cstring>
 
 // The IR root table is bound by its own encoder. This script only declares
 // residency for the Vulkan resources actually used by the compiled entry.
@@ -39,101 +41,151 @@ uint32_t mvkMetalIRDenseBinding(const MVKDescriptorSetLayout* layout,uint32_t bi
     uint32_t index=layout->getBindingIndex(binding);
     return index<layout->bindings().size()?layout->bindings()[index].metalIRDenseOffset:UINT32_MAX;
 }
-uint32_t mvkMetalIRShadowBytes(const MVKDescriptorSetLayout* layout) {
-    return layout->metalIRShadowBytes();
+uint32_t mvkMetalIRTableBytes(const MVKDescriptorSetLayout* layout) {
+    return layout->metalIRTableBytes();
 }
-struct MetalIREntry {uint64_t address,texture,metadata;};
-static_assert(sizeof(MetalIREntry)==24);
-static void updateMetalIRDescriptorRange(const MVKDescriptorSetLayout* layout,const MVKDescriptorBinding* binding,
-                                const MVKDescriptorSet* set,uint32_t first,uint32_t count,uint32_t n,uint32_t dense) {
-    mvkreplay::DescriptorRangeTimer trace(mvkreplay::IRShadowUpdate);
-    if(dense==UINT32_MAX||first+count>binding->descriptorCount)return;
-    auto* shadow=(MetalIREntry*)(set->gpuBuffer+layout->metalIRShadowBase());
-    for(uint32_t i=first;i<first+count;++i) {
-        uint32_t index=dense+i;
-        // A fixed Vulkan descriptor type only exposes its matching table(s).
-        // Every relevant entry is assigned in full below. Clearing unrelated
-        // CBV/SRV/UAV/sampler entries on every update adds hot-path stores.
-        const char* cpu=set->cpuBuffer?set->cpuBuffer+binding->cpuOffset+i*descriptorCPUSize(binding->cpuLayout):nullptr;
-        id object=cpu&&descriptorCPUSize(binding->cpuLayout)>=sizeof(id)?*(id const*)cpu:nil;
-        const auto* gpuIDs=reinterpret_cast<const uint64_t*>(set->gpuBuffer+binding->gpuOffset);
-        switch(binding->descriptorType) {
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
-                auto* desc=(const MVKCPUDescriptorOneID2Meta*)cpu;
-                uint32_t block=binding->descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER||binding->descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC?0:2;
-                // The normal Metal3 descriptor update already resolved this
-                // address, including offsets and null descriptors. Reuse it
-                // instead of querying the same Metal buffer a second time.
-                uint64_t address=gpuIDs[i];
-                shadow[block*n+index]={address,0,desc->meta.buffer.size};
-                // DXIL may expose a readonly SSBO as SRV, while stores use UAV.
-                if(block==2)shadow[n+index]=shadow[2*n+index];
-                break;
+uint32_t mvkMetalIRDescriptorTableMask(VkDescriptorType type) {
+    switch (type) {
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return 1;
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return 6;
+        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+        case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: return 2;
+        case VK_DESCRIPTOR_TYPE_SAMPLER: return 8;
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: return 10;
+        default: return 0;
+    }
+}
+namespace {
+struct MetalIREntry { uint64_t address, texture, metadata; };
+static_assert(sizeof(MetalIREntry) == 24);
+
+template<VkDescriptorType Type>
+void writeRange(const MVKDescriptorSetLayout* layout, const MVKDescriptorBinding& binding,
+                const MVKDescriptorSet* set, const void* source, size_t stride,
+                uint32_t first, uint32_t count, const MVKMetal4TextureViewBinding* views) {
+    const uint32_t n = layout->metalIRDescriptorCount();
+    auto* entries = reinterpret_cast<MetalIREntry*>(set->gpuBuffer);
+    const auto* src = static_cast<const char*>(source);
+    const uint32_t cpuStride = descriptorCPUSize(binding.cpuLayout);
+    for (uint32_t i = 0; i < count; ++i, src += stride) {
+        const uint32_t element = first + i;
+        const uint32_t index = binding.metalIRDenseOffset + element;
+        const char* cpu = set->cpuBuffer ? set->cpuBuffer + binding.cpuOffset + element * cpuStride : nullptr;
+        if constexpr (Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+            const auto& value = *reinterpret_cast<const MVKCPUDescriptorOneID2Meta*>(cpu);
+            id<MTLBuffer> buffer = value.a;
+            MetalIREntry entry{buffer ? buffer.gpuAddress + value.offset : 0, 0, value.meta.buffer.size};
+            if constexpr (Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) entries[index] = entry;
+            else entries[n + index] = entries[2 * n + index] = entry;
+        } else if constexpr (Type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER || Type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) {
+            id<MTLTexture> texture = *reinterpret_cast<id<MTLTexture> const*>(cpu);
+            id<MTLBuffer> buffer = texture.buffer;
+            uint64_t size = texture.textureType == MTLTextureTypeTextureBuffer
+                ? texture.width * mvkMTLPixelFormatBytesPerBlock(texture.pixelFormat)
+                : texture.height * texture.bufferBytesPerRow;
+            MetalIREntry entry{buffer ? buffer.gpuAddress + texture.bufferOffset : 0,
+                texture ? texture.gpuResourceID._impl : 0, (size & UINT32_MAX) | (1ull << 63)};
+            entries[n + index] = entry;
+            if constexpr (Type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) entries[2 * n + index] = entry;
+        } else {
+            if constexpr (Type != VK_DESCRIPTOR_TYPE_SAMPLER) {
+                // CPU storage can hold a residency texture rather than the view.
+                // Preserve the resolved pooled view ID from the original write.
+                id<MTLTexture> texture = cpu ? *reinterpret_cast<id<MTLTexture> const*>(cpu) : nil;
+                uint64_t resource = views ? views[i].resourceID._impl : texture ? texture.gpuResourceID._impl : 0;
+                entries[n + index] = {0, resource, 0};
+                if constexpr (Type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) entries[2 * n + index] = entries[n + index];
             }
-            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
-                // Native texture-buffer descriptors may retain only one object.
-                // Reading a two-object CPU record here reads the next descriptor.
-                id<MTLTexture> texture=object;
-                id<MTLBuffer> buffer=texture.buffer;
-                uint64_t offset=texture.bufferOffset;
-                uint64_t byteCount=texture.textureType==MTLTextureTypeTextureBuffer
-                    ? texture.width*mvkMTLPixelFormatBytesPerBlock(texture.pixelFormat)
-                    : texture.height*texture.bufferBytesPerRow;
-                uint32_t block=binding->descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER?1:2;
-                shadow[block*n+index]={buffer?buffer.gpuAddress+offset:0,gpuIDs[i],(byteCount&UINT32_MAX)|(1ull<<63)};
-                if(block==2)shadow[n+index]=shadow[2*n+index];
-                break;
+            if constexpr (Type == VK_DESCRIPTOR_TYPE_SAMPLER || Type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+                if (!binding.hasImmutableSamplers()) {
+                    const auto* info = reinterpret_cast<const VkDescriptorImageInfo*>(src);
+                    auto* sampler = reinterpret_cast<MVKSampler*>(info->sampler);
+                    entries[3 * n + index] = {sampler ? sampler->getMTLSamplerState().gpuResourceID._impl : 0, 0, 0};
+                }
             }
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-            case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
-                uint32_t block=binding->descriptorType==VK_DESCRIPTOR_TYPE_STORAGE_IMAGE?2:1;
-                // The normal encoder carries the view ID, including pooled views.
-                // Its CPU object can be only the backing texture for residency.
-                shadow[block*n+index]={0,gpuIDs[i],0};
-                if(block==2)shadow[n+index]=shadow[2*n+index];
-                if(binding->descriptorType!=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)break;
-                uint32_t planes=binding->gpuLayout==MVKDescriptorGPULayout::Tex3SampSoA?3:
-                    binding->gpuLayout==MVKDescriptorGPULayout::Tex2SampSoA?2:1;
-                shadow[3*n+index]={gpuIDs[planes*binding->descriptorCount+i],0,0};
-                break;
-            }
-            case VK_DESCRIPTOR_TYPE_SAMPLER: {
-                shadow[3*n+index]={gpuIDs[i],0,0};
-                break;
-            }
-            default:
-                // Preserve fail-closed contents for unsupported descriptor kinds.
-                shadow[index]={};shadow[n+index]={};shadow[2*n+index]={};shadow[3*n+index]={};
-                break;
         }
     }
 }
-void mvkMetalIRUpdateDescriptor(const MVKDescriptorSetLayout* layout,const MVKDescriptorBinding* binding,
-                                const MVKDescriptorSet* set,uint32_t first,uint32_t count) {
-    if(!mvkMetalIRShadowBytes(layout)||!set->gpuBuffer)return;
-    uint32_t n=mvkMetalIRDescriptorCount(layout);
-    // Ordinary writes/templates fit one binding. Its immutable metadata is
-    // already available, so avoid finding the same binding by number again.
-    if(first<=binding->descriptorCount&&count<=binding->descriptorCount-first) {
-        updateMetalIRDescriptorRange(layout,binding,set,first,count,n,binding->metalIRDenseOffset);
-        return;
+
+bool seekBinding(const MVKDescriptorBinding*& binding, const MVKDescriptorBinding* end, uint32_t& first) {
+    while (binding < end && first >= binding->descriptorCount) {
+        first -= binding->descriptorCount;
+        ++binding;
     }
-    size_t index=layout->getBindingIndex(binding->binding);
-    const auto bindings=layout->bindings();
-    uint32_t dense=binding->metalIRDenseOffset;
-    // Vulkan writes, copies and update templates may continue across adjacent
-    // bindings. Mirror every affected range after the normal update completes.
-    while(count&&index<bindings.size()) {
-        const auto& current=bindings[index++];
-        if(first>=current.descriptorCount){first-=current.descriptorCount;dense+=current.descriptorCount;continue;}
-        uint32_t updated=std::min(count,current.descriptorCount-first);
-        updateMetalIRDescriptorRange(layout,&current,set,first,updated,n,dense);
-        count-=updated;first=0;dense+=current.descriptorCount;
+    assert(binding < end);
+    return binding < end;
+}
+}
+
+void mvkInitializeMetalIRDescriptors(const MVKDescriptorSetLayout* layout, const MVKDescriptorSet* set) {
+    auto* entries = reinterpret_cast<MetalIREntry*>(set->gpuBuffer);
+    const uint32_t n = layout->metalIRDescriptorCount();
+    for (const auto& binding : layout->bindings()) {
+        if (!binding.hasImmutableSamplers()) continue;
+        auto samplers = layout->immutableSamplers().data() + binding.immSamplerIndex;
+        for (uint32_t i = 0; i < binding.descriptorCount; ++i)
+            entries[3 * n + binding.metalIRDenseOffset + i] = {samplers[i]->getMTLSamplerState().gpuResourceID._impl, 0, 0};
+    }
+}
+
+void mvkWriteMetalIRDescriptors(const MVKDescriptorSetLayout* layout, const MVKDescriptorBinding* binding,
+                               const MVKDescriptorSet* set, const void* src, size_t stride,
+                               uint32_t first, uint32_t count, const MVKMetal4TextureViewBinding* views) {
+    // The layout-selected outer writer splits cross-binding writes before both
+    // CPU residency metadata and GPU entries are updated.
+    assert(first <= binding->descriptorCount && count <= binding->descriptorCount - first);
+    switch (binding->descriptorType) {
+#define IR_WRITE(type) case type: writeRange<type>(layout, *binding, set, src, stride, first, count, views); break
+        IR_WRITE(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_SAMPLER);
+        IR_WRITE(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+#undef IR_WRITE
+        default: assert(false); break; // Unsupported layouts fail at creation.
+    }
+}
+
+void mvkCopyMetalIRDescriptors(const MVKDescriptorSetLayout* dstLayout,
+    const MVKDescriptorBinding* srcBinding, const MVKDescriptorSet* srcSet, id<MTLArgumentEncoder>,
+    const MVKDescriptorBinding* dstBinding, const MVKDescriptorSet* dstSet, id<MTLArgumentEncoder>,
+    uint32_t srcFirst, uint32_t dstFirst, uint32_t count) {
+    const auto* srcLayout = srcSet->layout;
+    assert(srcLayout->isMetalIRStorage() && dstLayout->isMetalIRStorage());
+    const auto* srcEnd = srcLayout->bindings().end();
+    const auto* dstEnd = dstLayout->bindings().end();
+    const uint32_t srcN = srcLayout->metalIRDescriptorCount(), dstN = dstLayout->metalIRDescriptorCount();
+    const auto* srcEntries = reinterpret_cast<const MetalIREntry*>(srcSet->gpuBuffer);
+    auto* dstEntries = reinterpret_cast<MetalIREntry*>(dstSet->gpuBuffer);
+    while (count && seekBinding(srcBinding, srcEnd, srcFirst) && seekBinding(dstBinding, dstEnd, dstFirst)) {
+        assert(srcBinding->descriptorType == dstBinding->descriptorType);
+        const uint32_t length = std::min(count, std::min(srcBinding->descriptorCount - srcFirst, dstBinding->descriptorCount - dstFirst));
+        const uint32_t srcStride = descriptorCPUSize(srcBinding->cpuLayout), dstStride = descriptorCPUSize(dstBinding->cpuLayout);
+        if (dstStride) {
+            char* dst = dstSet->cpuBuffer + dstBinding->cpuOffset + dstFirst * dstStride;
+            const char* src = srcStride ? srcSet->cpuBuffer + srcBinding->cpuOffset + srcFirst * srcStride : nullptr;
+            if (srcStride == dstStride) memmove(dst, src, length * dstStride);
+            else for (uint32_t i = 0; i < length; ++i) {
+                // Immutable samplers may remove a CPU sampler slot. GPU entries
+                // below retain/copy the right sampler; CPU records serve residency.
+                const uint32_t bytes = std::min(srcStride, dstStride);
+                if (bytes) memcpy(dst + i * dstStride, src + i * srcStride, bytes);
+                memset(dst + i * dstStride + bytes, 0, dstStride - bytes);
+            }
+        }
+        const uint32_t mask = mvkMetalIRDescriptorTableMask(dstBinding->descriptorType) &
+            (dstBinding->hasImmutableSamplers() ? ~8u : ~0u);
+        for (uint32_t table = 0; table < 4; ++table) if (mask & (1u << table))
+            memmove(dstEntries + table * dstN + dstBinding->metalIRDenseOffset + dstFirst,
+                    srcEntries + table * srcN + srcBinding->metalIRDenseOffset + srcFirst,
+                    length * sizeof(MetalIREntry));
+        count -= length; srcFirst += length; dstFirst += length;
     }
 }

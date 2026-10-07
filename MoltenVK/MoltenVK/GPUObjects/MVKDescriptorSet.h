@@ -28,7 +28,8 @@
 
 class MVKDescriptorPool;
 class MVKDescriptorSetLayout;
-uint32_t mvkMetalIRShadowBytes(const MVKDescriptorSetLayout* layout);
+struct MVKDescriptorSet;
+enum class MVKDescriptorUpdateSourceType;
 class MVKPipelineLayout;
 class MVKCommandEncoder;
 class MVKResourcesCommandEncoderState;
@@ -234,7 +235,7 @@ struct MVKDescriptorBinding {
 	uint32_t binding;                 /**< The Vulkan binding number. */
 	VkDescriptorType descriptorType;  /**< The Vulkan descriptor type. */
 	uint32_t descriptorCount;         /**< The number of Vulkan descriptors bound. */
-	uint32_t metalIRDenseOffset;      /**< Precomputed offset in the IR shadow tables. */
+	uint32_t metalIRDenseOffset;      /**< Precomputed offset in the IR descriptor tables. */
 	VkShaderStageFlags stageFlags;    /**< Flags from Vulkan indicating the stages that use this descriptor. */
 	uint8_t flags;                    /**< MVKDescriptorBindingFlagBits */
 	MVKDescriptorCPULayout cpuLayout; /**< The layout in the descriptor set's host-side storage. */
@@ -350,14 +351,20 @@ public:
 	uint32_t gpuAlignment() const { return _gpuAlignment; }
 	/** Returns the required CPU buffer size. */
 	uint32_t cpuSize(uint32_t numVariable = 0) const { return _cpuSize + numVariable * _cpuVariableElementSize; }
-	/** Returns the required GPU buffer size.  For variable descriptor sets with argument encoders, returns zero; you must get the actual value from the encoder in that case. */
-	uint32_t gpuSize(uint32_t numVariable = 0) const {
-		uint32_t shadow = mvkMetalIRShadowBytes(this);
-		return shadow ? metalIRShadowBase() + shadow : _gpuSize + numVariable * _gpuVariableElementSize;
-	}
-	uint32_t metalIRShadowBase() const { return (_gpuSize + 7u) & ~7u; }
+	/** Returns the required GPU buffer size for the selected storage strategy. */
+	uint32_t gpuSize(uint32_t numVariable = 0) const { return _gpuSize + numVariable * _gpuVariableElementSize; }
+	bool isMetalIRStorage() const { return _metalIRStorage; }
 	uint32_t metalIRDescriptorCount() const { return _metalIRDescriptorCount; }
-	uint32_t metalIRShadowBytes() const { return _metalIRShadowBytes; }
+	uint32_t metalIRTableBytes() const { return _metalIRTableBytes; }
+	using WriteBinding = void (*)(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const void*, MVKDescriptorUpdateSourceType,
+	    size_t, uint32_t, uint32_t);
+	using CopyBinding = void (*)(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, uint32_t, uint32_t, uint32_t);
+	WriteBinding descriptorWriter() const { return _writeBinding; }
+	CopyBinding descriptorCopier() const { return _copyBinding; }
+
 	/** Returns the offset of the aux buffers in the GPU buffer.  For variable descriptor sets with argument encoders, returns zero; you must get the actual value from the encoder in that case. */
 	uint32_t gpuAuxBase(uint32_t numVariable = 0) const { return _gpuAuxBase + (isMainGPUBufferVariable() ? numVariable * _gpuVariableElementSize : 0); }
 	uint32_t dynamicOffsetCount(uint32_t numVariable) const { return _dynamicOffsetCount + (_flags.has(Flag::IsDynamicOffsetCountVariable) ? numVariable : 0); }
@@ -437,7 +444,10 @@ private:
 	/** The required size of gpu buffer minus any variable descriptors. */
 	uint32_t _gpuSize = 0;
 	uint32_t _metalIRDescriptorCount = 0;
-	uint32_t _metalIRShadowBytes = 0;
+	uint32_t _metalIRTableBytes = 0;
+	bool _metalIRStorage = false;
+	WriteBinding _writeBinding = nullptr;
+	CopyBinding _copyBinding = nullptr;
 	/** If using variable descriptors, the size of each variable element in the gpu buffer. */
 	uint32_t _gpuVariableElementSize = 0;
 	/** The total number of buffers using dynamic offsets, minus any variable descriptors. */

@@ -107,7 +107,7 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
         conf.yz_flip.y_mask=UINT16_MAX;
     }
     // Explicit descriptor tables retain Vulkan resource kinds. The native
-    // encoder supplies a separate 24-byte shadow layout for these tables.
+    // encoder writes 24-byte IR entries directly into these tables.
     conf.lower_to_bindless=false;
     dxil_spirv_debug_options debug={};dxil_spirv_logger logger={result,logMesa};
     CompileResources resources;

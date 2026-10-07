@@ -1,0 +1,18 @@
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0) uniform sampler2D firstImages[2];
+layout(set=0,binding=2) uniform sampler2D secondImages[2];
+layout(set=0,binding=3,std430) buffer Results { uvec4 values[]; } result;
+layout(set=0,binding=4) uniform sampler separateSampler;
+layout(set=0,binding=5) uniform texture2D separateImage;
+layout(set=0,binding=6) uniform sampler fixedSampler;
+layout(push_constant) uniform Push { uint destination; } push;
+void main() {
+    vec2 uv=vec2(1.375,0.5);
+    result.values[push.destination+0]=uvec4(round(textureLod(firstImages[0],uv,0)*255.0));
+    result.values[push.destination+1]=uvec4(round(textureLod(firstImages[1],uv,0)*255.0));
+    result.values[push.destination+2]=uvec4(round(textureLod(secondImages[0],uv,0)*255.0));
+    result.values[push.destination+3]=uvec4(round(textureLod(secondImages[1],uv,0)*255.0));
+    result.values[push.destination+4]=uvec4(round(textureLod(sampler2D(separateImage,separateSampler),uv,0)*255.0));
+    result.values[push.destination+5]=uvec4(round(textureLod(sampler2D(separateImage,fixedSampler),uv,0)*255.0));
+}

@@ -11,6 +11,7 @@ class MVKPipelineLayout;
 class MVKPipeline;
 class MVKDevice;
 struct MVKPipelineStageResourceInfo;
+struct MVKMetal4TextureViewBinding;
 
 bool mvkMetalIREnabled();
 bool mvkMetalIRCompilerAvailable();
@@ -21,11 +22,15 @@ uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags);
 void mvkMetalIRDestroyDevice(MVKDevice* device);
 uint32_t mvkMetalIRDescriptorCount(const MVKDescriptorSetLayout* layout);
 uint32_t mvkMetalIRDenseBinding(const MVKDescriptorSetLayout* layout, uint32_t binding);
-uint32_t mvkMetalIRShadowBytes(const MVKDescriptorSetLayout* layout);
-void mvkMetalIRUpdateDescriptor(const MVKDescriptorSetLayout* layout,
-                                const MVKDescriptorBinding* binding,
-                                const MVKDescriptorSet* set,
-                                uint32_t first, uint32_t count);
+uint32_t mvkMetalIRDescriptorTableMask(VkDescriptorType type);
+uint32_t mvkMetalIRTableBytes(const MVKDescriptorSetLayout* layout);
+void mvkInitializeMetalIRDescriptors(const MVKDescriptorSetLayout*, const MVKDescriptorSet*);
+void mvkWriteMetalIRDescriptors(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, const void*, size_t, uint32_t, uint32_t,
+    const MVKMetal4TextureViewBinding*);
+void mvkCopyMetalIRDescriptors(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, id<MTLArgumentEncoder>, uint32_t, uint32_t, uint32_t);
 void mvkPopulateMetalIRResidencyOperations(MVKPipelineLayout* layout,
                                           MVKPipelineStageResourceInfo& resources);
 

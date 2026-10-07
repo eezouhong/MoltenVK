@@ -716,7 +716,7 @@ static void bindMetalIRResources(id<MTLCommandEncoder> encoder,
 				shared._useResource.add(set->gpuBufferObject, useResourceStage, false);
 			}
 			if (refreshAddress) {
-				cached.descriptorSetBases[idx] = set->gpuBufferObject.gpuAddress + set->gpuBufferOffset + layout->metalIRShadowBase();
+				cached.descriptorSetBases[idx] = set->gpuBufferObject.gpuAddress + set->gpuBufferOffset;
 			}
 			// Descriptor contents may change without changing their allocation. Keep
 			// reading the table itself on the GPU; only reuse its encoder-local address.

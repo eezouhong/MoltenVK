@@ -22,7 +22,7 @@ def main():
     build, native, plugin = (p.resolve(strict=True) for p in (args.build, args.native, args.plugin))
     out = args.output.resolve()
     inputs = [build / p for p in ('runtime_probe', 'runtime.vert.spv', 'runtime.frag.spv', 'runtime.comp.spv', 'unused.comp.spv')]
-    sources = [p for p in Path(__file__).resolve().parent.iterdir() if p.suffix in ('.cpp', '.vert', '.frag', '.comp', '.py', '.txt')]
+    sources = [p for p in Path(__file__).resolve().parent.iterdir() if p.suffix in ('.cpp', '.vert', '.frag', '.comp', '.py', '.txt', '.h')]
     tracked = [native, plugin, *plugin.parent.glob('*.dylib'), *inputs, *sources]
     identity = {str(p): sha(p) for p in tracked}
     out.mkdir(parents=True, exist_ok=False)

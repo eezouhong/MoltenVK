@@ -17,6 +17,7 @@
  */
 
 #include "MVKCmdDispatch.h"
+#include "MVKReplayGPUStages.h"
 #include "MVKCommandBuffer.h"
 #include "MVKCommandPool.h"
 #include "MVKBuffer.h"
@@ -59,6 +60,8 @@ void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 		// Hopefully Metal won't complain that we didn't set up a stage-input descriptor.
 		[mtlEncoder setStageInRegion: mtlThreadgroupCount];
 	}
+	auto local=pipeline->getThreadgroupSize();
+	mvkreplay::noteGPUStageDispatch(cmdEncoder->_mtlCmdBuffer,pipeline->getReplayProgramHash(),_groupCountX,_groupCountY,_groupCountZ,local.width,local.height,local.depth,false);
 	[mtlEncoder dispatchThreadgroups: mtlThreadgroupCount.size
 			   threadsPerThreadgroup: pipeline->getThreadgroupSize()];
 }
@@ -80,6 +83,8 @@ void MVKCmdDispatchIndirect::encode(MVKCommandEncoder* cmdEncoder) {
         cmdEncoder->metalIR().prepareIndirectDispatch(artifact, _mtlIndirectBuffer, _mtlIndirectBufferOffset);
     }
     cmdEncoder->finalizeDispatchState();	// Ensure all updated state has been submitted to Metal
+    auto* pipeline=cmdEncoder->getComputePipeline();auto local=pipeline->getThreadgroupSize();
+    mvkreplay::noteGPUStageDispatch(cmdEncoder->_mtlCmdBuffer,pipeline->getReplayProgramHash(),0,0,0,local.width,local.height,local.depth,true);
     [cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDispatch) dispatchThreadgroupsWithIndirectBuffer: _mtlIndirectBuffer
 																				indirectBufferOffset: _mtlIndirectBufferOffset
 																			   threadsPerThreadgroup: cmdEncoder->getComputePipeline()->getThreadgroupSize()];

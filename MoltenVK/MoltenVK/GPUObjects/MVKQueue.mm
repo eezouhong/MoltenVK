@@ -19,6 +19,7 @@
 #include "MVKInstance.h"
 #include "MVKQueue.h"
 #include "MVKReplayTrace.h"
+#include "MVKReplayGPUStages.h"
 #include "MVKSurface.h"
 #include "MVKSwapchain.h"
 #include "MVKSync.h"
@@ -180,8 +181,10 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
 	setMetalObjectLabel(mtlCmdBuff, mtlCmdBuffLabel);
 	uint64_t frameToken=mtlCmdBuff?mvkreplay::frameBufferCreated():0;
+	auto stageCapture=mvkreplay::beginGPUStages(_replayGPUStagePool,mtlCmdBuff,frameToken);
 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
 		handleMTLCommandBufferError(mtlCB);
+		mvkreplay::finishGPUStages(stageCapture,mtlCB);
 		if(frameToken) {
 			mvkreplay::commandBufferCompleted(mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
 			mvkreplay::frameBufferCompleted(frameToken,mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
@@ -299,6 +302,7 @@ MVKQueue::MVKQueue(MVKDevice* device, MVKQueueFamily* queueFamily, uint32_t inde
 	initName();
 	initExecQueue();
 	initMTLCommandQueue();
+	_replayGPUStagePool=mvkreplay::createGPUStagePool(_mtlQueue.device);
 }
 
 void MVKQueue::initName() {
@@ -750,7 +754,7 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 	// or if the MTLCommandBuffer could not be created, call finish() directly.
 	// Retrieve the result first, because finish() will destroy this instance.
 	VkResult rslt = getConfigurationResult();
-	mvkreplay::framePresented();
+	mvkreplay::sealGPUStageEpoch(mvkreplay::framePresented());
 	if (mtlCmdBuff) {
 		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { this->finish(); }];
 		[mtlCmdBuff commit];

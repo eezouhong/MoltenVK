@@ -24,6 +24,7 @@ struct FrameValues {
     uint64_t passBreaks = 0, irPassBreaks = 0, indirectDraws = 0, indirectDispatches = 0;
     uint64_t parameterBytes = 0, directUploads = 0;
     uint64_t encodeCpuNs = 0, encodeCpuUnavailable = 0;
+    uint64_t allIndirectDraws = 0, allIndirectDispatches = 0;
 };
 struct FrameRecord {
     uint64_t id = 0, buffers = 0, gpuUnionNs = 0, gpuSumNs = 0, unavailable = 0, errors = 0, dropped = 0;
@@ -79,6 +80,7 @@ public:
         } else ++frame.unavailable;
         return finish(id);
     }
+    uint64_t currentId() const { return current; }
     uint64_t dropped() const { return droppedFrames; }
 };
 }

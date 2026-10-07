@@ -580,6 +580,7 @@ class MVKComputePipeline : public MVKPipeline {
 public:
 	/** Returns if this pipeline allows non-zero dispatch bases in vkCmdDispatchBase(). */
 	bool allowsDispatchBase() { return _allowsDispatchBase; }
+	uint64_t getReplayProgramHash() const { return _replayProgramHash; }
 
 	/** Returns the MTLRenderPipelineState for the final stage of the pipeline */
 	id<MTLComputePipelineState> getPipelineState() const { return _mtlPipelineState; }
@@ -613,6 +614,7 @@ protected:
 	MVKPipelineStageResourceInfo _stageResources = {};
     MTLSize _mtlThreadgroupSize;
 	bool _allowsDispatchBase = false;
+	uint64_t _replayProgramHash=0;
 
 	MVKShaderModule* _module = nullptr;
 	bool _ownsModule = false;

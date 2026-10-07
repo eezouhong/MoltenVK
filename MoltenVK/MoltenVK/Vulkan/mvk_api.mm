@@ -1,4 +1,5 @@
 #include "MVKReplayTrace.h"
+#include "MVKReplayGPUStages.h"
 /*
  * mvk_api.mm
  *
@@ -330,4 +331,9 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetWorkgroupSizeMVK(
 
     MVKShaderModule* mvkShaderModule = (MVKShaderModule*)shaderModule;
     mvkShaderModule->setWorkgroupSize(x, y, z);
+}
+
+// Headless diagnostic replays can close an epoch without a swapchain.
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkFinishReplayFrameMVK() {
+    auto frame=mvkreplay::framePresented();mvkreplay::sealGPUStageEpoch(frame);return frame;
 }

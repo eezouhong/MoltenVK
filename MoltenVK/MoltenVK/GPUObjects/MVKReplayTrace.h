@@ -9,6 +9,7 @@
 #include <time.h>
 #include <mutex>
 #include "MVKReplayFrameTrace.h"
+#include "MVKReplayDescriptorTrace.h"
 
 namespace mvkreplay {
 enum Region : uint32_t {
@@ -39,6 +40,10 @@ inline bool descriptorTimingEnabled() {
     static bool value=[] {const char* p=getenv("MELONX_REPLAY_DESCRIPTOR_TIMING");return p&&!strcmp(p,"1");}();
     return value;
 }
+inline bool descriptorSamplingEnabled() {
+    static bool value=[] {const char* p=getenv("MELONX_REPLAY_DESCRIPTOR_TIMING");return p&&!strcmp(p,"sampled");}();
+    return value;
+}
 inline uint64_t nanoseconds(clockid_t clock,bool& valid) {
     timespec time{};valid=clock_gettime(clock,&time)==0;
     return valid?uint64_t(time.tv_sec)*1000000000+time.tv_nsec:0;
@@ -46,8 +51,7 @@ inline uint64_t nanoseconds(clockid_t clock,bool& valid) {
 class Timer {
     Region region;uint64_t wall=0,cpu=0;bool cpuValid=false;
 public:
-    explicit Timer(Region r):region(r) {
-        const auto traceMode=mode();
+    explicit Timer(Region r,Mode traceMode=mode()):region(r) {
         // Game speed comparisons time complete command encoding batches, not
         // every tiny draw/descriptor operation. Detailed replay remains opt-in.
         bool descriptor=(r==DescriptorUpdate || r==IRShadowUpdate)&&descriptorTimingEnabled();
@@ -68,6 +72,15 @@ public:
         while (maximum<elapsed && !c.maxWallNs.compare_exchange_weak(maximum,elapsed,std::memory_order_relaxed)) {}
     }
 };
+class DescriptorRangeTimer {
+    Mode traceMode;
+    Timer detailed;
+    DescriptorSampleScope sampled;
+public:
+    explicit DescriptorRangeTimer(Region region) : traceMode(mode()), detailed(region,traceMode),
+        sampled(region==IRShadowUpdate?DescriptorRangeKind::Shadow:DescriptorRangeKind::Write,
+                traceMode==Mode::Coarse && descriptorSamplingEnabled()) {}
+};
 inline uint32_t snapshot(Sample* output,uint32_t capacity,bool reset) {
     if (!enabled() || !output || capacity<RegionCount) return 0;
     for (uint32_t i=0;i<RegionCount;++i) {
@@ -81,6 +94,7 @@ struct GPUCounter {
     std::atomic<uint64_t> irIndirectBatches{0},irIndirectDraws{0},irIndirectDispatches{0},irPassBreaks{0},irTemporaryBytes{0},irDirectUploads{0};
     std::atomic<uint64_t> renderEncoders{0},computeEncoders{0},blitEncoders{0};
     std::atomic<uint64_t> renderPassBreaks{0};
+    std::atomic<uint64_t> allIRIndirectDraws{0},allIRIndirectDispatches{0};
 };
 inline GPUCounter gpu;
 struct SubmissionSample {
@@ -115,6 +129,11 @@ inline void indirectRuntime(uint32_t draws,uint64_t bytes,bool passBreak,bool co
 inline void directRuntimeUpload() {
     if (mode()==Mode::Coarse) gpu.irDirectUploads.fetch_add(1,std::memory_order_relaxed);
 }
+inline void indirectInvocation(uint32_t count,bool compute) {
+    if (mode()!=Mode::Coarse) return;
+    if (compute) gpu.allIRIndirectDispatches.fetch_add(1,std::memory_order_relaxed);
+    else gpu.allIRIndirectDraws.fetch_add(count,std::memory_order_relaxed);
+}
 inline void renderPassInterrupted() {
     if (mode()==Mode::Coarse) gpu.renderPassBreaks.fetch_add(1,std::memory_order_relaxed);
 }
@@ -129,7 +148,7 @@ inline void emitFrame(const std::optional<FrameRecord>& result) {
     const auto& r=*result;const auto& v=r.values;
     // Compact, one record per fully completed present epoch, never per draw.
     // GPU intervals include waits. Overlaps within an epoch are merged.
-    fprintf(stderr,"MELONX_REPLAY_FRAME {\"v\":1,\"descriptorTimed\":%s,\"f\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu]}\n",
+    fprintf(stderr,"MELONX_REPLAY_FRAME {\"v\":2,\"descriptorTimed\":%s,\"f\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu]}\n",
         descriptorTimingEnabled()?"true":"false",
         (unsigned long long)r.id,(unsigned long long)v.sealedNs,
         (unsigned long long)r.gpuUnionNs,(unsigned long long)r.gpuSumNs,
@@ -139,7 +158,8 @@ inline void emitFrame(const std::optional<FrameRecord>& result) {
         (unsigned long long)v.passBreaks,(unsigned long long)v.irPassBreaks,
         (unsigned long long)v.indirectDraws,(unsigned long long)v.indirectDispatches,
         (unsigned long long)v.parameterBytes,(unsigned long long)v.directUploads,(unsigned long long)r.dropped,
-        (unsigned long long)v.encodeCpuNs,(unsigned long long)v.encodeCpuUnavailable);
+        (unsigned long long)v.encodeCpuNs,(unsigned long long)v.encodeCpuUnavailable,
+        (unsigned long long)v.allIndirectDraws,(unsigned long long)v.allIndirectDispatches);
 }
 inline uint64_t frameBufferCreated() {
     if (mode()!=Mode::Coarse) return 0;
@@ -154,8 +174,8 @@ inline void frameBufferCompleted(uint64_t token,double start,double end,bool suc
       result=state.frames.complete(token,valid?uint64_t(start*1e9):0,valid?uint64_t(end*1e9):0,success); }
     emitFrame(result);
 }
-inline void framePresented() {
-    if (mode()!=Mode::Coarse) return;
+inline uint64_t framePresented() {
+    if (mode()!=Mode::Coarse) return 0;
     auto load=[](const std::atomic<uint64_t>& value){return value.load(std::memory_order_relaxed);};
     bool valid;FrameValues now;
     now.sealedNs=nanoseconds(CLOCK_MONOTONIC,valid);
@@ -166,8 +186,11 @@ inline void framePresented() {
     now.passBreaks=load(gpu.renderPassBreaks);now.irPassBreaks=load(gpu.irPassBreaks);
     now.indirectDraws=load(gpu.irIndirectDraws);now.indirectDispatches=load(gpu.irIndirectDispatches);
     now.parameterBytes=load(gpu.irTemporaryBytes);now.directUploads=load(gpu.irDirectUploads);
+    now.allIndirectDraws=load(gpu.allIRIndirectDraws);now.allIndirectDispatches=load(gpu.allIRIndirectDispatches);
     auto& state=frameTrace();std::optional<FrameRecord> result;
+    uint64_t sealedId=0;
     { std::lock_guard<std::mutex> lock(state.lock);
+      sealedId=state.frames.currentId();
       FrameValues delta=now;
 #define MVK_FRAME_DELTA(field) delta.field-=state.previous.field
       MVK_FRAME_DELTA(encodeNs);MVK_FRAME_DELTA(descriptorNs);MVK_FRAME_DELTA(shadowNs);
@@ -175,9 +198,10 @@ inline void framePresented() {
       MVK_FRAME_DELTA(passBreaks);MVK_FRAME_DELTA(irPassBreaks);MVK_FRAME_DELTA(indirectDraws);
       MVK_FRAME_DELTA(indirectDispatches);MVK_FRAME_DELTA(parameterBytes);MVK_FRAME_DELTA(directUploads);
       MVK_FRAME_DELTA(encodeCpuNs);MVK_FRAME_DELTA(encodeCpuUnavailable);
+      MVK_FRAME_DELTA(allIndirectDraws);MVK_FRAME_DELTA(allIndirectDispatches);
 #undef MVK_FRAME_DELTA
       state.previous=now;result=state.frames.seal(delta); }
-    emitFrame(result);
+    emitFrame(result);return sealedId;
 }
 inline void commandBufferCompleted(double start,double end,bool success) {
     if (mode()!=Mode::Coarse) return;
@@ -202,6 +226,17 @@ inline void commandBufferCompleted(double start,double end,bool success) {
         comma=true;
     }
     snprintf(line+used,sizeof(line)-used,"],\"gpuCommandBuffers\":%llu,\"gpuCommandBufferNs\":%llu,\"gpuUnavailable\":%llu,\"gpuErrors\":%llu,\"irIndirectBatches\":%llu,\"irIndirectDraws\":%llu,\"irIndirectDispatches\":%llu,\"irPassBreaks\":%llu,\"irTemporaryBytes\":%llu,\"irDirectUploads\":%llu}",(unsigned long long)gpu.calls.load(std::memory_order_relaxed),(unsigned long long)gpu.wallNs.load(std::memory_order_relaxed),(unsigned long long)gpu.unavailable.load(std::memory_order_relaxed),(unsigned long long)gpu.errors.load(std::memory_order_relaxed),(unsigned long long)gpu.irIndirectBatches.load(std::memory_order_relaxed),(unsigned long long)gpu.irIndirectDraws.load(std::memory_order_relaxed),(unsigned long long)gpu.irIndirectDispatches.load(std::memory_order_relaxed),(unsigned long long)gpu.irPassBreaks.load(std::memory_order_relaxed),(unsigned long long)gpu.irTemporaryBytes.load(std::memory_order_relaxed),(unsigned long long)gpu.irDirectUploads.load(std::memory_order_relaxed));
+    if (descriptorSamplingEnabled()) {
+        const auto d=descriptorSamples.snapshot();
+        fprintf(stderr,"MELONX_DESCRIPTOR_TOTALS {\"v\":2,\"monotonicNs\":%llu,\"inverseProbability\":%u,\"inclusive\":true,\"batches\":%llu,\"batchSamples\":%llu,\"wallNs\":%llu,\"threadCpuNs\":%llu,\"unavailable\":%llu,\"write\":[%llu,%llu,%llu,%llu],\"shadow\":[%llu,%llu,%llu,%llu]}\n",
+            (unsigned long long)now,DescriptorSampler::inverseProbability,
+            (unsigned long long)d.batches,(unsigned long long)d.sampledBatches,(unsigned long long)d.wallNs,
+            (unsigned long long)d.cpuNs,(unsigned long long)d.unavailable,
+            (unsigned long long)d.ranges[0].calls,(unsigned long long)d.ranges[0].samples,
+            (unsigned long long)d.ranges[0].wallNs,(unsigned long long)d.ranges[0].unavailable,
+            (unsigned long long)d.ranges[1].calls,(unsigned long long)d.ranges[1].samples,
+            (unsigned long long)d.ranges[1].wallNs,(unsigned long long)d.ranges[1].unavailable);
+    }
     // Cumulative counters, one line per second; concurrent batches may overlap.
     // GPUStartTime..GPUEndTime is buffer elapsed time, including GPU waits, not
     // shader-only execution. Calling-thread CPU excludes compiler helpers.

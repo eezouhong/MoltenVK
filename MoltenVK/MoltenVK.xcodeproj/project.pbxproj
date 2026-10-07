@@ -528,9 +528,13 @@
 		04BC7CE128F24F53B79D6ECD /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 387DCD06425D4D57BD514537 /* MVKMetalIRCommandEncoding.mm */; };
 		D1D83DD15A8C459FB2AB0A73 /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 387DCD06425D4D57BD514537 /* MVKMetalIRCommandEncoding.mm */; };
 		2F3668AD2A6A4661B7092388 /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 387DCD06425D4D57BD514537 /* MVKMetalIRCommandEncoding.mm */; };
+		CECC5FD2E181444EB026C8DF /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		C8AA18D874D546B0B29456A4 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
+		EE454A1FCFB24E9596731B66 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		56086F6A405C4A2682A602A2 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
+		8FB5E30A0E164314AE2C594F /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		27A92EFBF3334E7FB7AA60C4 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
+		368C8F9D7E6940908F36FF83 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		5F68BC0116CF4366A4EE2586 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
 /* End PBXBuildFile section */
 
@@ -780,6 +784,7 @@
 		DCFD7F622A45BC6E007BBBF7 /* libMoltenVK.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libMoltenVK.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6232E2B0BAB4EC0BCB8ECDB /* MVKMetalIR.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIR.mm; sourceTree = "<group>"; };
 		387DCD06425D4D57BD514537 /* MVKMetalIRCommandEncoding.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRCommandEncoding.mm; sourceTree = "<group>"; };
+		ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKReplayGPUStages.mm; sourceTree = "<group>"; };
 		B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRDescriptors.mm; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -953,6 +958,7 @@
 				A94FB78E1C7DFB4800632CA3 /* MVKPipeline.mm */,
 				B6232E2B0BAB4EC0BCB8ECDB /* MVKMetalIR.mm */,
 				B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */,
+				ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */,
 				A9653FB724129C84005999D7 /* MVKPixelFormats.h */,
 				A9653FB924129C84005999D7 /* MVKPixelFormats.mm */,
 				A94FB78F1C7DFB4800632CA3 /* MVKQueryPool.h */,
@@ -2129,6 +2135,7 @@
 				2FEA0AA024902F9F00EEF3AD /* MVKPipeline.mm in Sources */,
 				E4D0DD4AC76042A0BF63C7EF /* MVKMetalIR.mm in Sources */,
 				C8AA18D874D546B0B29456A4 /* MVKMetalIRDescriptors.mm in Sources */,
+				CECC5FD2E181444EB026C8DF /* MVKReplayGPUStages.mm in Sources */,
 				4C3A82DC47C848089095CF6E /* MVKMetalIRCommandEncoding.mm in Sources */,
 				2FEA0AA124902F9F00EEF3AD /* MVKQueue.mm in Sources */,
 				2FEA0AA224902F9F00EEF3AD /* MTLSamplerDescriptor+MoltenVK.m in Sources */,
@@ -2194,6 +2201,7 @@
 				A94FB7FA1C7DFB4800632CA3 /* MVKPipeline.mm in Sources */,
 				BDA91E359DD948D28A5F60C3 /* MVKMetalIR.mm in Sources */,
 				56086F6A405C4A2682A602A2 /* MVKMetalIRDescriptors.mm in Sources */,
+				EE454A1FCFB24E9596731B66 /* MVKReplayGPUStages.mm in Sources */,
 				04BC7CE128F24F53B79D6ECD /* MVKMetalIRCommandEncoding.mm in Sources */,
 				A94FB8021C7DFB4800632CA3 /* MVKQueue.mm in Sources */,
 				A9E53DD72100B197002781DD /* MTLSamplerDescriptor+MoltenVK.m in Sources */,
@@ -2252,6 +2260,7 @@
 				A94FB7FB1C7DFB4800632CA3 /* MVKPipeline.mm in Sources */,
 				AAFDA9CF9C824ED3B6F79520 /* MVKMetalIR.mm in Sources */,
 				27A92EFBF3334E7FB7AA60C4 /* MVKMetalIRDescriptors.mm in Sources */,
+				8FB5E30A0E164314AE2C594F /* MVKReplayGPUStages.mm in Sources */,
 				D1D83DD15A8C459FB2AB0A73 /* MVKMetalIRCommandEncoding.mm in Sources */,
 				A94FB8031C7DFB4800632CA3 /* MVKQueue.mm in Sources */,
 				A9E53DD82100B197002781DD /* MTLSamplerDescriptor+MoltenVK.m in Sources */,
@@ -2338,6 +2347,7 @@
 				DCFD7F472A45BC6E007BBBF7 /* MVKPipeline.mm in Sources */,
 				06D97F87D44041EE9B9D7534 /* MVKMetalIR.mm in Sources */,
 				5F68BC0116CF4366A4EE2586 /* MVKMetalIRDescriptors.mm in Sources */,
+				368C8F9D7E6940908F36FF83 /* MVKReplayGPUStages.mm in Sources */,
 				2F3668AD2A6A4661B7092388 /* MVKMetalIRCommandEncoding.mm in Sources */,
 				DCFD7F482A45BC6E007BBBF7 /* MVKQueue.mm in Sources */,
 				DCFD7F492A45BC6E007BBBF7 /* MTLSamplerDescriptor+MoltenVK.m in Sources */,

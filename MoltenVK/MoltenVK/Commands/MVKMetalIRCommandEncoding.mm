@@ -54,6 +54,7 @@ MVKMetalIRCommandEncoding::RuntimeBatch MVKMetalIRCommandEncoding::prepareIndire
 	const MVKMetalIRArtifact* artifact, id<MTLBuffer> arguments, NSUInteger offset,
 	NSUInteger stride, uint32_t count, bool indexed) {
 	mvkreplay::Timer trace(mvkreplay::IndirectParameters);
+	if (artifact && count) mvkreplay::indirectInvocation(count,false);
 	if (!artifact || !(artifact->runtimeFlags & MVK_METAL_IR_RUNTIME_DATA) || !count) return {};
 	NSUInteger alignment = std::max(NSUInteger(_encoder.getMetalFeatures().mtlBufferAlignment), NSUInteger(16));
 	NSUInteger runtimeStride = (sizeof(mvkir::VertexData) + alignment - 1) / alignment * alignment;
@@ -95,6 +96,7 @@ void MVKMetalIRCommandEncoding::prepareDispatch(const MVKMetalIRArtifact* artifa
 
 void MVKMetalIRCommandEncoding::prepareIndirectDispatch(const MVKMetalIRArtifact* artifact,
 	id<MTLBuffer> arguments, NSUInteger offset) {
+	if (artifact) mvkreplay::indirectInvocation(1,true);
 	if (!artifact || !(artifact->runtimeFlags & MVK_METAL_IR_RUNTIME_DATA)) return;
 	const auto* allocation = _encoder.getTempMTLBuffer(sizeof(mvkir::ComputeData));
 	mvkreplay::indirectRuntime(0,sizeof(mvkir::ComputeData),_encoder._mtlRenderEncoder!=nil,true);

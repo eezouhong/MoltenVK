@@ -25,6 +25,8 @@
 #include "MVKSmallVector.h"
 #include <mutex>
 #include <condition_variable>
+#include <memory>
+namespace mvkreplay { class GPUStagePool; }
 
 #import <Metal/Metal.h>
 
@@ -152,6 +154,7 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+	std::shared_ptr<mvkreplay::GPUStagePool> _replayGPUStagePool;
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;

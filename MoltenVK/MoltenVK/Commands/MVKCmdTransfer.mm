@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 
+#include "MVKReplayGPUStages.h"
+#include "MVKReplayTrace.h"
 #include "MVKCmdTransfer.h"
 #include "MVKCommandBuffer.h"
 #include "MVKCommandPool.h"
@@ -649,7 +651,9 @@ void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
                     mtlDepthAttDesc.slice = mvkIBR.region.dstSubresource.baseArrayLayer + layIdx;
                     mtlStencilAttDesc.slice = mvkIBR.region.dstSubresource.baseArrayLayer + layIdx;
                 }
+                mvkreplay::attachGPUStages(cmdEncoder->_mtlCmdBuffer,mtlRPD);
                 id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPD];
+                if(mtlRendEnc)mvkreplay::encoderStarted(0);
 				cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mvkMTLRenderCommandEncoderLabel(commandUse));
 
 				cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
@@ -719,6 +723,7 @@ void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
                 cmdEncoder->setFragmentBytes(mtlRendEnc, &texSubRez, sizeof(texSubRez), 0);
 
                 NSUInteger instanceCount = isLayeredBlit ? mtlRPD.renderTargetArrayLength : 1;
+                mvkreplay::noteGPUStageDraw(cmdEncoder->_mtlCmdBuffer);
                 [mtlRendEnc drawPrimitives: MTLPrimitiveTypeTriangleStrip vertexStart: 0 vertexCount: kMVKBlitVertexCount instanceCount: instanceCount];
 
 				cmdEncoder->barrierUpdate(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
@@ -946,7 +951,9 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 				_dstImage->getLayerCount() - rslvSlice.dstSubresource.baseArrayLayer :
 				rslvSlice.dstSubresource.layerCount;
 		}
+		mvkreplay::attachGPUStages(cmdEncoder->_mtlCmdBuffer,mtlRPD);
 		id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPD];
+		if(mtlRendEnc)mvkreplay::encoderStarted(0);
 		cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mvkMTLRenderCommandEncoderLabel(kMVKCommandUseResolveImage));
 
 		[mtlRendEnc pushDebugGroup: @"vkCmdResolveImage"];
@@ -1448,6 +1455,7 @@ void MVKCmdClearAttachments<N>::encode(MVKCommandEncoder* cmdEncoder) {
 	cmdEncoder->setFragmentBytes(mtlRendEnc, clearColors, sizeof(clearColors), 0);
 	cmdEncoder->setVertexBytes(mtlRendEnc, vertices, vtxCnt * sizeof(vertices[0]),
 	                           cmdEncoder->getDevice()->getMetalBufferIndexForVertexAttributeBinding(kMVKVertexContentBufferIndex));
+    mvkreplay::noteGPUStageDraw(cmdEncoder->_mtlCmdBuffer);
     [mtlRendEnc drawPrimitives: MTLPrimitiveTypeTriangle vertexStart: 0 vertexCount: vtxCnt];
     [mtlRendEnc popDebugGroup];
 
@@ -1646,7 +1654,9 @@ void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
                                                      ? (_image->getLayerCount() - layerStart)
                                                      : layerCnt);
 
+                mvkreplay::attachGPUStages(cmdEncoder->_mtlCmdBuffer,mtlRPDesc);
                 id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
+                if(mtlRendEnc)mvkreplay::encoderStarted(0);
 				cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mtlRendEncName);
 
 				cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
@@ -1665,7 +1675,9 @@ void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
                         mtlRPSADesc.slice = layer;
                     }
 
+                    mvkreplay::attachGPUStages(cmdEncoder->_mtlCmdBuffer,mtlRPDesc);
                     id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
+                    if(mtlRendEnc)mvkreplay::encoderStarted(0);
 					cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mtlRendEncName);
 
 					cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);

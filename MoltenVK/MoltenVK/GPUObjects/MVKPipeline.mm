@@ -18,6 +18,7 @@
  */
 
 #include "MVKPipeline.h"
+#include "MVKReplayGPUStages.h"
 #include "MVKMetalIR.h"
 #include "MVKCommandBuffer.h"
 #include "MVKInlineObjectConstructor.h"
@@ -4979,6 +4980,7 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 	}
 
 	MVKMTLFunction func = getMTLFunction(pCreateInfo, pStageFB);
+	if(mvkreplay::gpuStageTracingEnabled()&&_module)_replayProgramHash=_module->getKey().codeHash;
 	_mtlThreadgroupSize = func.threadGroupSize;
 	_mtlPipelineState = nil;
 

@@ -336,6 +336,7 @@ public:
 
 	/** Called by each graphics draw command to establish any outstanding state just prior to performing the draw. */
 	void finalizeDrawState(MVKGraphicsStage stage);
+	void noteReplayDraw();
 
     /** Called by each compute dispatch command to establish any outstanding state just prior to performing the dispatch. */
     void finalizeDispatchState();
@@ -496,6 +497,7 @@ public:
 
 	/** The current Metal render encoder. */
 	id<MTLRenderCommandEncoder> _mtlRenderEncoder;
+	bool _replayRenderDrawNoted=false;
 
 	/** Tracks the state of command encoding. */
 	MVKCommandEncoderState _state;

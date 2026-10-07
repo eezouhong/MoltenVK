@@ -46,7 +46,7 @@ struct MetalIREntry {uint64_t address,texture,metadata;};
 static_assert(sizeof(MetalIREntry)==24);
 static void updateMetalIRDescriptorRange(const MVKDescriptorSetLayout* layout,const MVKDescriptorBinding* binding,
                                 const MVKDescriptorSet* set,uint32_t first,uint32_t count,uint32_t n,uint32_t dense) {
-    mvkreplay::Timer trace(mvkreplay::IRShadowUpdate);
+    mvkreplay::DescriptorRangeTimer trace(mvkreplay::IRShadowUpdate);
     if(dense==UINT32_MAX||first+count>binding->descriptorCount)return;
     auto* shadow=(MetalIREntry*)(set->gpuBuffer+layout->metalIRShadowBase());
     for(uint32_t i=first;i<first+count;++i) {

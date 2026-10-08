@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * MVKDescriptorSet.mm
  *
@@ -1425,6 +1426,7 @@ static void writeDescriptorSetBinding(
 	const void* src, MVKDescriptorUpdateSourceType type, size_t stride,
 	uint32_t start, uint32_t count)
 {
+	mvkreplay::DescriptorRangeTimer replayTrace(mvkreplay::DescriptorUpdate);
 	char* cpuBuffer = set->cpuBuffer + binding->cpuOffset;
 	auto* textureViewPool = layout->getDevice()->getMetal4TextureViewPool();
 	bool useMetal4TextureViewPool =
@@ -1796,6 +1798,7 @@ public:
 void mvkUpdateDescriptorSets(uint32_t numWrites, const VkWriteDescriptorSet* pDescriptorWrites,
                              uint32_t numCopies, const VkCopyDescriptorSet* pDescriptorCopies)
 {
+	mvkreplay::DescriptorBatchTrace replayBatch(mvkreplay::mode()==mvkreplay::Mode::Coarse && mvkreplay::descriptorSamplingEnabled());
 	DescriptorSetUpdateLockTracker locks;
 	MVKDescriptorSet* lastDstSet = nullptr;
 	MVKDescriptorSet* lastSrcSet = nullptr;
@@ -1872,6 +1875,7 @@ public:
 
 /** Updates the resource bindings in the given descriptor set from the specified template. */
 void mvkUpdateDescriptorSetWithTemplate(VkDescriptorSet set, VkDescriptorUpdateTemplate updateTemplate, const void* pData) {
+	mvkreplay::DescriptorBatchTrace replayBatch(mvkreplay::mode()==mvkreplay::Mode::Coarse && mvkreplay::descriptorSamplingEnabled());
 
 	auto* dstSet = reinterpret_cast<MVKDescriptorSet*>(set);
 	auto* pTemplate = reinterpret_cast<MVKDescriptorUpdateTemplate*>(updateTemplate);

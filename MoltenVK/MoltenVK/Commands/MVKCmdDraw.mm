@@ -1,3 +1,5 @@
+#include "MVKReplayBindingTrace.h"
+#include "MVKReplayTrace.h"
 /*
  * MVKCmdDraw.mm
  *
@@ -186,6 +188,10 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 	}
 
     cmdEncoder->_isIndexedDraw = false;
+    {
+        mvkreplay::BindingTrace preparationTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint(); preparationTrace.checkpoint();
+    }
 
 	MVKPiplineStages stages;
     pipeline->getStages(stages);
@@ -311,6 +317,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                     [cmdEncoder->_mtlRenderEncoder setTessellationFactorBuffer: tcLevelBuff->_mtlBuffer
                                                                         offset: tcLevelBuff->_offset
                                                                 instanceStride: 0];
+                    cmdEncoder->noteReplayDraw();
                     [cmdEncoder->_mtlRenderEncoder drawPatches: outControlPointCount
                                                     patchStart: 0
                                                     patchCount: tessParams.patchCount
@@ -328,18 +335,23 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
+                    mvkreplay::BindingTrace drawTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::MetalDraw);
+                    drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
+                        cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                           vertexStart: _firstVertex
                                                           vertexCount: _vertexCount
                                                         instanceCount: instanceCount
                                                          baseInstance: _firstInstance];
                     } else {
+                        cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                           vertexStart: _firstVertex
                                                           vertexCount: _vertexCount
                                                         instanceCount: instanceCount];
                     }
+                    drawTrace.checkpoint();
                 }
                 break;
         }
@@ -472,6 +484,10 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 
     size_t idxSize = mvkMTLIndexTypeSizeInBytes((MTLIndexType)ibb.mtlIndexType);
     VkDeviceSize idxBuffOffset = ibb.offset + (_firstIndex * idxSize);
+    {
+        mvkreplay::BindingTrace preparationTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint(); preparationTrace.checkpoint();
+    }
 
     const MVKMTLBufferAllocation* vtxOutBuff = nullptr;
     const MVKMTLBufferAllocation* tcOutBuff = nullptr;
@@ -599,6 +615,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 instanceStride: 0];
                     // The tessellation control shader produced output in the correct order, so there's no need to use
                     // an index buffer here.
+                    cmdEncoder->noteReplayDraw();
                     [cmdEncoder->_mtlRenderEncoder drawPatches: outControlPointCount
                                                     patchStart: 0
                                                     patchCount: tessParams.patchCount
@@ -616,7 +633,10 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
+                    mvkreplay::BindingTrace drawTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::MetalDraw);
+                    drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
+                        cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                   indexCount: _indexCount
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
@@ -626,6 +646,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                   baseVertex: _vertexOffset
                                                                 baseInstance: _firstInstance];
                     } else {
+                        cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                   indexCount: _indexCount
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
@@ -633,6 +654,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                            indexBufferOffset: idxBuffOffset
                                                                instanceCount: instanceCount];
                     }
+                    drawTrace.checkpoint();
                 }
                 break;
         }
@@ -720,6 +742,7 @@ void MVKCmdDrawIndirect::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 }
 
 void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+    mvkreplay::indirectInvocation(_drawCount,false);
 
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 
@@ -946,6 +969,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 							[cmdEncoder->_mtlRenderEncoder setTessellationFactorBuffer: tcLevelBuff->_mtlBuffer
 																				offset: tcLevelBuff->_offset
 																		instanceStride: 0];
+							cmdEncoder->noteReplayDraw();
 							[cmdEncoder->_mtlRenderEncoder drawPatches: outControlPointCount
 													  patchIndexBuffer: nil
 												patchIndexBufferOffset: 0
@@ -960,6 +984,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
                                                                     offset: tempDrawIDBuff->_offset + drawIdx * sizeof(uint32_t)
                                                                    atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                         }
+                        cmdEncoder->noteReplayDraw();
                         [cmdEncoder->_mtlRenderEncoder drawPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                        indirectBuffer: mtlIndBuff
                                                  indirectBufferOffset: mtlIndBuffOfst];
@@ -1025,6 +1050,7 @@ VkResult MVKCmdDrawIndexedIndirect::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+    mvkreplay::indirectInvocation(_drawCount,false);
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 	encode(cmdEncoder, cmdEncoder->getVkGraphics()._indexBuffer);
 }
@@ -1294,6 +1320,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
 							[cmdEncoder->_mtlRenderEncoder setTessellationFactorBuffer: tcLevelBuff->_mtlBuffer
 																				offset: tcLevelBuff->_offset
 																		instanceStride: 0];
+							cmdEncoder->noteReplayDraw();
 							[cmdEncoder->_mtlRenderEncoder drawPatches: outControlPointCount
 							                          patchIndexBuffer: nil
 							                    patchIndexBufferOffset: 0
@@ -1309,6 +1336,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
                                                                     offset: tempDrawIDBuff->_offset + drawIdx * sizeof(uint32_t)
                                                                    atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                         }
+                        cmdEncoder->noteReplayDraw();
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
                                                                  indexBuffer: ibb.mtlBuffer
@@ -1373,6 +1401,7 @@ void MVKCmdDrawMeshTasks::encode(MVKCommandEncoder* cmdEncoder) {
 
 	bindMeshDrawID(cmdEncoder, pipeline, 0);
 	if (@available(macOS 13.0, iOS 16.0, *)) {
+		cmdEncoder->noteReplayDraw();
 		[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroups: MTLSizeMake(_groupCountX, _groupCountY, _groupCountZ)
 		                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)
 		                          threadsPerMeshThreadgroup: pipeline->getMeshThreadgroupSize()];
@@ -1407,6 +1436,7 @@ void MVKCmdDrawMeshTasksIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 		VkDeviceSize mtlIndBuffOfst = _mtlIndirectBufferOffset;
 		for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
 			bindMeshDrawID(cmdEncoder, pipeline, drawIdx);
+			cmdEncoder->noteReplayDraw();
 			[cmdEncoder->_mtlRenderEncoder drawMeshThreadgroupsWithIndirectBuffer: _mtlIndirectBuffer
 			                                               indirectBufferOffset: mtlIndBuffOfst
 			                                        threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1)

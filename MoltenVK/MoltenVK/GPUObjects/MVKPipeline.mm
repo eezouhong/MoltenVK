@@ -1,3 +1,5 @@
+#include "MVKReplayTrace.h"
+#include "MVKReplayGPUStages.h"
 /*
  * MVKPipeline.mm
  *
@@ -2181,6 +2183,7 @@ id<MTLComputePipelineState> MVKMetal4CompilerService::newMTLComputePipelineState
 	MTL4FunctionDescriptor* functionDescriptor,
 	NSError** error,
 	bool* attemptedMetal4) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalComputePSO);
 	if (attemptedMetal4) { *attemptedMetal4 = false; }
 	auto impl = _impl;
 	if (!impl || !legacyDescriptor || !functionDescriptor) { return nil; }
@@ -3048,6 +3051,17 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 {
 	// Extract dynamic state first, as it can affect many configurations.
 	initDynamicState(pCreateInfo);
+#if MVK_REPLAY_TRACE
+    if(mvkreplay::gpuStageTracingEnabled()) {
+        for(uint32_t i=0;i<pCreateInfo->stageCount;++i) {
+            const auto& stage=pCreateInfo->pStages[i];
+            auto* module=(MVKShaderModule*)stage.module;
+            if(!module)continue;
+            if(stage.stage==VK_SHADER_STAGE_VERTEX_BIT)_replayVertexHash=module->getKey().codeHash;
+            if(stage.stage==VK_SHADER_STAGE_FRAGMENT_BIT)_replayFragmentHash=module->getKey().codeHash;
+        }
+    }
+#endif
 
 	_primitiveTopologyClass = MTLPrimitiveTopologyClassUnspecified;
 	if (pCreateInfo->pInputAssemblyState)
@@ -3368,6 +3382,7 @@ id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPi
 																		 id<MTLRenderPipelineState>& plState,
 																		 bool allowMetal4Flexible) {
 	if ( !plState ) {
+		mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
 		bool attemptedMetal4 = false;
@@ -4903,6 +4918,9 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 	}
 
 	MVKMTLFunction func = getMTLFunction(pCreateInfo, pStageFB);
+#if MVK_REPLAY_TRACE
+	if(mvkreplay::gpuStageTracingEnabled()&&_module)_replayProgramHash=_module->getKey().codeHash;
+#endif
 	_mtlThreadgroupSize = func.threadGroupSize;
 	_mtlPipelineState = nil;
 
@@ -5795,6 +5813,7 @@ MVKRenderPipelineCompiler::~MVKRenderPipelineCompiler() {
 #pragma mark MVKComputePipelineCompiler
 
 id<MTLComputePipelineState> MVKComputePipelineCompiler::newMTLComputePipelineState(MTLComputePipelineDescriptor* plDesc) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalComputePSO);
 	unique_lock<mutex> lock(_completionLock);
 
 	compile(lock, ^{

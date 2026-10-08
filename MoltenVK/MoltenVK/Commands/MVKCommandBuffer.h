@@ -1,3 +1,4 @@
+#include "MVKReplayConfig.h"
 /*
  * MVKCommandBuffer.h
  *
@@ -26,6 +27,7 @@
 #include "MVKCmdPipeline.h"
 #include "MVKQueryPool.h"
 #include "MVKSmallVector.h"
+#include "MVKReplayDrawWork.h"
 #include <unordered_map>
 
 class MVKCommandPool;
@@ -335,6 +337,11 @@ public:
 
 	/** Called by each graphics draw command to establish any outstanding state just prior to performing the draw. */
 	void finalizeDrawState(MVKGraphicsStage stage);
+#if MVK_REPLAY_TRACE
+	void noteReplayDraw(uint64_t elements=0,uint64_t instances=0,bool indexed=false,bool known=false);
+#else
+	void noteReplayDraw(uint64_t=0,uint64_t=0,bool=false,bool=false) {}
+#endif
 
     /** Called by each compute dispatch command to establish any outstanding state just prior to performing the dispatch. */
     void finalizeDispatchState();
@@ -492,6 +499,10 @@ public:
 
 	/** The current Metal render encoder. */
 	id<MTLRenderCommandEncoder> _mtlRenderEncoder;
+#if MVK_REPLAY_TRACE
+	bool _replayRenderWorkActive=false;
+	mvkreplay::GPUDrawWork _replayRenderWork{};
+#endif
 
 	/** Tracks the state of command encoding. */
 	MVKCommandEncoderState _state;
@@ -553,6 +564,7 @@ protected:
 	MVKCommandUse _mtlComputeEncoderUse;
 	MVKCommandUse _mtlBlitEncoderUse;
 	bool _isRenderingEntireAttachment;
+
 };
 
 

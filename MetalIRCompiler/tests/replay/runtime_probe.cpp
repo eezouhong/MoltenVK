@@ -1,4 +1,14 @@
 #include "vulkan_context.h"
+#include <dlfcn.h>
+
+// Seal the existing headless replay epoch after the fixture's only submission.
+// Disabled in the ordinary correctness suite; no swapchain/present is added.
+static void finishReplayFrame() {
+    const char* trace=getenv("MELONX_PIPELINE_REPLAY_TRACE");
+    if (!trace || strcmp(trace,"coarse")) return;
+    auto finish=reinterpret_cast<uint64_t(*)()>(dlsym(RTLD_DEFAULT,"vkFinishReplayFrameMVK"));
+    if (!finish || finish()!=1) throw std::runtime_error("missing or invalid replay frame epoch");
+}
 
 static bool graphics(const char* vertex,const char* fragment,bool fans, bool tail=false, bool fanIndirect=false) {
     Context context; context.target();
@@ -50,7 +60,7 @@ static bool graphics(const char* vertex,const char* fragment,bool fans, bool tai
         vkCmdBindIndexBuffer(context.command,indices.handle,16,VK_INDEX_TYPE_UINT32);
         prepare(160,{3,26},{5,7},{-4,6},2); vkCmdDrawIndexedIndirect(context.command,indirect.handle,indexedOffset,2,32);
     }
-    vkCmdEndRenderPass(context.command); context.finish();
+    vkCmdEndRenderPass(context.command); context.finish(); finishReplayFrame();
     return checkRows(output,expected,fans?"triangle-fan-system-values":"draw-system-values");
 }
 
@@ -84,7 +94,7 @@ static bool compute(const char* runtime,const char* unused,bool emptySets=false,
     expected[96]={11,22,33,44}; vkCmdDispatch(context.command,1,1,1);
     vkCmdBindPipeline(context.command,VK_PIPELINE_BIND_POINT_COMPUTE,active);
     prepare(100,{5,1,3}); vkCmdDispatchBase(context.command,5,1,3,2,2,2);
-    context.finish(); return checkRows(output,expected,"dispatch-system-values-and-switch");
+    context.finish(); finishReplayFrame(); return checkRows(output,expected,"dispatch-system-values-and-switch");
 }
 
 int main(int argc,char** argv) {

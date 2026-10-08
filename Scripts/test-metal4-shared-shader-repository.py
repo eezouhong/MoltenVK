@@ -316,7 +316,19 @@ def test_source_policy() -> None:
         DEVICE_MM,
     )
     assert "_shaderLibraryRepository = _metal4CompilerService" not in device_mm
-    require(device_mm, "delete _shaderLibraryRepository;\n\tdelete _metal4CompilerService;", DEVICE_MM)
+    destructor = device_mm.split("MVKDevice::~MVKDevice() {", 1)[1].split("#pragma mark", 1)[0]
+    # Queue owners and both shader stores must retire while the compiler
+    # service and command resources are still available. IR teardown may sit
+    # between the two legacy stores; adjacency is not the ownership invariant.
+    teardown = [
+        "mvkDestroyContainerContents(queues);",
+        "delete _shaderLibraryRepository;",
+        "mvkMetalIRDestroyDevice(this);",
+        "delete _metal4CompilerService;",
+        "_commandResourceFactory->destroy();",
+    ]
+    positions = [destructor.index(statement) for statement in teardown]
+    assert positions == sorted(positions), "device shader/command teardown order changed"
 
     require(pipeline_mm, "new MVKShaderLibraryCache(this, smKey)", PIPELINE_MM)
     require(shader_h, "class MVKShaderLibraryRepository", SHADER_H)

@@ -153,17 +153,23 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
 }
 
+#if MVK_REPLAY_TRACE
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayBindingStatisticsMVK(mvkreplay::BindingSample* output, uint32_t capacity) {
     return mvkreplay::bindingSnapshot(output, capacity);
 }
+#endif
 
+#if MVK_REPLAY_TRACE
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayPhaseStatisticsMVK(mvkreplay::Sample* output, uint32_t capacity, VkBool32 reset) {
     return mvkreplay::snapshot(output,capacity,reset);
 }
+#endif
 
+#if MVK_REPLAY_TRACE
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(mvkreplay::SubmissionSample* output) {
     return mvkreplay::submissionSnapshot(output);
 }
+#endif
 
 MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
     return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;
@@ -344,6 +350,8 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetWorkgroupSizeMVK(
 }
 
 // Headless diagnostic replays can close an epoch without a swapchain.
+#if MVK_REPLAY_TRACE
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkFinishReplayFrameMVK() {
     auto frame=mvkreplay::framePresented();mvkreplay::sealGPUStageEpoch(frame);return frame;
 }
+#endif

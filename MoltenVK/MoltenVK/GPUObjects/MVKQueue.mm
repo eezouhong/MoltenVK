@@ -180,6 +180,7 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 	addPerformanceInterval(getPerformanceStats().queue.retrieveMTLCommandBuffer, startTime);
 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
 	setMetalObjectLabel(mtlCmdBuff, mtlCmdBuffLabel);
+#if MVK_REPLAY_TRACE
 	uint64_t frameToken=mtlCmdBuff?mvkreplay::frameBufferCreated():0;
 	auto stageCapture=mvkreplay::beginGPUStages(_replayGPUStagePool,mtlCmdBuff,frameToken);
 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
@@ -190,6 +191,9 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 			mvkreplay::frameBufferCompleted(frameToken,mtlCB.GPUStartTime,mtlCB.GPUEndTime,mtlCB.status==MTLCommandBufferStatusCompleted);
 		}
 	}];
+#else
+	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { handleMTLCommandBufferError(mtlCB); }];
+#endif
 
 	if ( !mtlCmdBuff ) { reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "%s could not be acquired.", mtlCmdBuffLabel.UTF8String); }
 	return mtlCmdBuff;
@@ -302,7 +306,9 @@ MVKQueue::MVKQueue(MVKDevice* device, MVKQueueFamily* queueFamily, uint32_t inde
 	initName();
 	initExecQueue();
 	initMTLCommandQueue();
+#if MVK_REPLAY_TRACE
 	_replayGPUStagePool=mvkreplay::createGPUStagePool(_mtlQueue.device);
+#endif
 }
 
 void MVKQueue::initName() {

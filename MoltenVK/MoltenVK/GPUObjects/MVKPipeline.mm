@@ -1,4 +1,5 @@
 #include "MVKReplayTrace.h"
+#include "MVKReplayGPUStages.h"
 /*
  * MVKPipeline.mm
  *
@@ -18,7 +19,6 @@
  */
 
 #include "MVKPipeline.h"
-#include "MVKReplayGPUStages.h"
 #include "MVKMetalIR.h"
 #include "MVKCommandBuffer.h"
 #include "MVKInlineObjectConstructor.h"
@@ -3029,6 +3029,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 {
 	// Extract dynamic state first, as it can affect many configurations.
 	initDynamicState(pCreateInfo);
+#if MVK_REPLAY_TRACE
     if(mvkreplay::gpuStageTracingEnabled()) {
         for(uint32_t i=0;i<pCreateInfo->stageCount;++i) {
             const auto& stage=pCreateInfo->pStages[i];
@@ -3038,6 +3039,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
             if(stage.stage==VK_SHADER_STAGE_FRAGMENT_BIT)_replayFragmentHash=module->getKey().codeHash;
         }
     }
+#endif
 
 	_primitiveTopologyClass = MTLPrimitiveTopologyClassUnspecified;
 	if (pCreateInfo->pInputAssemblyState)
@@ -3367,8 +3369,8 @@ void MVKGraphicsPipeline::populateRenderingAttachmentInfo(const VkGraphicsPipeli
 id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPipelineDescriptor* plDesc,
 																		 id<MTLRenderPipelineState>& plState,
 																		 bool allowMetal4Flexible) {
-	mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 	if ( !plState ) {
+		mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 		MVKMetalIRPSOTimer irPSOTiming(getDevice());
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
@@ -4911,7 +4913,9 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 	}
 
 	MVKMTLFunction func = getMTLFunction(pCreateInfo, pStageFB);
+#if MVK_REPLAY_TRACE
 	if(mvkreplay::gpuStageTracingEnabled()&&_module)_replayProgramHash=_module->getKey().codeHash;
+#endif
 	_mtlThreadgroupSize = func.threadGroupSize;
 	_mtlPipelineState = nil;
 

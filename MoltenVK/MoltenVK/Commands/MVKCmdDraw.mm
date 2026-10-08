@@ -1,4 +1,5 @@
 #include "MVKReplayBindingTrace.h"
+#include "MVKReplayTrace.h"
 /*
  * MVKCmdDraw.mm
  *
@@ -141,14 +142,13 @@ void MVKCmdDraw::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 	pIndArg->indexCount = _vertexCount;
 	// let the indirect index point to the beginning of vertex index buffer below
 	pIndArg->indexStart = 0;
-	// Preserve Vulkan BaseVertex for the original non-indexed draw. Relative
-	// indices plus this base fetch the same vertices as absolute indices did.
+	// Relative indices preserve Vulkan firstVertex in both vertex system values.
 	pIndArg->baseVertex = static_cast<int32_t>(_firstVertex);
 	pIndArg->instanceCount = _instanceCount;
 	pIndArg->baseInstance = _firstInstance;
 
 	// Create an index buffer populated with synthetic indexes.
-	// Keep synthetic indices relative; the indirect command carries firstVertex.
+	// The indirect command carries firstVertex; indices address only this draw.
 	MTLIndexType mtlIdxType = MTLIndexTypeUInt32;
 	auto* vtxIdxBuff = cmdEncoder->getTempMTLBuffer(mvkMTLIndexTypeSizeInBytes(mtlIdxType) * _vertexCount);
 	auto* pIdxBuff = (uint32_t*)vtxIdxBuff->getContents();
@@ -684,6 +684,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
 // TODO: Consider breaking up such draws using different base instance values. But this will
 // require yet more munging of the indirect buffers...
 static const uint32_t kMVKMaxDrawIndirectVertexCount = 128 * KIBI;
+static const uint32_t kMVKMaxDrawIndirectFanIndexCount = (kMVKMaxDrawIndirectVertexCount - 2) * 3;
 
 #pragma mark -
 #pragma mark MVKCmdDrawIndirect
@@ -720,7 +721,7 @@ void MVKCmdDrawIndirect::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 
 	// Create an index buffer to be populated with synthetic indexes.
 	MTLIndexType mtlIdxType = MTLIndexTypeUInt32;
-	auto* vtxIdxBuff = cmdEncoder->getTempMTLBuffer(mvkMTLIndexTypeSizeInBytes(mtlIdxType) * kMVKMaxDrawIndirectVertexCount, true);
+	auto* vtxIdxBuff = cmdEncoder->getTempMTLBuffer(mvkMTLIndexTypeSizeInBytes(mtlIdxType) * kMVKMaxDrawIndirectFanIndexCount, true);
 	MVKIndexMTLBufferBinding ibb;
 	ibb.mtlIndexType = mtlIdxType;
 	ibb.mtlBuffer = vtxIdxBuff->_mtlBuffer;
@@ -738,6 +739,12 @@ void MVKCmdDrawIndirect::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 	state.bindStructBytes(mtlConvertEncoder, &_mtlIndirectBufferStride, 2);
 	state.bindStructBytes(mtlConvertEncoder, &_drawCount,               3);
 	state.bindBuffer(mtlConvertEncoder, ibb.mtlBuffer, ibb.offset, 4);
+	state.bindStructBytes(mtlConvertEncoder, &kMVKMaxDrawIndirectVertexCount, 5);
+	uint32_t provokingVertexLast = 0;
+#if MVK_USE_METAL_PRIVATE_API
+	provokingVertexLast = cmdEncoder->getState().vkGraphics().getProvokingVertexMode() == MTLProvokingVertexModeLast;
+#endif
+	state.bindStructBytes(mtlConvertEncoder, &provokingVertexLast, 6);
 	if (cmdEncoder->getMetalFeatures().nonUniformThreadgroups) {
 		[mtlConvertEncoder dispatchThreads: MTLSizeMake(_drawCount, 1, 1)
 					 threadsPerThreadgroup: MTLSizeMake(mtlConvertState.threadExecutionWidth, 1, 1)];
@@ -755,10 +762,13 @@ void MVKCmdDrawIndirect::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
 					  _drawCount,
 					  indirectIdxBuffStride,
 					  0);
-	diiCmd.encode(cmdEncoder, ibb);
+	// The shared generated range is already a triangle list. Re-expanding it
+	// would overflow the old fixed triangle buffer and race between draws.
+	diiCmd.encode(cmdEncoder, ibb, true);
 }
 
 void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+    mvkreplay::indirectInvocation(_drawCount,false);
 
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 
@@ -1072,11 +1082,13 @@ VkResult MVKCmdDrawIndexedIndirect::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+    mvkreplay::indirectInvocation(_drawCount,false);
 	cmdEncoder->restartMetalRenderPassIfNeeded();
 	encode(cmdEncoder, cmdEncoder->getVkGraphics()._indexBuffer);
 }
 
-void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKIndexMTLBufferBinding& ibbOrig) {
+void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKIndexMTLBufferBinding& ibbOrig,
+                                     bool triangleFanConverted) {
 
     cmdEncoder->_isIndexedDraw = true;
 
@@ -1096,7 +1108,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
 	vtxAdjmts.mtlIndexType = ibb.mtlIndexType;
 	vtxAdjmts.isMultiView = (cmdEncoder->getSubpass()->isMultiview() &&
 							 cmdEncoder->getPhysicalDevice()->canUseInstancingForMultiview());
-	vtxAdjmts.isTriangleFan = pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+	vtxAdjmts.isTriangleFan = !triangleFanConverted && pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
 #if MVK_USE_METAL_PRIVATE_API
 	// With private APIs for primitive restart, we need to handle disabled restart and raw Uint8 indices.
 	vtxAdjmts.isPrimRestart = cmdEncoder->getState().vkGraphics().isPrimitiveRestartEnabled();

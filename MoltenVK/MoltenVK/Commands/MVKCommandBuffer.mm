@@ -846,8 +846,10 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 		[mtlRPDesc setSamplePositions: sampPosns.data() count: sampPosns.size()];
 	}
 
+#if MVK_REPLAY_TRACE
     _replayRenderWork={};
     _replayRenderWorkActive=mvkreplay::attachGPUStages(_mtlCmdBuffer,mtlRPDesc);
+#endif
     _mtlRenderEncoder = [_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
     if (_mtlRenderEncoder) mvkreplay::encoderStarted(0);
 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
@@ -987,11 +989,13 @@ void MVKCommandEncoder::updateAttachmentInputIndices(const MVKArrayRef<uint32_t>
 	}
 }
 
+#if MVK_REPLAY_TRACE
 void MVKCommandEncoder::noteReplayDraw(uint64_t elements,uint64_t instances,bool indexed,bool known) {
     if(!_replayRenderWorkActive)return;
     auto* pipeline=getGraphicsPipeline();
     _replayRenderWork.add(pipeline?pipeline->getReplayVertexHash():0,pipeline?pipeline->getReplayFragmentHash():0,elements,instances,indexed,known);
 }
+#endif
 
 void MVKCommandEncoder::finalizeDrawState(MVKGraphicsStage stage) {
     if (stage == kMVKGraphicsStageVertex) {
@@ -1081,10 +1085,12 @@ void MVKCommandEncoder::endRenderpass() {
 
 void MVKCommandEncoder::endMetalRenderEncoding() {
     if (_mtlRenderEncoder == nil) { return; }
+#if MVK_REPLAY_TRACE
     if(_replayRenderWorkActive) {
         mvkreplay::noteGPUStageRenderWork(_mtlCmdBuffer,_replayRenderWork);
         _replayRenderWorkActive=false;
     }
+#endif
 
 	if (_cmdBuffer->_hasStageCounterTimestampCommand) { [_mtlRenderEncoder updateFence: getStageCountersMTLFence() afterStages: MTLRenderStageFragment]; }
 	encodeBarrierUpdates();
@@ -1142,9 +1148,13 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
 	if (!_mtlComputeEncoder || shouldStartNewEncoder(_mtlComputeEncoderUse, cmdUse)) {
 		needWaits = true;
 		endCurrentMetalEncoding();
+#if MVK_REPLAY_TRACE
 		auto* stagePass=mvkreplay::computeGPUStagePass(_mtlCmdBuffer,getDispatchType(cmdUse));
 		_mtlComputeEncoder = stagePass?[_mtlCmdBuffer computeCommandEncoderWithDescriptor:stagePass]
 			:[_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+#else
+		_mtlComputeEncoder = [_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+#endif
 		if (_mtlComputeEncoder) mvkreplay::encoderStarted(1);
 		retainIfImmediatelyEncoding(_mtlComputeEncoder);
 		beginMetalComputeEncoding(cmdUse);

@@ -1,3 +1,5 @@
+#include "MVKReplayConfig.h"
+#if MVK_REPLAY_TRACE
 #include "MVKReplayGPUStages.h"
 #include "MVKReplayGPUStageData.h"
 #include "MVKReplayTrace.h"
@@ -301,3 +303,5 @@ void finishGPUStages(const std::shared_ptr<GPUStageCapture>& capture,id<MTLComma
     }
 }
 }
+
+#endif

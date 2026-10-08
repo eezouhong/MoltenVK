@@ -544,6 +544,8 @@
 		27A92EFBF3334E7FB7AA60C4 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
 		368C8F9D7E6940908F36FF83 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		5F68BC0116CF4366A4EE2586 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */; };
+		308076FA4FE5DED27602EEBE /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		D1AB8C654D41363C03F26A98 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; settings = {ATTRIBUTES = (Private, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -796,6 +798,8 @@
 		387DCD06425D4D57BD514537 /* MVKMetalIRCommandEncoding.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRCommandEncoding.mm; sourceTree = "<group>"; };
 		ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKReplayGPUStages.mm; sourceTree = "<group>"; };
 		B07DE6C4AD014FDEB2C25BBB /* MVKMetalIRDescriptors.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRDescriptors.mm; sourceTree = "<group>"; };
+		82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayConfig.h; sourceTree = "<group>"; };
+		93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayStubs.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -950,6 +954,8 @@
 		A94FB77E1C7DFB4800632CA3 /* GPUObjects */ = {
 			isa = PBXGroup;
 			children = (
+				93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */,
+				82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */,
 				A94FB77F1C7DFB4800632CA3 /* MVKBuffer.h */,
 				A94FB7801C7DFB4800632CA3 /* MVKBuffer.mm */,
 				A94FB7811C7DFB4800632CA3 /* MVKDescriptorSet.h */,
@@ -1151,6 +1157,8 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1AB8C654D41363C03F26A98 /* MVKReplayStubs.h in Headers */,
+				308076FA4FE5DED27602EEBE /* MVKReplayConfig.h in Headers */,
 				2FEA0A4124902F9F00EEF3AD /* MVKExtensions.h in Headers */,
 				2FEA0A4224902F9F00EEF3AD /* vk_mvk_moltenvk.h in Headers */,
 				2FEA0A4324902F9F00EEF3AD /* mvk_datatypes.h in Headers */,

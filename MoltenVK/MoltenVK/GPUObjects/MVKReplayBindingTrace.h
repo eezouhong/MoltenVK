@@ -1,5 +1,7 @@
 // Opt-in binding attribution. Raw samples, not scaled estimates. No per-draw logs.
 #pragma once
+#include "MVKReplayConfig.h"
+#if MVK_REPLAY_TRACE
 #include "MVKReplayDescriptorTrace.h"
 #include <cstdlib>
 #include <cstring>
@@ -144,3 +146,7 @@ inline std::string bindingSamplesJSON(uint64_t now, const BindingSample (&sample
     return line.str();
 }
 }
+
+#else
+#include "MVKReplayStubs.h"
+#endif

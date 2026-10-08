@@ -1,3 +1,4 @@
+#include "MVKReplayConfig.h"
 /*
  * MVKQueue.h
  *
@@ -154,7 +155,9 @@ protected:
 	std::condition_variable _execQueueConditionVariable;
 	uint32_t _execQueueJobCount = 0;
 	id<MTLCommandQueue> _mtlQueue = nil;
+#if MVK_REPLAY_TRACE
 	std::shared_ptr<mvkreplay::GPUStagePool> _replayGPUStagePool;
+#endif
 	NSString* _mtlCmdBuffLabelBeginCommandBuffer = nil;
 	NSString* _mtlCmdBuffLabelQueueSubmit = nil;
 	NSString* _mtlCmdBuffLabelQueuePresent = nil;

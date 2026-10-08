@@ -1,5 +1,7 @@
 // Opt-in descriptor attribution. Keep hot-path writes unchanged.
 #pragma once
+#include "MVKReplayConfig.h"
+#if MVK_REPLAY_TRACE
 #include <atomic>
 #include <cstdint>
 #include <time.h>
@@ -138,3 +140,7 @@ public:
     DescriptorSampleScope& operator=(const DescriptorSampleScope&) = delete;
 };
 }
+
+#else
+#include "MVKReplayStubs.h"
+#endif

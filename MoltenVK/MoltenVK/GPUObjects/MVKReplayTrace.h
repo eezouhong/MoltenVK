@@ -1,5 +1,7 @@
 // Optional local replay diagnostics. Never emits per-draw log lines.
 #pragma once
+#include "MVKReplayConfig.h"
+#if MVK_REPLAY_TRACE
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -252,3 +254,7 @@ inline void commandBufferCompleted(double start,double end,bool success) {
     fprintf(stderr,"%s\n",line);
 }
 }
+
+#else
+#include "MVKReplayStubs.h"
+#endif

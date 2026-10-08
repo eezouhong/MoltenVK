@@ -6,7 +6,9 @@
 # easier to maintain in conjunction with the Xcode project file.
 file(GLOB_RECURSE SOURCES "MoltenVK/*.c" "MoltenVK/*.cpp" "MoltenVK/*.m" "MoltenVK/*.mm")
 
+option(MVK_REPLAY_TRACE "Compile host replay diagnostics (not for product builds)" OFF)
 add_library(MoltenVK SHARED ${SOURCES})
+target_compile_definitions(MoltenVK PRIVATE MVK_REPLAY_TRACE=$<BOOL:${MVK_REPLAY_TRACE}>)
 add_library(MoltenVK::MoltenVK ALIAS MoltenVK)
 
 target_include_directories(MoltenVK

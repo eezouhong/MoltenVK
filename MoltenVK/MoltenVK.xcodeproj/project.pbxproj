@@ -520,6 +520,12 @@
 		DCFD7F5A2A45BC6E007BBBF7 /* CAMetalLayer+MoltenVK.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9E53DD62100B197002781DD /* CAMetalLayer+MoltenVK.mm */; };
 		DCFD7F5B2A45BC6E007BBBF7 /* MVKCmdDispatch.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9096E5D1F81E16300DFBEA6 /* MVKCmdDispatch.mm */; };
 		DCFD7F5C2A45BC6E007BBBF7 /* MVKCmdDebug.mm in Sources */ = {isa = PBXBuildFile; fileRef = A99C90ED229455B300A061DA /* MVKCmdDebug.mm */; };
+		CECC5FD2E181444EB026C8DF /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
+		EE454A1FCFB24E9596731B66 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
+		8FB5E30A0E164314AE2C594F /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
+		368C8F9D7E6940908F36FF83 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
+		308076FA4FE5DED27602EEBE /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		D1AB8C654D41363C03F26A98 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; settings = {ATTRIBUTES = (Private, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -766,6 +772,9 @@
 		A9F4D9ED2B8EC112004AD576 /* MoltenVK.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MoltenVK.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		A9F4D9FB2B8ECACF004AD576 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		DCFD7F622A45BC6E007BBBF7 /* libMoltenVK.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libMoltenVK.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKReplayGPUStages.mm; sourceTree = "<group>"; };
+		82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayConfig.h; sourceTree = "<group>"; };
+		93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayStubs.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -918,6 +927,10 @@
 		A94FB77E1C7DFB4800632CA3 /* GPUObjects */ = {
 			isa = PBXGroup;
 			children = (
+				93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */,
+				82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */,
+				ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */,
+
 				A94FB77F1C7DFB4800632CA3 /* MVKBuffer.h */,
 				A94FB7801C7DFB4800632CA3 /* MVKBuffer.mm */,
 				A94FB7811C7DFB4800632CA3 /* MVKDescriptorSet.h */,
@@ -1115,6 +1128,9 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1AB8C654D41363C03F26A98 /* MVKReplayStubs.h in Headers */,
+				308076FA4FE5DED27602EEBE /* MVKReplayConfig.h in Headers */,
+
 				2FEA0A4124902F9F00EEF3AD /* MVKExtensions.h in Headers */,
 				2FEA0A4224902F9F00EEF3AD /* vk_mvk_moltenvk.h in Headers */,
 				2FEA0A4324902F9F00EEF3AD /* mvk_datatypes.h in Headers */,
@@ -2081,6 +2097,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CECC5FD2E181444EB026C8DF /* MVKReplayGPUStages.mm in Sources */,
+				EE454A1FCFB24E9596731B66 /* MVKReplayGPUStages.mm in Sources */,
+				8FB5E30A0E164314AE2C594F /* MVKReplayGPUStages.mm in Sources */,
+				368C8F9D7E6940908F36FF83 /* MVKReplayGPUStages.mm in Sources */,
+
 				2FEA0A8324902F9F00EEF3AD /* MVKBlockObserver.m in Sources */,
 				2FEA0A8424902F9F00EEF3AD /* MTLRenderPipelineDescriptor+MoltenVK.m in Sources */,
 				2FEA0A8524902F9F00EEF3AD /* MVKResource.mm in Sources */,

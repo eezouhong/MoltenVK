@@ -2677,6 +2677,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_MASTER_OBJECT_FILE = YES;
 				HEADER_SEARCH_PATHS = (
+				"$(SRCROOT)/MoltenVK/GPUObjects",
+				"$(SRCROOT)/MoltenVK/Commands",
 					"\"$(SRCROOT)/include\"",
 					"\"$(SRCROOT)/../MoltenVKShaderConverter\"",
 					"\"$(SRCROOT)/../MoltenVKShaderConverter/SPIRV-Cross\"",
@@ -2755,6 +2757,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_MASTER_OBJECT_FILE = YES;
 				HEADER_SEARCH_PATHS = (
+				"$(SRCROOT)/MoltenVK/GPUObjects",
+				"$(SRCROOT)/MoltenVK/Commands",
 					"\"$(SRCROOT)/include\"",
 					"\"$(SRCROOT)/../MoltenVKShaderConverter\"",
 					"\"$(SRCROOT)/../MoltenVKShaderConverter/SPIRV-Cross\"",

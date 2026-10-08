@@ -11,10 +11,14 @@ static void configureCache(Context& context) {
 static void printCacheStatistics(Context& context) {
     if(!cacheDirectory)return;
     auto statistics=reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCompilerStatisticsMVK"));
-    uint64_t values[7]{};
-    if(!statistics||statistics(context.device,values,7)!=7)throw std::runtime_error("missing IR cache statistics");
-    fprintf(stderr,"MELONX_REPLAY_CACHE {\"compiled\":%llu,\"restored\":%llu,\"mesaNs\":%llu,\"mscNs\":%llu}\n",
-        (unsigned long long)values[0],(unsigned long long)values[1],(unsigned long long)values[2],(unsigned long long)values[3]);
+    uint64_t values[9]{},legacy[7]{};
+    if(!statistics||statistics(context.device,values,9)!=9||statistics(context.device,legacy,7)!=7)
+        throw std::runtime_error("missing or incompatible IR cache statistics");
+    if(!values[8]||values[7])throw std::runtime_error("missing PSO timing or unexpected shader rejection");
+    for(unsigned i=0;i<7;++i)if(values[i]!=legacy[i])throw std::runtime_error("legacy statistics changed");
+    fprintf(stderr,"MELONX_REPLAY_CACHE {\"compiled\":%llu,\"restored\":%llu,\"mesaNs\":%llu,\"mscNs\":%llu,\"rejected\":%llu,\"psoNs\":%llu}\n",
+        (unsigned long long)values[0],(unsigned long long)values[1],(unsigned long long)values[2],(unsigned long long)values[3],
+        (unsigned long long)values[7],(unsigned long long)values[8]);
 }
 
 // Seal the existing headless replay epoch after the fixture's only submission.

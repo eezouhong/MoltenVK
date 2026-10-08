@@ -3369,6 +3369,7 @@ id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPi
 																		 bool allowMetal4Flexible) {
 	mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 	if ( !plState ) {
+		MVKMetalIRPSOTimer irPSOTiming(getDevice());
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
 		bool attemptedMetal4 = false;
@@ -4916,6 +4917,7 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 
 	id<MTLFunction> mtlFunc = func.getMTLFunction();
 	if (mtlFunc) {
+		MVKMetalIRPSOTimer irPSOTiming(getDevice());
 		MTLComputePipelineDescriptor* plDesc = [MTLComputePipelineDescriptor new];	// temp retain
 		plDesc.computeFunction = mtlFunc;
 		plDesc.maxTotalThreadsPerThreadgroup = _mtlThreadgroupSize.width * _mtlThreadgroupSize.height * _mtlThreadgroupSize.depth;

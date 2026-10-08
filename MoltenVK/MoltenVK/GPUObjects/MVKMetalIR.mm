@@ -67,7 +67,7 @@ struct DeviceArtifacts {
     std::shared_ptr<mvkir::DiskCache> disk;
     std::string diskDirectory;
     std::mutex diskConfigurationLock;
-    std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0};
+    std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0},rejected{0},psoNs{0};
     DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
         const char* directory=getenv("MELONX_METAL_IR_CACHE");
         if(directory&&*directory) {
@@ -151,12 +151,13 @@ uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
 
 uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
     if (!device || !output || capacity < 7 || !telemetryEnabled()) return 0;
-    std::fill(output, output + 7, 0);
+    const uint32_t written=capacity>=9?9:capacity>=8?8:7;
+    std::fill(output, output + written, 0);
     std::shared_ptr<DeviceArtifacts> state;
     {
         std::lock_guard<std::mutex> lock(devicesLock);
         auto found = devices.find(device);
-        if (found == devices.end()) return 7;
+        if (found == devices.end()) return written;
         state = found->second;
     }
     output[0] = state->compilerCalls.load(std::memory_order_relaxed);
@@ -166,7 +167,23 @@ uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint3
     output[4] = state->rasterAdapterNs.load(std::memory_order_relaxed);
     output[5] = state->libraryNs.load(std::memory_order_relaxed);
     output[6] = state->reflectionNs.load(std::memory_order_relaxed);
-    return 7;
+    if(written>=8)output[7]=state->rejected.load(std::memory_order_relaxed);
+    if(written>=9)output[8]=state->psoNs.load(std::memory_order_relaxed);
+    return written;
+}
+
+MVKMetalIRPSOTimer::MVKMetalIRPSOTimer(MVKDevice* device) {
+    if(device&&device->isMetalIRShaderCompilerEnabled()&&telemetryEnabled()) {
+        _device=device;
+        _start=std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now().time_since_epoch()).count();
+    }
+}
+MVKMetalIRPSOTimer::~MVKMetalIRPSOTimer() {
+    if(!_device)return;
+    const uint64_t now=std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now().time_since_epoch()).count();
+    // The pipeline owns its device until construction/compilation completes.
+    try {deviceArtifacts(_device)->psoNs.fetch_add(now-_start,std::memory_order_relaxed);}
+    catch(...) {} // Diagnostics must not turn a successful compile into failure.
 }
 
 void mvkMetalIRDestroyDevice(MVKDevice* device) {
@@ -191,6 +208,9 @@ void mvkMetalIRDestroyDevice(MVKDevice* device) {
 static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVKPipelineLayout* layout,
                                                     MVKShaderModule* module,const VkPipelineShaderStageCreateInfo* stage,uint32_t vertexTransformFlags,uint32_t runtimeOptions) {
     auto reject = [&](const char* reason, VkResult result = VK_ERROR_FEATURE_NOT_PRESENT) -> std::shared_ptr<MVKMetalIRArtifact> {
+        if(telemetryEnabled()&&result!=VK_PIPELINE_COMPILE_REQUIRED) {
+            try {++deviceArtifacts(owner->getDevice())->rejected;} catch(...) {}
+        }
         owner->setConfigurationResult(owner->reportError(result, "MetalIR shader rejected: %s; MSL fallback disabled.", reason));
         return {};
     };

@@ -182,7 +182,8 @@ public:
 						uint32_t directCmdFirstInstance);
 
 	void encode(MVKCommandEncoder* cmdEncoder) override;
-	void encode(MVKCommandEncoder* cmdEncoder, const MVKIndexMTLBufferBinding& ibbOrig);
+	void encode(MVKCommandEncoder* cmdEncoder, const MVKIndexMTLBufferBinding& ibbOrig,
+	            bool triangleFanConverted = false);
 
 protected:
 	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;

@@ -3608,89 +3608,10 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	}
 
 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
-	bool irSelected = getDevice()->isMetalIRShaderCompilerEnabled();
-	uint32_t conflictingVertexBinding = UINT32_MAX;
-	bool tryMetalIR = irSelected && !isTessellationPipeline() && !isMeshPipeline() &&
-		!pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
-		!mvkIsMultiview(getRenderingCreateInfo(pCreateInfo)->viewMask);
-	if (tryMetalIR && pCreateInfo->pVertexInputState) {
-		for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
-		                                     pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
-			if (getMetalBufferIndexForVertexAttributeBinding(binding.binding) <= 2) {
-				tryMetalIR = false;
-				conflictingVertexBinding = binding.binding;
-			}
-		}
-	}
-	if (tryMetalIR && pCreateInfo->pMultisampleState && pCreateInfo->pMultisampleState->sampleShadingEnable &&
-		pCreateInfo->pMultisampleState->minSampleShading != 0.0f) tryMetalIR = false;
-	if (irSelected && !tryMetalIR) {
-        setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
-            "MetalIR graphics pipeline rejected: topology=%u, polygon=%u, discard=%u, view_mask=0x%x, sample_shading=%u, min_sample_shading=%.3f, vertex_binding=%u, vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
-            pCreateInfo->pInputAssemblyState ? pCreateInfo->pInputAssemblyState->topology : UINT32_MAX,
-            pCreateInfo->pRasterizationState->polygonMode,
-            pCreateInfo->pRasterizationState->rasterizerDiscardEnable,
-            getRenderingCreateInfo(pCreateInfo)->viewMask,
-            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->sampleShadingEnable : 0,
-            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->minSampleShading : 0.0f,
-            conflictingVertexBinding, _vertexModule->getKey().codeHash,
-            _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
-        [plDesc release]; return nil;
-    }
-	if (tryMetalIR) {
-		uint32_t transforms = (shaderConfig.options.shouldFlipVertexY ? MVK_METAL_IR_FLIP_Y : 0) |
-			(shaderConfig.options.shouldFixupClipSpace ? MVK_METAL_IR_CLIP_HALF_Z : 0);
-        uint32_t rasterOptions = getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint
-            ? MVK_METAL_IR_RENDERING_POINTS : 0;
-        auto vertexIR = mvkCompileMetalIR(this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions);
-		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
-            !(vertexIR->runtimeFlags & (MVK_METAL_IR_UNIT_POINT_SIZE | MVK_METAL_IR_NATIVE_POINT_SIZE))) {
-			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
-                "MetalIR point pipeline has no native point size or proven one-pixel default: vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
-				_vertexModule->getKey().codeHash, _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
-			[plDesc release]; return nil;
-		}
-		if (vertexIR && (vertexIR->runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS) && pCreateInfo->pVertexInputState) {
-			for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
-				pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
-				uint32_t index = getMetalBufferIndexForVertexAttributeBinding(binding.binding);
-				if (index == 4 || index == 5) {
-					setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "MetalIR runtime draw buffer conflicts with vertex binding; MSL fallback disabled."));
-					vertexIR.reset(); break;
-				}
-			}
-		}
-        auto fragmentIR = vertexIR && pFragmentSS ? mvkCompileMetalIR(this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions) : nullptr;
-        if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
-            !(fragmentIR->runtimeFlags & MVK_METAL_IR_NATIVE_POINT_COORDINATES)) {
-			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
-                "MetalIR point coordinates have no native rasterizer input; MSL fallback disabled."));
-			[plDesc release]; return nil;
-		}
-		if (vertexIR && (!pFragmentSS || fragmentIR)) {
-			_stageResources[kMVKShaderStageVertex].metalIR = vertexIR;
-			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR;
-			plDesc.vertexFunction = vertexIR->function;
-			plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
-			_isRasterizing = true;
-			addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
-			shaderConfig.markAllInterfaceVarsAndResourcesUsed();
-			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources[kMVKShaderStageVertex]);
-			if(fragmentIR)mvkPopulateMetalIRResidencyOperations(_layout,_stageResources[kMVKShaderStageFragment]);
-			for (auto& input : shaderConfig.shaderInputs)
-				input.outIsUsedByShader = input.shaderVar.location < 32 && (vertexIR->vertexLocations & (1ull << input.shaderVar.location));
-			if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) {
-				_stageResources[kMVKShaderStageVertex].metalIR.reset();
-				_stageResources[kMVKShaderStageFragment].metalIR.reset();
-				[plDesc release];return nil;
-			}
-			addFragmentOutputToPipeline(plDesc, pCreateInfo);
-			setMetalObjectLabel(plDesc, _layout->getDebugName());
-			return plDesc;
-		}
-		_stageResources[kMVKShaderStageVertex].metalIR.reset();
-		_stageResources[kMVKShaderStageFragment].metalIR.reset();
-        [plDesc release]; return nil;
+	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
+		if (addMetalIRShadersToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pFragmentSS,
+		                               getRenderingCreateInfo(pCreateInfo)->viewMask)) return plDesc;
+		[plDesc release]; return nil;
 	}
 	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
 

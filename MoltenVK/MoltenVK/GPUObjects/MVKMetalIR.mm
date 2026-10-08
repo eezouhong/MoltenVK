@@ -64,8 +64,17 @@ static uint64_t elapsedNs(IRClock::time_point start) {
 struct DeviceArtifacts {
     using Cache=mvkir::ResidentCache<MVKMetalIRArtifact>;
     Cache cache;
+    std::shared_ptr<mvkir::DiskCache> disk;
+    std::string diskDirectory;
+    std::mutex diskConfigurationLock;
     std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0};
-    DeviceArtifacts():cache(retainedCount(),8*1024*1024) {}
+    DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
+        const char* directory=getenv("MELONX_METAL_IR_CACHE");
+        if(directory&&*directory) {
+            diskDirectory=directory;
+            disk=std::make_shared<mvkir::DiskCache>(diskDirectory);
+        }
+    }
     static size_t retainedCount() {
         const char* v=getenv("MELONX_METAL_IR_MEMORY_CACHE");
         return v&&strcmp(v,"0")==0?0:64;
@@ -94,9 +103,11 @@ uint32_t shaderMathMode(const std::vector<uint32_t>& code, const char* entry,
 std::string keyFor(const MVKMetalIRCompileRequest& request) {
     CC_SHA256_CTX hash;CC_SHA256_Init(&hash);
     auto add=[&](const void* data,size_t size){CC_SHA256_Update(&hash,data,(CC_LONG)size);};
-    add(plugin().identity.data(),plugin().identity.size());add(&request.abiVersion,4);add(&request.executionModel,4);
-    add(request.words,request.wordCount*4);add(request.entry,strlen(request.entry));
-    add(request.bindings,request.bindingCount*sizeof(MVKMetalIRBinding));add(request.setSizes,request.setCount*4);
+    const uint32_t cacheVersion=4;add(&cacheVersion,4);
+    auto sized=[&](const void* data,size_t bytes){uint64_t length=bytes;add(&length,sizeof(length));if(bytes)add(data,bytes);};
+    sized(plugin().identity.data(),plugin().identity.size());add(&request.abiVersion,4);add(&request.executionModel,4);
+    sized(request.words,request.wordCount*4);sized(request.entry,strlen(request.entry));
+    sized(request.bindings,request.bindingCount*sizeof(MVKMetalIRBinding));sized(request.setSizes,request.setCount*4);
     add(&request.pushConstantSize,4);add(&request.preserveInvariance,4);add(&request.mathMode,4);
     add(&request.vertexTransformFlags,4);
     add(&request.runtimeOptions,4);
@@ -106,6 +117,24 @@ std::string keyFor(const MVKMetalIRCompileRequest& request) {
 
 bool mvkMetalIRCompilerAvailable() {
     return plugin().compile && plugin().release;
+}
+
+VkResult mvkMetalIRConfigureCache(MVKDevice* device,const char* directory,uint64_t maxBytes) {
+    if(!device||!device->isMetalIRShaderCompilerEnabled()||!directory||!*directory)return VK_ERROR_INITIALIZATION_FAILED;
+    try {
+        auto state=deviceArtifacts(device);
+        std::lock_guard<std::mutex> lock(state->diskConfigurationLock);
+        if(state->diskDirectory==directory&&state->disk&&state->disk->enabled())return VK_SUCCESS;
+        // Internal helpers can compile before the first title program supplies
+        // its cache path. Allow that initial configuration, but never redirect
+        // an already configured device to another title's directory.
+        if(!state->diskDirectory.empty())return VK_ERROR_INITIALIZATION_FAILED;
+        auto disk=std::make_shared<mvkir::DiskCache>(directory,maxBytes);
+        if(!disk->enabled())return VK_ERROR_INITIALIZATION_FAILED;
+        state->diskDirectory=directory;
+        std::atomic_store(&state->disk,std::move(disk));
+        return VK_SUCCESS;
+    } catch(...) {return VK_ERROR_OUT_OF_HOST_MEMORY;}
 }
 
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
@@ -215,7 +244,9 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     auto compiled = state->cache.get(key,[&]() -> DeviceArtifacts::Cache::Result {
     std::shared_ptr<MVKMetalIRArtifact> artifact;
     MVKMetalIRCompileResult result={};
-    bool fromDisk=mvkir::DiskCache::get().load(key,execution,result);
+    auto disk=std::atomic_load(&state->disk);
+    mvkir::DiskCache::Reflection cachedReflection;
+    bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
     bool telemetry=telemetryEnabled();
     if(telemetry&&fromDisk)++state->diskHits;
     try {
@@ -260,6 +291,13 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
                 // invalidated. Only touch sets statically used by this entry.
                 auto reflectionStart=telemetry?IRClock::now():IRClock::time_point{};
                 mvkreplay::Timer reflectionTrace(mvkreplay::IRReflection);
+                if(fromDisk) {
+                    artifact->usedSets=cachedReflection.usedSets;
+                    artifact->usedBindings=cachedReflection.usedBindings;
+                    artifact->vertexLocations=cachedReflection.vertexLocations;
+                    artifact->usesPushConstants=cachedReflection.usesPushConstants;
+                    artifact->usesPointCoordinates=cachedReflection.usesPointCoordinates;
+                } else {
                 SPIRV_CROSS_NAMESPACE::Compiler reflect(code);
                 reflect.set_entry_point(stage->pName,(spv::ExecutionModel)execution);
                 auto active=reflect.get_shader_resources(reflect.get_active_interface_variables());
@@ -283,14 +321,21 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
                         artifact->vertexLocations|=1ull<<input.location;
                     }
                 }
+                }
                 if(telemetry)state->reflectionNs+=elapsedNs(reflectionStart);
                 if(artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR %s stage %u: Mesa %.3f ms, converter %.3f ms, raster adapter %.3f ms, active sets 0x%llx, math mode %u, push bytes %u/%u, runtime flags 0x%x",fromDisk?"restored":"compiled",execution,result.mesaMs,result.converterMs,result.rasterAdapterMs,(unsigned long long)artifact->usedSets,request.mathMode,artifact->usesPushConstants?artifact->pushConstantSize:0u,artifact->pushConstantSize,artifact->runtimeFlags);
             }
         }
         if(!artifact&&fromDisk){
-            mvkir::DiskCache::get().invalidate(key);free(result.metallib);result={};fromDisk=false;continue;
+            disk->invalidate(key);free(result.metallib);result={};fromDisk=false;continue;
         }
-        if(artifact&&!fromDisk)mvkir::DiskCache::get().store(key,execution,result);
+        if(artifact&&!fromDisk&&disk) {
+            mvkir::DiskCache::Reflection reflection;
+            reflection.usedSets=artifact->usedSets;reflection.usedBindings=artifact->usedBindings;
+            reflection.vertexLocations=artifact->vertexLocations;reflection.usesPushConstants=artifact->usesPushConstants;
+            reflection.usesPointCoordinates=artifact->usesPointCoordinates;
+            disk->store(key,execution,result,reflection);
+        }
         break;
       }
         if(!artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR stage %u rejected: %s",execution,result.error[0]?result.error:"unsupported interface or library");

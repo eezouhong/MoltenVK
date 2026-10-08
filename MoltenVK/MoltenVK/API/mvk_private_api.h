@@ -565,6 +565,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
 /** Nonzero compiler ABI only when the explicit IR compiler plugin is available. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
 
+/** Configures per-device metallib/reflection persistence before the first IR
+ * compilation. maxBytes == 0 is unlimited. Errors leave IR compilation usable. */
+VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMetalIRCacheMVK(
+    VkDevice device, const char* directory, uint64_t maxBytes);
+
 /** Opt-in, read-only compiler counters; see MVKMetalIR.h for the seven fields. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerStatisticsMVK(
     VkDevice device, uint64_t* output, uint32_t capacity);

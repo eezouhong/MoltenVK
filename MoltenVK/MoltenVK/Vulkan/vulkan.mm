@@ -323,6 +323,8 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vkGetInstanceProcAddr(
 		func = (PFN_vkVoidFunction)vkEnumerateInstanceVersion;
 	} else if (mvkStringsAreEqual(pName, "vkGetMetalIRCompilerABIMVK")) {
 		func = (PFN_vkVoidFunction)vkGetMetalIRCompilerABIMVK;
+	} else if (mvkStringsAreEqual(pName, "vkConfigureMetalIRCacheMVK")) {
+		func = (PFN_vkVoidFunction)vkConfigureMetalIRCacheMVK;
 	} else if (mvkStringsAreEqual(pName, "vkGetMoltenVKConfigurationMVK")) {
 		func = (PFN_vkVoidFunction)vkGetMoltenVKConfigurationMVK;
 	} else if (instance) {
@@ -4525,4 +4527,3 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vk_icdGetPhysicalDeviceProcAddr(
 	MVKTraceVulkanCallEnd();
 	return func;
 }
-

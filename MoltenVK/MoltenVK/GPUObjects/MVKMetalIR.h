@@ -19,6 +19,7 @@ bool mvkMetalIRCompilerAvailable();
 // library/function load, reflection. Durations are nanoseconds; opt-in only.
 uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity);
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags);
+VkResult mvkMetalIRConfigureCache(MVKDevice* device, const char* directory, uint64_t maxBytes);
 void mvkMetalIRDestroyDevice(MVKDevice* device);
 uint32_t mvkMetalIRDescriptorCount(const MVKDescriptorSetLayout* layout);
 uint32_t mvkMetalIRDenseBinding(const MVKDescriptorSetLayout* layout, uint32_t binding);

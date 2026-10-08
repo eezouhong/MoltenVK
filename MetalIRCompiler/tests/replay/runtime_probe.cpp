@@ -1,6 +1,22 @@
 #include "vulkan_context.h"
 #include <dlfcn.h>
 
+static const char* cacheDirectory=nullptr;
+static void configureCache(Context& context) {
+    if(!cacheDirectory)return;
+    auto configure=reinterpret_cast<VkResult(*)(VkDevice,const char*,uint64_t)>(dlsym(RTLD_DEFAULT,"vkConfigureMetalIRCacheMVK"));
+    if(!configure)throw std::runtime_error("missing per-device IR cache configuration");
+    VK_CHECK(configure(context.device,cacheDirectory,2ull*1024*1024*1024));
+}
+static void printCacheStatistics(Context& context) {
+    if(!cacheDirectory)return;
+    auto statistics=reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCompilerStatisticsMVK"));
+    uint64_t values[7]{};
+    if(!statistics||statistics(context.device,values,7)!=7)throw std::runtime_error("missing IR cache statistics");
+    fprintf(stderr,"MELONX_REPLAY_CACHE {\"compiled\":%llu,\"restored\":%llu,\"mesaNs\":%llu,\"mscNs\":%llu}\n",
+        (unsigned long long)values[0],(unsigned long long)values[1],(unsigned long long)values[2],(unsigned long long)values[3]);
+}
+
 // Seal the existing headless replay epoch after the fixture's only submission.
 // Disabled in the ordinary correctness suite; no swapchain/present is added.
 static void finishReplayFrame() {
@@ -11,7 +27,7 @@ static void finishReplayFrame() {
 }
 
 static bool graphics(const char* vertex,const char* fragment,bool fans, bool tail=false, bool fanIndirect=false) {
-    Context context; context.target();
+    Context context; configureCache(context); context.target();
     const uint32_t total=512;
     Buffer output=context.buffer(total*sizeof(Row),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); context.output(output,total*sizeof(Row));
     Buffer indices=context.buffer(256,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
@@ -61,11 +77,16 @@ static bool graphics(const char* vertex,const char* fragment,bool fans, bool tai
         prepare(160,{3,26},{5,7},{-4,6},2); vkCmdDrawIndexedIndirect(context.command,indirect.handle,indexedOffset,2,32);
     }
     vkCmdEndRenderPass(context.command); context.finish(); finishReplayFrame();
+    printCacheStatistics(context);
     return checkRows(output,expected,fans?"triangle-fan-system-values":"draw-system-values");
 }
 
-static bool compute(const char* runtime,const char* unused,bool emptySets=false, bool tail=false) {
+static bool compute(const char* runtime,const char* unused,bool emptySets=false, bool tail=false, bool lateCache=false) {
     Context context(emptySets);
+    // Match renderer startup: an internal helper can exist before the first
+    // title's ShaderInfo provides the default persistence directory.
+    if(lateCache)context.compute(context.shader(unused));
+    configureCache(context);
     auto active=context.compute(context.shader(runtime)), inactive=context.compute(context.shader(unused));
     const uint32_t total=128;
     Buffer output=context.buffer(total*sizeof(Row),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); context.output(output,total*sizeof(Row));
@@ -94,11 +115,13 @@ static bool compute(const char* runtime,const char* unused,bool emptySets=false,
     expected[96]={11,22,33,44}; vkCmdDispatch(context.command,1,1,1);
     vkCmdBindPipeline(context.command,VK_PIPELINE_BIND_POINT_COMPUTE,active);
     prepare(100,{5,1,3}); vkCmdDispatchBase(context.command,5,1,3,2,2,2);
-    context.finish(); finishReplayFrame(); return checkRows(output,expected,"dispatch-system-values-and-switch");
+    context.finish(); finishReplayFrame(); printCacheStatistics(context);
+    return checkRows(output,expected,"dispatch-system-values-and-switch");
 }
 
 int main(int argc,char** argv) {
-    if(argc!=4) return 64;
+    if(argc!=4&&argc!=5) return 64;
+    cacheDirectory=argc==5?argv[4]:nullptr;
     alarm(60);
     try {
         if (std::string(argv[1]) == "toggle") {
@@ -111,8 +134,8 @@ int main(int argc,char** argv) {
             return success ? 0 : 1;
         }
         const std::string mode=argv[1];
-        bool success=(mode=="compute" || mode=="empty" || mode=="compute-tail")
-            ?compute(argv[2],argv[3],mode=="empty",mode=="compute-tail")
+        bool success=(mode=="compute" || mode=="empty" || mode=="compute-tail" || mode=="compute-late")
+            ?compute(argv[2],argv[3],mode=="empty",mode=="compute-tail",mode=="compute-late")
             :graphics(argv[2],argv[3],mode=="fan" || mode=="fan-indirect",mode=="tail",mode=="fan-indirect");
         return success?0:1;
     } catch(const std::exception& error) { fprintf(stderr,"probe failed: %s\n",error.what()); return 1; }

@@ -36,6 +36,23 @@ compiler selection, retains raw logs, and fails on unexpected fallback/rejection
 Use the pinned MSC 3.1.1 plugin build; the supplied plugin directory's dylib hashes
 are recorded. This is correctness/cache validation, not a timing benchmark.
 
+`run_concurrent.py` creates 32 distinct compute pipelines on one VkDevice with
+one or four workers, then dispatches every pipeline and checks its independent
+output and untouched sentinel rows. Each configuration runs ABBA with unique
+entry names and literals to avoid system-cache reuse. It reports all samples,
+batch wall time and throughput; two samples per configuration are insufficient
+to infer game FPS or a stable small performance difference. No new application
+thread pool is introduced.
+
+`run_points.py` checks programmable sizes 1/2/4/8, PointCoord colors, triangle
+topology with a vertex shader that writes PointSize, and persistent restoration.
+Coverage and coordinates follow the
+[Vulkan point rasterization rules](https://docs.vulkan.org/spec/latest/chapters/primsrast.html#primsrast-points)
+and are checked across all 256 pixels; MSL is also checked against that CPU
+oracle. Metal validation is required. This catches AIR pointer-type loss during
+point metadata rewriting and does not replace the game's loading-screen visual
+check. Both runners use the same required path arguments and queue wrapper.
+
 `descriptor_probe` adds a separate 40-row CPU oracle: cross-binding writes and
 templates, zero-count binding gaps, copies between different array layouts,
 copies to/from combined immutable samplers, standalone sampled images/samplers,

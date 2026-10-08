@@ -2,6 +2,9 @@
 #include "air_legacy_memory.h"
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/Bitcode/LLVMBitCodes.h>
+#include <llvm/Bitstream/BitstreamReader.h>
+#include <llvm/Bitstream/BitstreamWriter.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
@@ -13,6 +16,9 @@
 #include <llvm/Support/raw_ostream.h>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <optional>
+#include <stdexcept>
 
 namespace melonx::air {
 namespace {
@@ -26,6 +32,121 @@ bool tag(const uint8_t* data,size_t size,size_t offset,const char* name) {
     return offset<=size && size-offset>=4 && !memcmp(data+offset,name,4);
 }
 llvm::MDString* text(llvm::LLVMContext& c,const char* value) {return llvm::MDString::get(c,value);}
+
+template<class T> T checked(llvm::Expected<T> value) {
+    if(!value)throw std::runtime_error(llvm::toString(value.takeError()));return std::move(*value);
+}
+void checked(llvm::Error value) {if(value)throw std::runtime_error(llvm::toString(std::move(value)));}
+
+// LLVM 17's IR reader upgrades typed pointers to opaque pointers. Serializing
+// that Module loses the pointee types consumed by Apple's bounds instrumentation.
+// Rewrite raw metadata records instead; keep all type/instruction record values.
+class RasterBitstream {
+    llvm::BitstreamCursor reader;
+    llvm::BitstreamWriter writer;
+    std::optional<llvm::BitstreamBlockInfo> blockInfo;
+    std::map<std::string,uint64_t> strings;
+    uint32_t execution;
+    bool globalNamesInStringTable=false;
+    unsigned stringBlocks=0,changed=0;
+
+    std::string rewriteStrings(llvm::SmallVectorImpl<uint64_t>& values,llvm::StringRef blob) {
+        using namespace llvm;
+        if(values.size()!=2||!values[0]||values[0]>65536||values[1]>blob.size()||++stringBlocks!=1)
+            throw std::runtime_error("unsupported AIR metadata string table");
+        SimpleBitstreamCursor lengths(ArrayRef<uint8_t>((const uint8_t*)blob.data(),values[1]));
+        SmallVector<char,0> encoded;BitstreamWriter lengthWriter(encoded);
+        std::string characters;size_t offset=values[1];
+        const char* marker=execution==0?"user(melonx_native_point_size0)":"user(melonx_native_point_coord0)";
+        for(uint64_t i=0;i<values[0];++i) {
+            auto size=checked(lengths.ReadVBR(6));
+            if(size>blob.size()-offset)throw std::runtime_error("truncated AIR metadata string");
+            std::string value=blob.substr(offset,size).str();offset+=size;
+            // Metadata node operands encode MDString slots as slot + 1.
+            strings.emplace(value,i+1);
+            if(value==marker)value=execution==0?"air.point_size":"air.point_coord";
+            lengthWriter.EmitVBR(value.size(),6);characters+=value;
+        }
+        lengthWriter.FlushToWord();values[1]=encoded.size();
+        return std::string(encoded.begin(),encoded.end())+characters;
+    }
+    void rewriteNode(llvm::SmallVectorImpl<uint64_t>& values) {
+        const char* marker=execution==0?"user(melonx_native_point_size0)":"user(melonx_native_point_coord0)";
+        auto found=strings.find(marker);if(found==strings.end())return;
+        if(std::find(values.begin(),values.end(),found->second)==values.end())return;
+        auto type=strings.at("air.arg_type_name"),name=strings.at("air.arg_name");
+        auto typePos=std::find(values.begin(),values.end(),type),namePos=std::find(values.begin(),values.end(),name);
+        if(typePos==values.end()||namePos==values.end()||std::next(typePos)==values.end()||std::next(namePos)==values.end())
+            throw std::runtime_error("unsupported AIR raster metadata node");
+        uint64_t typeValue=*std::next(typePos),nameValue=*std::next(namePos),index=values.front();
+        if(typeValue!=strings.at(execution==0?"float":"float2"))throw std::runtime_error("unexpected AIR raster type");
+        values.clear();if(execution==4)values.push_back(index);
+        values.append({found->second,type,typeValue,name,nameValue});++changed;
+    }
+    void block(unsigned id,bool root=false,unsigned depth=0) {
+        using namespace llvm;
+        if(depth>64)throw std::runtime_error("AIR nesting limit");
+        while(!reader.AtEndOfStream()) {
+            auto entry=checked(reader.advance());
+            if(entry.Kind==BitstreamEntry::Error)throw std::runtime_error("invalid AIR bitstream");
+            if(entry.Kind==BitstreamEntry::EndBlock) {if(root)throw std::runtime_error("unexpected AIR root end");return;}
+            if(entry.Kind==BitstreamEntry::SubBlock) {
+                if(entry.ID==bitc::BLOCKINFO_BLOCK_ID) {
+                    auto info=checked(reader.ReadBlockInfoBlock());if(!info)throw std::runtime_error("AIR blockinfo missing");
+                    blockInfo=std::move(*info);reader.setBlockInfo(&*blockInfo);
+                } else if(entry.ID==bitc::SYMTAB_BLOCK_ID) {
+                    // Optional summary contains byte offsets into the old file.
+                    checked(reader.SkipBlock());
+                } else {
+                    checked(reader.EnterSubBlock(entry.ID));writer.EnterSubblock(entry.ID,6);
+                    block(entry.ID,false,depth+1);writer.ExitBlock();
+                }
+                continue;
+            }
+            bool hasBlob=false;
+            if(entry.ID>=bitc::FIRST_APPLICATION_ABBREV) {
+                auto* abbreviation=checked(reader.getAbbrev(entry.ID));
+                for(unsigned i=0;i<abbreviation->getNumOperandInfos();++i) {
+                    const auto& op=abbreviation->getOperandInfo(i);
+                    hasBlob|=!op.isLiteral()&&op.getEncoding()==BitCodeAbbrevOp::Blob;
+                }
+            }
+            SmallVector<uint64_t,16> values;StringRef blob;
+            unsigned code=checked(reader.readRecord(entry.ID,values,&blob));
+            if(id==bitc::MODULE_BLOCK_ID&&code==bitc::MODULE_CODE_VERSION) {
+                if(values.size()!=1)throw std::runtime_error("invalid AIR module version");
+                globalNamesInStringTable=values[0]>=2;
+            }
+            if(id==bitc::MODULE_BLOCK_ID&&code==bitc::MODULE_CODE_VSTOFFSET)continue;
+            if(id==bitc::METADATA_BLOCK_ID&&(code==bitc::METADATA_INDEX_OFFSET||code==bitc::METADATA_INDEX))continue;
+            std::string replacement;
+            if(id==bitc::METADATA_BLOCK_ID&&code==bitc::METADATA_STRINGS) {replacement=rewriteStrings(values,blob);blob=replacement;}
+            if(id==bitc::METADATA_BLOCK_ID&&(code==bitc::METADATA_NODE||code==bitc::METADATA_DISTINCT_NODE))rewriteNode(values);
+            if(id==bitc::VALUE_SYMTAB_BLOCK_ID&&code==bitc::VST_CODE_FNENTRY) {
+                if(globalNamesInStringTable&&values.size()==2&&!hasBlob)continue;
+                if(values.size()<2||(!hasBlob&&values.size()<3))throw std::runtime_error("invalid AIR function name record");
+                values.erase(values.begin()+1);code=bitc::VST_CODE_ENTRY;
+            }
+            if(!hasBlob)writer.EmitRecord(code,values);
+            else {
+                auto abbreviation=std::make_shared<BitCodeAbbrev>();abbreviation->Add(BitCodeAbbrevOp(code));
+                for(size_t i=0;i<values.size();++i)abbreviation->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR,6));
+                abbreviation->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
+                unsigned number=writer.EmitAbbrev(std::move(abbreviation));values.insert(values.begin(),code);
+                writer.EmitRecordWithBlob(number,values,blob);
+            }
+        }
+        if(!root)throw std::runtime_error("truncated AIR block");
+    }
+public:
+    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage)
+        :reader(source),writer(output),execution(stage) {}
+    void run() {
+        if(checked(reader.Read(32))!=0xdec04342)throw std::runtime_error("invalid AIR magic");
+        writer.Emit(0xdec04342,32);block(0,true);writer.FlushToWord();
+        if(changed!=1)throw std::runtime_error("AIR native raster node count unsupported");
+    }
+};
 bool compatibleMemory(llvm::AttributeList attributes) {
     for (unsigned index:attributes.indexes())
         for (llvm::Attribute attr:attributes.getAttributes(index))
@@ -105,8 +226,18 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
     if (!module) {error=toString(module.takeError());return false;}
     if (!retag(**module,execution,requiredIO,error)) return false;
     SmallVector<char,0> serialized;
-    raw_svector_ostream stream(serialized);
-    WriteBitcodeToFile(**module,stream);
+    // Read the original wrapper directly, not the pointer-upgraded LLVM Module.
+    if(bitcodeSize<20)return fail("truncated AIR wrapper");
+    uint32_t payloadOffset=read<uint32_t>(data,bitcodeOffset+8),payloadSize=read<uint32_t>(data,bitcodeOffset+12);
+    if(read<uint32_t>(data,bitcodeOffset)!=0x0b17c0de||payloadOffset<20||payloadOffset>bitcodeSize||payloadSize>bitcodeSize-payloadOffset)
+        return fail("unsupported AIR bitcode wrapper");
+    try {
+        RasterBitstream transform(ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize),serialized,execution);
+        transform.run();
+        LLVMContext validation;
+        auto verified=parseBitcodeFile(MemoryBufferRef(StringRef(serialized.data(),serialized.size()),"retagged AIR"),validation);
+        if(!verified){error=toString(verified.takeError());return false;}
+    } catch(const std::exception& failure) {error=failure.what();return false;}
     std::vector<uint8_t> bitcode;
     if (serialized.size()<4) return fail("empty AIR serialization");
     if (read<uint32_t>((const uint8_t*)serialized.data(),0)==0x0b17c0de) {

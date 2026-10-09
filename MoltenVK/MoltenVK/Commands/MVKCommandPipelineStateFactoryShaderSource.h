@@ -267,19 +267,35 @@ kernel void cmdDrawIndirectPopulateIndexes(const device char* srcBuff [[buffer(0
                                            constant uint32_t& srcStride [[buffer(2)]],
                                            constant uint32_t& drawCount [[buffer(3)]],
                                            device uint32_t* idxBuff [[buffer(4)]],
+                                           constant uint32_t& indexCapacity [[buffer(5)]],
+                                           constant uint32_t& provokingVertexLast [[buffer(6)]],
                                            uint idx [[thread_position_in_grid]]) {
 	if (idx >= drawCount) { return; }
 	const device auto& src = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);
 	device auto& dst = destBuff[idx];
-	dst.indexCount = src.vertexCount;
-	dst.indexStart = src.vertexStart;
-	dst.baseVertex = 0;
+	// This conversion uses one fixed-capacity identity-index range. Bound the
+	// command's reads as well as the kernel's writes to that existing capacity.
+	uint32_t vertexCount = min(src.vertexCount, indexCapacity);
+	dst.indexCount = vertexCount > 2 ? (vertexCount - 2) * 3 : 0;
+	dst.indexStart = 0;
+	dst.baseVertex = src.vertexStart;
 	dst.instanceCount = src.instanceCount;
 	dst.baseInstance = src.baseInstance;
 
-	for (uint32_t idxIdx = 0; idxIdx < dst.indexCount; idxIdx++) {
-		uint32_t idxBuffIdx = dst.indexStart + idxIdx;
-		idxBuff[idxBuffIdx] = idxBuffIdx;
+	// A shared range avoids write/write races between overlapping draws.
+	if (idx == 0) {
+		uint32_t maxCount = src.vertexCount;
+		for (uint32_t draw = 1; draw < drawCount; ++draw) {
+			const device auto& next = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + draw * srcStride);
+			maxCount = max(maxCount, next.vertexCount);
+		}
+		maxCount = min(maxCount, indexCapacity);
+		for (uint32_t vtxIdx = 2; vtxIdx < maxCount; ++vtxIdx) {
+			uint32_t offset = (vtxIdx - 2) * 3;
+			idxBuff[offset] = provokingVertexLast ? 0 : vtxIdx - 1;
+			idxBuff[offset + 1] = provokingVertexLast ? vtxIdx - 1 : vtxIdx;
+			idxBuff[offset + 2] = provokingVertexLast ? vtxIdx : 0;
+		}
 	}
 }
 

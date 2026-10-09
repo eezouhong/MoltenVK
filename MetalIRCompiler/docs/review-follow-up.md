@@ -82,6 +82,6 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 2. 找到实际烟雾 draw，固定 shader、资源和 draw inputs，比较 MSL / IR-strict / IR-fast。通用 point/math/system-value 用例不能替代这项验收。
 3. 解释并处理额外进程 footprint；已降低的 descriptor pool/Metal residual 与未降低的进程 residual 都需保留报告。
 4. 补当前 stage key 在无关 layout 改变时的复用/失效，以及实际 MSC 确定性拒绝的端到端覆盖。CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
-5. 构建可选 iOS ABI9 compiler bundle/manifest，仅构建，不安装或操作手机。最终 MeloNX native pin 等 #24 进入维护 RC 分支后更新；现有功能分支 pin 仍是实验状态。
+5. 可选 ABI9 iOS arm64/macOS compiler framework 已构建并核验四个导出符号、二进制 SHA 和 iOS 17.0 最低部署版本；iOS 对象代码的 ABI 函数返回 9。iOS compiler 为 13.30 MB，Apple MSC 为 34.63 MB，原始厂商 SHA 保持不变。候选 manifest 已准备；默认清单仍须等匹配的 ABI9 native 进入维护 RC 后一起更新。仅构建，没有安装或操作手机；现有功能分支 pin 仍是实验状态。
 
 不再通过六对整局 ABBA 或挑选负载接近的复跑寻找有利结果。数据分析方法已整理为本地 `melonx-graphics-acceptance` skill，并使用历史三组日志验证其计算。手机验收暂不在用户授权范围内；主机数据不能宣称真机动态加载、jetsam 或最终 FPS 已通过。

@@ -283,6 +283,25 @@ Debug Tool [PR24](https://github.com/eezouhong/ryujinx-ios-host-debug/pull/24) �
 
 这能把guest→SPIR-V→DXIL→AIR的离线观察整理成标准证据，帮助查浮点权限、volatile/atomic和资源访问结构；不会自动抓取实际shader，也不证明哈希关联的产物被GPU消费。此次样本是保留合成AIR，未冒充最新真实烟雾compile request；数值/像素/性能验收仍以原独立oracle为准。方法已加入项目graphics-debugging skill。
 
+### 最终 compiler 的 200-stage 多样性与生命周期补验
+
+之前200-stage实测使用较早的compiler。现在补齐最终clean native（实际codefe36、Mac Release OFF）与release17/absoluteID0007 compiler，同一批100个真实VS/FS pairs、200个distinct stages，按1/4/8请求worker各跑MSL/IR一次；共享队列1782，六组全部100/100 PSO创建/链接成功，共600个PSO，API/GPU validation无报错。输入/native/plugin哈希前后核验。此实验不提交draw，不替代数值/烟雾oracle。
+
+| 路线 / workers | 成功PSO | 编译峰值−基线 MiB | pipeline销毁后−基线 MiB | IR实际并发峰值 |
+|---|---:|---:|---:|---:|
+| 1-msl | 100 | 109.500 | 109.875 | 0 |
+| 1-ir | 100 | 179.032 | 179.000 | 1 |
+| 4-ir | 100 | 184.688 | 184.688 | 2 |
+| 4-msl | 100 | 117.813 | 117.703 | 0 |
+| 8-msl | 100 | 122.891 | 123.407 | 0 |
+| 8-ir | 100 | 182.204 | 182.422 | 2 |
+
+IR并发峰值1/2/2，默认cap2，结束时active/waiting均0；batch/quiet-relief producer实际非零。relief计数表示调用尝试，allocator返回释放字节0，不能称为实际归还物理内存。采样目标1ms，实际间隔P95为1.534–1.847ms、最长4.798ms。应用disk cache关闭，系统Metal cache未清、顺序重复相同shader；首个IR/1的7.236s与后续IR/4、IR/8的约0.64/0.63s受系统cache priming混杂，不据此声称多worker吞吐收益。
+
+再补一个4-worker validation OFF生命周期对照（共享队列1785），两路各100/100PSO成功，七阶段allocator/销毁记录齐全。MSL/IR编译峰值−基线43.016/75.094MiB；销毁instance后的footprint增量42.641/23.828MiB（IR−MSL−18.813MiB）；malloc活跃增量11.488/11.686MiB（差+0.199MiB）。物理footprint与malloc记账不同，不把差值归于某单一所有者。历史旧compiler的+29.75MiB结果继续保留；本次是新source/system-cache状态下的一对观察，不把变化全归功于某个patch，也不外推实际游戏。
+
+机械执行器在测试结束后误用zsh保留变量`status`，其外层包装返回1；队列1785的权威终态exit0、两实际子进程exit0、结果和输入身份核验均通过。包装错误单独保留，没有作为产品失败或隐藏掉。
+
 ## 用户统一验收的事项
 
 - 原 binding ≤0.1 ms 条件未达到，最新 +0.2871 ms 已由用户明确接受；总 encode 条件通过。所有不利候选继续保留，不再通过复跑寻找有利负载。

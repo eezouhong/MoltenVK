@@ -28,6 +28,10 @@ MeloNX 首次遇到 shader 时，MSL 源码编译会阻塞 pipeline 准备。这
 
 push descriptor 的真实 query 也已验证：MSL 同时宣告扩展和 Vulkan 1.4 feature，IR 两者都不宣告。
 
+stage key 的 GPU 验证通过：增加无关 sampler 或 trailing unused set 时编译次数保持 1；改变活跃 descriptor 数量或真实表偏移时分别增至 2、3。五个输出区域和未写入 sentinel 共 16 rows 全部正确。
+
+现有固定场景日志没有任何 VS stage 请求 `DRAW_PARAMETERS`（index 4），因此不能把该场景的回退归因于 index 4 的 setBytes。大部分 VS 只有 point-size 标记；跳过不需要 draw 数据的准备路径后，23 个普通回归及 14 个点精灵/缓存用例通过。仍需真实场景的性能确认。
+
 ## 数据及其范围
 
 所有主机图形测试都通过共享 Debug Tool 队列。测试后释放 runner，再分析日志。游戏 shaders、存档、keys、截图、原始运行日志及测试 IPA 均未提交到公共仓库。Apple 系统 Metal cache 未清，不能把以下时间当作完全无缓存的编译器基准。
@@ -67,6 +71,10 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 
 默认并发上限已验证。pressure relief 返回 0，销毁 PSO 后的进程残留仍接近编译峰值，IR 比 MSL 多约 70 MiB。该范围包含原生/Metal 缓存及 allocator；还不能归因为泄漏，也不能关闭内存待验收项。
 
+一个额外的最小归因实验仅关闭 resident library 缓存：4 workers 的残留从 193.09 MiB 降至 189.52 MiB，约减少 3.58 MiB；实际 retained/code bytes 为 0，200 stage 全部重编且 100 PSO 通过 validation。它不能解释主要的约 70 MiB 差距；没有据此修改默认缓存容量。
+
+缓存 descriptor pool GPU 基地址的候选修改也未保留。5,000 个不同 set/输出偏移的 GPU oracle 通过；关闭 API/GPU validation 后编码 CPU 中位数 1.16875→1.16981 ms/批次，没有明显收益。开启 validation 的成本明显放大，未用该数据宣称产品性能改善。
+
 ## 修正和失败记录
 
 - Xcode 源/header membership 曾导致缺 header、重复安装 header 和 wrapper 链接失败。header 改为 Project 可见性，IR 实现只由四个 core static target 编译，dynamic wrapper 使用已有静态库；修复后的完整 CI 通过。
@@ -81,7 +89,7 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 1. 将绑定 CPU 回退降至约定门槛；候选优化需要定向回归与最终同指标确认。
 2. 找到实际烟雾 draw，固定 shader、资源和 draw inputs，比较 MSL / IR-strict / IR-fast。通用 point/math/system-value 用例不能替代这项验收。
 3. 解释并处理额外进程 footprint；已降低的 descriptor pool/Metal residual 与未降低的进程 residual 都需保留报告。
-4. 补当前 stage key 在无关 layout 改变时的复用/失效，以及实际 MSC 确定性拒绝的端到端覆盖。CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
+4. 补实际 MSC 确定性拒绝的端到端覆盖。stage-key 复用/失效 GPU 夹具已通过；CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
 5. 可选 ABI9 iOS arm64/macOS compiler framework 已构建并核验四个导出符号、二进制 SHA 和 iOS 17.0 最低部署版本；iOS 对象代码的 ABI 函数返回 9。iOS compiler 为 13.30 MB，Apple MSC 为 34.63 MB，原始厂商 SHA 保持不变。候选 manifest 已准备；默认清单仍须等匹配的 ABI9 native 进入维护 RC 后一起更新。仅构建，没有安装或操作手机；现有功能分支 pin 仍是实验状态。
 
 不再通过六对整局 ABBA 或挑选负载接近的复跑寻找有利结果。数据分析方法已整理为本地 `melonx-graphics-acceptance` skill，并使用历史三组日志验证其计算。手机验收暂不在用户授权范围内；主机数据不能宣称真机动态加载、jetsam 或最终 FPS 已通过。

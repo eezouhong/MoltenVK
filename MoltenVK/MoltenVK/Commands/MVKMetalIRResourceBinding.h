@@ -44,7 +44,17 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 	const uint32_t argumentBytes = argumentCount * sizeof(uint64_t);
 	// Vulkan pipeline resources outlive their encoded commands. This key is used
 	// only within one Metal encoder/stage, and reset with that encoder's state.
-	const bool needsRoot = cached.rootArtifact != &artifact ||
+	// Different shaders can use the same root payload. Compare its exact ABI
+	// and usage on a pipeline switch; shader identity alone need not rebuild it.
+	const uint32_t rootRuntimeFlags = artifact.runtimeFlags &
+		(MVK_METAL_IR_RUNTIME_DATA | MVK_METAL_IR_DRAW_BASES | MVK_METAL_IR_DISPATCH_GROUPS);
+	const bool rootLayoutChanged = cached.rootArtifact != &artifact &&
+		(!cached.rootArtifact || cached.rootUsedSets != artifact.usedSets ||
+		 cached.rootSetCount != artifact.setCount ||
+		 cached.rootPushConstantSize != artifact.pushConstantSize ||
+		 cached.rootUsesPushConstants != artifact.usesPushConstants ||
+		 cached.rootRuntimeFlags != rootRuntimeFlags);
+	const bool needsRoot = rootLayoutChanged ||
 		(artifact.usedSets & ~uint64_t(exists.descriptorSetData.bits())) ||
 		(artifact.usesPushConstants && artifact.pushConstantSize && cached.pushConstantSize != artifact.pushConstantSize) ||
 		(usesRuntime && (cached.runtimeAddress != runtime.gpuAddress || cached.runtimeBuffer != runtime.buffer)) ||
@@ -122,10 +132,15 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 			exists.buffers.set(2);
 			bindings.buffers[2] = MVKStageResourceBindings::MetalIRRootBuffer();
 		}
-		cached.rootArtifact = &artifact;
+		cached.rootUsedSets = artifact.usedSets;
+		cached.rootSetCount = artifact.setCount;
+		cached.rootPushConstantSize = artifact.pushConstantSize;
+		cached.rootUsesPushConstants = artifact.usesPushConstants;
+		cached.rootRuntimeFlags = rootRuntimeFlags;
 		cached.runtimeAddress = runtime.gpuAddress;
 		cached.rawRuntimeAddress = raw.gpuAddress;
 	}
+	cached.rootArtifact = &artifact;
 	if (artifact.runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS) {
 		assert(vkStage == kMVKShaderStageVertex);
 		const auto& draw = mvkEncoder.metalIR().drawBinding();

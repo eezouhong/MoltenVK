@@ -255,6 +255,9 @@ struct MVKStageResourceBindings {
 	 * buffer owns the temporary push allocation; this state does not retain it. */
 	struct MetalIRArguments {
 		const MVKMetalIRMetadata* rootArtifact = nullptr;
+		uint64_t rootUsedSets = 0;
+		uint32_t rootSetCount = 0, rootPushConstantSize = 0, rootRuntimeFlags = 0;
+		bool rootUsesPushConstants = false;
 		uint64_t runtimeAddress = 0;
 		uint64_t rawRuntimeAddress = 0;
 		id<MTLBuffer> rawRuntimeBuffer = nil;

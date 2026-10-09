@@ -65,6 +65,9 @@ struct MVKMetalIRMetadata {
     bool usesPushConstants = true;
     bool usesPointCoordinates = false;
     uint32_t runtimeFlags = 0;
+    bool needsDrawData() const {
+        return runtimeFlags & (MVK_METAL_IR_RUNTIME_DATA | MVK_METAL_IR_DRAW_PARAMETERS | MVK_METAL_IR_DRAW_BASES);
+    }
 };
 
 // Only construction and the bounded recent-artifact cache own Metal objects.

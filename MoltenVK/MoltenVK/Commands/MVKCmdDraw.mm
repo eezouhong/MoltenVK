@@ -194,7 +194,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
         const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
         mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
         preparationTrace.checkpoint();
-        if (artifact) {
+        if (artifact && artifact->needsDrawData()) {
             cmdEncoder->metalIR().prepareDraw(artifact,
                 mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
         }
@@ -497,7 +497,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
         const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
         mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
         preparationTrace.checkpoint();
-        if (artifact) {
+        if (artifact && artifact->needsDrawData()) {
             cmdEncoder->metalIR().prepareDraw(artifact,
                 mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
                     _vertexOffset, _firstInstance, ibb.mtlIndexType));

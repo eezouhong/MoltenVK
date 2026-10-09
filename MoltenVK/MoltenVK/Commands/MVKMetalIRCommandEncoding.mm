@@ -63,7 +63,7 @@ MVKMetalIRCommandEncoding::BufferBinding MVKMetalIRCommandEncoding::rawRuntimeBi
 }
 
 void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRMetadata* artifact, const mvkir::DirectDraw& draw) {
-    if (!artifact || !artifact->runtimeFlags) return;
+    if (!artifact || !artifact->needsDrawData()) return;
     if (artifact->runtimeFlags & MVK_METAL_IR_DRAW_BASES)
         cacheRawRuntimeData(false, &draw.mesa.firstVertex, 8);
     if (artifact->runtimeFlags & MVK_METAL_IR_RUNTIME_DATA) {
@@ -72,7 +72,8 @@ void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRMetadata* artifact, 
         data.firstVertex = data.baseInstance = 0;
         cacheRuntimeData(false, &data, sizeof(data));
     }
-    _draw = { draw.metal, nil, 0, draw.indexType };
+    if (artifact->runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS)
+        _draw = { draw.metal, nil, 0, draw.indexType };
 }
 
 MVKMetalIRCommandEncoding::RuntimeBatch MVKMetalIRCommandEncoding::prepareIndirectDraws(
@@ -97,7 +98,8 @@ void MVKMetalIRCommandEncoding::selectIndirectDraw(const RuntimeBatch& batch, ui
         data.drawId = drawId;
         cacheRuntimeData(false, &data, sizeof(data));
     }
-    _draw = { {}, arguments, offset, indexType };
+    if (batch.runtimeFlags & MVK_METAL_IR_DRAW_PARAMETERS)
+        _draw = { {}, arguments, offset, indexType };
 }
 
 void MVKMetalIRCommandEncoding::prepareDispatch(const MVKMetalIRMetadata* artifact, const mvkir::ComputeData& data) {

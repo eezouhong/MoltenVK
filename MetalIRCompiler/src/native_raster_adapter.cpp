@@ -46,9 +46,9 @@ class RasterBitstream {
     llvm::BitstreamWriter writer;
     std::optional<llvm::BitstreamBlockInfo> blockInfo;
     std::map<std::string,uint64_t> strings;
-    uint32_t execution;
+    uint32_t execution,requiredIO;
     bool globalNamesInStringTable=false;
-    unsigned stringBlocks=0,changed=0;
+    unsigned stringBlocks=0;uint32_t changed=0;
 
     std::string rewriteStrings(llvm::SmallVectorImpl<uint64_t>& values,llvm::StringRef blob) {
         using namespace llvm;
@@ -65,23 +65,28 @@ class RasterBitstream {
             // Metadata node operands encode MDString slots as slot + 1.
             strings.emplace(value,i+1);
             if(value==marker)value=execution==0?"air.point_size":"air.point_coord";
+            if((requiredIO&VertexID)&&value=="user(melonx_native_vertex_id0)")value="air.vertex_id";
+            if((requiredIO&InstanceID)&&value=="user(melonx_native_instance_id0)")value="air.instance_id";
             lengthWriter.EmitVBR(value.size(),6);characters+=value;
         }
         lengthWriter.FlushToWord();values[1]=encoded.size();
         return std::string(encoded.begin(),encoded.end())+characters;
     }
     void rewriteNode(llvm::SmallVectorImpl<uint64_t>& values) {
-        const char* marker=execution==0?"user(melonx_native_point_size0)":"user(melonx_native_point_coord0)";
-        auto found=strings.find(marker);if(found==strings.end())return;
-        if(std::find(values.begin(),values.end(),found->second)==values.end())return;
-        auto type=strings.at("air.arg_type_name"),name=strings.at("air.arg_name");
-        auto typePos=std::find(values.begin(),values.end(),type),namePos=std::find(values.begin(),values.end(),name);
-        if(typePos==values.end()||namePos==values.end()||std::next(typePos)==values.end()||std::next(namePos)==values.end())
-            throw std::runtime_error("unsupported AIR raster metadata node");
-        uint64_t typeValue=*std::next(typePos),nameValue=*std::next(namePos),index=values.front();
-        if(typeValue!=strings.at(execution==0?"float":"float2"))throw std::runtime_error("unexpected AIR raster type");
-        values.clear();if(execution==4)values.push_back(index);
-        values.append({found->second,type,typeValue,name,nameValue});++changed;
+        const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)"};
+        for(unsigned i=0;i<4;++i) {
+            uint32_t bit=1u<<i;if(!(requiredIO&bit))continue;
+            auto found=strings.find(markers[i]);if(found==strings.end())continue;
+            if(std::find(values.begin(),values.end(),found->second)==values.end())continue;
+            auto type=strings.at("air.arg_type_name"),name=strings.at("air.arg_name");
+            auto typePos=std::find(values.begin(),values.end(),type),namePos=std::find(values.begin(),values.end(),name);
+            if(typePos==values.end()||namePos==values.end()||std::next(typePos)==values.end()||std::next(namePos)==values.end())throw std::runtime_error("unsupported AIR native metadata node");
+            uint64_t typeValue=*std::next(typePos),nameValue=*std::next(namePos),index=values.front();
+            const char* expected=i==0?"float":i==1?"float2":"uint";
+            if(typeValue!=strings.at(expected)||(changed&bit))throw std::runtime_error("unexpected AIR native type or duplicate node");
+            values.clear();if(i)values.push_back(index);
+            values.append({found->second,type,typeValue,name,nameValue});changed|=bit;return;
+        }
     }
     void block(unsigned id,bool root=false,unsigned depth=0) {
         using namespace llvm;
@@ -139,12 +144,12 @@ class RasterBitstream {
         if(!root)throw std::runtime_error("truncated AIR block");
     }
 public:
-    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage)
-        :reader(source),writer(output),execution(stage) {}
+    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage,uint32_t required)
+        :reader(source),writer(output),execution(stage),requiredIO(required) {}
     void run() {
         if(checked(reader.Read(32))!=0xdec04342)throw std::runtime_error("invalid AIR magic");
         writer.Emit(0xdec04342,32);block(0,true);writer.FlushToWord();
-        if(changed!=1)throw std::runtime_error("AIR native raster node count unsupported");
+        if(changed!=requiredIO)throw std::runtime_error("AIR native raster nodes missing or unexpected");
     }
 };
 bool compatibleMemory(llvm::AttributeList attributes) {
@@ -162,38 +167,41 @@ bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::stri
     if (stage->getNumOperands()!=3) {error="AIR raster stage signature unsupported";return false;}
     auto* functionMD=dyn_cast<ConstantAsMetadata>(stage->getOperand(0));
     auto* function=functionMD?dyn_cast<Function>(functionMD->getValue()):nullptr;
-    auto* group=dyn_cast<MDNode>(stage->getOperand(execution==0?1:2));
-    if (!function || !group) {error="AIR raster interface unavailable";return false;}
+    if(!function){error="AIR native function unavailable";return false;}
     uint32_t found=0;auto& context=module.getContext();
-    for (unsigned i=0;i<group->getNumOperands();++i) {
-        auto* item=dyn_cast<MDNode>(group->getOperand(i));if (!item) continue;
-        const char* marker=execution==0?"user(melonx_native_point_size0)":"user(melonx_native_point_coord0)";
-        bool matches=false;
-        for (const auto& operand:item->operands())
-            if (auto* string=dyn_cast_or_null<MDString>(operand)) matches|=string->getString()==marker;
-        if (!matches) continue;
-        SmallVector<Metadata*,8> replacement;
-        if (execution==0) {
-            auto* result=dyn_cast<StructType>(function->getReturnType());
-            if (!result || i>=result->getNumElements() || !result->getElementType(i)->isFloatTy()) {
-                error="AIR point size is not a scalar float";return false;
+    const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)"};
+    const char* builtins[]={"air.point_size","air.point_coord","air.vertex_id","air.instance_id"};
+    for(unsigned k=0;k<4;++k) {
+        const uint32_t bit=1u<<k;if(!(requiredIO&bit))continue;
+        auto* group=dyn_cast<MDNode>(stage->getOperand(k==0?1:2));
+        if(!group){error="AIR native interface group missing";return false;}
+        for(unsigned i=0;i<group->getNumOperands();++i) {
+            auto* item=dyn_cast<MDNode>(group->getOperand(i));if(!item)continue;
+            bool matches=false;for(const auto& operand:item->operands())if(auto* string=dyn_cast_or_null<MDString>(operand))matches|=string->getString()==markers[k];
+            if(!matches)continue;
+            if(found&bit){error="duplicate AIR native input";return false;}
+            SmallVector<Metadata*,8> replacement;
+            if(k==0) {
+                auto* result=dyn_cast<StructType>(function->getReturnType());
+                if(!result||i>=result->getNumElements()||!result->getElementType(i)->isFloatTy()){error="AIR point size is not scalar float";return false;}
+            } else {
+                auto* index=dyn_cast<ConstantAsMetadata>(item->getOperand(0));auto* integer=index?dyn_cast<ConstantInt>(index->getValue()):nullptr;
+                uint64_t arg=integer?integer->getZExtValue():UINT64_MAX;
+                if(arg>=function->arg_size()){error="AIR native argument missing";return false;}
+                Type* type=function->getArg(arg)->getType();
+                if(k==1){auto* vec=dyn_cast<FixedVectorType>(type);if(!vec||vec->getNumElements()!=2||!vec->getElementType()->isFloatTy()){error="AIR point coordinates not float2";return false;}}
+                else if(!type->isIntegerTy(32)){error="AIR native ID not i32";return false;}
+                replacement.push_back(index);
             }
-            replacement={text(context,"air.point_size"),text(context,"air.arg_type_name"),text(context,"float"),text(context,"air.arg_name"),text(context,"mtl_point_size")};
-            found|=PointSize;
-        } else {
-            auto* index=dyn_cast<ConstantAsMetadata>(item->getOperand(0));
-            auto* integer=index?dyn_cast<ConstantInt>(index->getValue()):nullptr;
-            uint64_t argument=integer?integer->getZExtValue():UINT64_MAX;
-            auto* type=argument<function->arg_size()?dyn_cast<FixedVectorType>(function->getArg(argument)->getType()):nullptr;
-            if (!type || type->getNumElements()!=2 || !type->getElementType()->isFloatTy()) {
-                error="AIR point coordinates are not float2";return false;
-            }
-            replacement={index,text(context,"air.point_coord"),text(context,"air.arg_type_name"),text(context,"float2"),text(context,"air.arg_name"),text(context,"mtl_point_coord")};
-            found|=PointCoordinates;
+            const char* typeName=k==0?"float":k==1?"float2":"uint";
+            replacement.append({text(context,builtins[k]),text(context,"air.arg_type_name"),text(context,typeName),text(context,"air.arg_name"),text(context,builtins[k])});
+            group->replaceOperandWith(i,MDNode::get(context,replacement));found|=bit;
         }
-        group->replaceOperandWith(i,MDNode::get(context,replacement));
     }
-    if (found!=requiredIO) {error="AIR native point interface missing or unexpected";return false;}
+    if(found!=requiredIO){
+        error="AIR native interface missing or unexpected: required="+std::to_string(requiredIO)+", found="+std::to_string(found);
+        return false;
+    }
     for (Function& function:module) {
         if (!compatibleMemory(function.getAttributes())) {error="AIR memory effects cannot be encoded exactly";return false;}
         for (BasicBlock& block:function) for (Instruction& instruction:block)
@@ -210,7 +218,7 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
     output.clear();error.clear();
     auto fail=[&](const char* message){error=message;return false;};
     if (!bytes || size<88 || size>64*1024*1024 || !requiredIO ||
-        (execution!=0 && execution!=4) || requiredIO!=(execution==0?PointSize:PointCoordinates))
+        (execution!=0 && execution!=4) || (requiredIO & ~(execution==0?(PointSize|VertexID|InstanceID):PointCoordinates)))
         return fail("invalid native raster adapter input");
     auto* data=(const uint8_t*)bytes;
     if (!tag(data,size,0,"MTLB") || read<uint64_t>(data,16)!=size)
@@ -232,7 +240,7 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
     if(read<uint32_t>(data,bitcodeOffset)!=0x0b17c0de||payloadOffset<20||payloadOffset>bitcodeSize||payloadSize>bitcodeSize-payloadOffset)
         return fail("unsupported AIR bitcode wrapper");
     try {
-        RasterBitstream transform(ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize),serialized,execution);
+        RasterBitstream transform(ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize),serialized,execution,requiredIO);
         transform.run();
         LLVMContext validation;
         auto verified=parseBitcodeFile(MemoryBufferRef(StringRef(serialized.data(),serialized.size()),"retagged AIR"),validation);
@@ -288,6 +296,44 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
             write<uint64_t>(output,cursor+6,start-bitcodeSize+bitcode.size());
         }
         cursor+=6+length;
+    }
+    // MSC's public attribute records are separate from AIR's interface nodes.
+    // Retagged native IDs must also stop requesting vertex-fetch attributes.
+    // Preserve all record extents, indices and ordinary attribute bytes.
+    const uint32_t nativeIDs=requiredIO&(VertexID|InstanceID);
+    if(execution==0 && nativeIDs) {
+        uint64_t publicSize=read<uint64_t>(data,48);
+        if(publicSize<8||publicOffset>size||publicSize>size-publicOffset||
+           read<uint32_t>(data,publicOffset)!=publicSize)
+            return fail("unsupported single-function public metadata");
+        size_t field=publicOffset+4,end=publicOffset+publicSize;uint32_t attributes=0;
+        while(field<end && !tag(data,size,field,"ENDT")) {
+            if(end-field<6)return fail("truncated public attribute tag");
+            uint16_t length=read<uint16_t>(data,field+4);
+            if(length>end-field-6)return fail("public attribute tag exceeds record");
+            if(tag(data,size,field,"VATT")) {
+                if(length<2)return fail("truncated vertex attribute count");
+                uint16_t count=read<uint16_t>(data,field+6);size_t entry=field+8,limit=field+6+length;
+                if(count>32)return fail("unsupported vertex attribute count");
+                for(unsigned i=0;i<count;++i) {
+                    const auto* nul=static_cast<const uint8_t*>(memchr(data+entry,0,limit-entry));
+                    if(!nul||limit-size_t(nul-data)-1<2)return fail("truncated vertex attribute name/index");
+                    std::string name(reinterpret_cast<const char*>(data+entry),size_t(nul-(data+entry)));
+                    size_t indexOffset=size_t(nul-data)+1;uint16_t index=read<uint16_t>(data,indexOffset);
+                    uint32_t bit=name=="melonx_native_vertex_id0"?VertexID:name=="melonx_native_instance_id0"?InstanceID:0;
+                    if(bit) {
+                        if(!(nativeIDs&bit)||(attributes&bit)||!(index&0x8000))return fail("unexpected native vertex attribute record");
+                        write<uint16_t>(output,indexOffset,index&0x7fff);attributes|=bit;
+                    }
+                    entry=indexOffset+2;
+                }
+                if(entry!=limit)return fail("unexpected vertex attribute trailing data");
+            }
+            field+=6+length;
+        }
+        if(field>end || end-field<4 || !tag(data,size,field,"ENDT"))
+            return fail("public vertex metadata end tag missing");
+        if(attributes!=nativeIDs)return fail("native vertex attribute metadata missing");
     }
     return true;
 }

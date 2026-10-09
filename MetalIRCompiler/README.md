@@ -224,3 +224,18 @@ The public scalar matrix separately covers defaults without `AllowTransform`,
 defaults allowing transforms, and a mixed shader with two `NoContraction`
 operations. Its precision samples include float32 inputs where explicit FMA and
 separate multiply/add differ; a CPU guard rejects an ineffective sentinel.
+
+### Native absolute vertex and instance IDs
+
+Patch 0007 adds a separate Metal-only Mesa entry point. Existing Mesa config
+and metadata structs and converter entry points retain their ABI. Vertex and
+instance IDs travel through hidden uint input semantics; the AIR adapter
+restores native builtins and disables the corresponding public `VATT` fetch
+attributes without moving record ranges. Ordinary vertex attributes remain
+unchanged. If two spare input slots are unavailable, the prior runtime route
+is retained. BaseVertex, BaseInstance and DrawID still use their explicit
+runtime inputs. This stays on SM 6.6.
+
+The optional compiler requires the matched Mesa sidecar exporting the new
+entry point. An older sidecar causes plugin loading to fail explicitly; it
+does not silently select MSL. The native/plugin binding ABI remains 9.

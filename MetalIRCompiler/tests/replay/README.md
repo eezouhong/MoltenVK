@@ -95,3 +95,11 @@ request. Both Vulkan requests fail explicitly with no MSL fallback. This is an
 unsupported-feature rejection/cache test; it submits no dispatch and makes no
 rendering or Vulkan-conformance claim. Use the same path arguments and queue
 wrapper as the other runners.
+
+`run_native_ids.py` checks 60 direct/indexed draws with changing vertex and
+instance origins, including negative indexed vertex IDs. The ID-only vertex
+shader writes the actual builtins into 960 rows; untouched rows remain
+sentinels. MSL and IR must match the independent CPU oracle with Metal API/GPU
+validation. IR must compile the stage without runtime-data/draw-parameters/
+draw-bases flags. This does not replace the mixed BaseVertex/BaseInstance/
+DrawID suite, and makes no whole-game CPU claim.

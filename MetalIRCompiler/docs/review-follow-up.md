@@ -85,6 +85,10 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 
 实际 MSC 负缓存端到端测试已通过：两个不同 shader module 提交相同 FP64 stage，MSC 3.1.1 明确返回 `IRErrorCodeFP64Usage`（19）。两次 Vulkan pipeline 请求都失败，compiler calls 保持 1，正值 MSC 累计时间保持不变；没有 MSL 回退。此用例只验证不支持的 optional feature 的拒绝与缓存，不提交 dispatch。可复用入口为 [run_msc_negative.py](../tests/replay/run_msc_negative.py)。
 
+新增的绝对 ID 路线已通过 23 系统值、14 点精灵和 descriptor oracle；真实 GPU 的额外用例覆盖 60 个直接/索引 draw、变化的 vertex/instance origin（含负 indexed ID），960 rows/sentinels 正确，ID-only VS runtime flags 为 0。旧 header client 调用新 Mesa 的原入口仍保留 raw runtime，新入口不再需要它；普通同名输入仍为普通 attribute，新插件混入旧 sidecar 则明确拒绝加载。
+
+5,000-set 定向夹具中，固定 draw origins 的编码 CPU 没有改善（1.1861→1.1964 ms）；变化 origins 的同输入对照降约 4.01%（1.2544→1.2041 ms）。每条路径一个进程、一批 warmup 加八批测量，所有 320,000 rows/sentinels 均核验，时序测量关闭 validation。这个范围只支持变化参数路径的收益，不能关闭固定场景的 +0.65 ms binding gate。首份 microfixture 的 criteria 文本误沿用了 root-payload 候选描述，原文保留，实际源码/身份/ flags 和修正的范围另行记录。
+
 ## 修正和失败记录
 
 - Xcode 源/header membership 曾导致缺 header、重复安装 header 和 wrapper 链接失败。header 改为 Project 可见性，IR 实现只由四个 core static target 编译，dynamic wrapper 使用已有静态库；修复后的完整 CI 通过。

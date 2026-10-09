@@ -127,9 +127,9 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     // Metal forbids point_size on triangle/line pipelines. Select raster I/O
     // from the Vulkan pipeline topology before compiling, just as the MSL
     // path selects enable_point_size_builtin. Both branches use Mesa + MSC.
-    bool translated=request->runtimeOptions&MVK_METAL_IR_RENDERING_POINTS
-        ?spirv_to_dxil_with_native_raster(words.data(),words.size(),nullptr,0,stage,request->entry,NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,&nativeRasterIO)
-        :spirv_to_dxil_with_clip_space(words.data(),words.size(),nullptr,0,stage,request->entry,NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ);
+    bool translated=spirv_to_dxil_with_absolute_vertex_ids(words.data(),words.size(),nullptr,0,stage,request->entry,
+        NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,
+        bool(request->runtimeOptions&MVK_METAL_IR_RENDERING_POINTS),&nativeRasterIO);
     result->mesaMs=elapsed(start);
     if(!translated)return 1;
     // Mesa runtime data and MSC draw arguments have separate ABIs. The native
@@ -252,6 +252,9 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                             if(vs.info_1_0.needs_draw_params)result->runtimeFlags|=MVK_METAL_IR_DRAW_PARAMETERS;
                             for(size_t i=0;i<vs.info_1_0.num_vertex_inputs;++i){
                                 const auto& input=vs.info_1_0.vertex_inputs[i];
+                                if(input.name &&
+                                   ((nativeRasterIO&melonx::air::VertexID && !strcasecmp(input.name,"melonx_native_vertex_id0")) ||
+                                    (nativeRasterIO&melonx::air::InstanceID && !strcasecmp(input.name,"melonx_native_instance_id0")))) continue;
                                 char* end=nullptr;
                                 unsigned long location=input.name&&strncasecmp(input.name,"texcoord",8)==0?strtoul(input.name+8,&end,10):32;
                                 // MSC reflection indices are relative to the pinned

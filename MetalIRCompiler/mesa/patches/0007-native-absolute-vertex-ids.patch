@@ -1,0 +1,305 @@
+diff --git a/src/microsoft/compiler/dxil_signature.c b/src/microsoft/compiler/dxil_signature.c
+index 745ec53..400af42 100644
+--- a/src/microsoft/compiler/dxil_signature.c
++++ b/src/microsoft/compiler/dxil_signature.c
+@@ -191,6 +191,14 @@ typedef void (*semantic_info_proc)(nir_variable *var, struct semantic_info *info
+ static void
+ get_semantic_vs_in_name(nir_variable *var, struct semantic_info *info, mesa_shader_stage stage)
+ {
++   if (var->data.how_declared == nir_var_hidden && var->name &&
++       (!strcmp(var->name, "melonx_native_vertex_id") ||
++        !strcmp(var->name, "melonx_native_instance_id"))) {
++      snprintf(info->name, 64, "%s", var->name);
++      info->index = 0;
++      info->kind = DXIL_SEM_ARBITRARY;
++      return;
++   }
+    strcpy(info->name, "TEXCOORD");
+    info->index = var->data.driver_location;
+    info->kind = DXIL_SEM_ARBITRARY;
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+index 884ef45..1a25130 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -869,7 +869,7 @@ lower_view_index_to_rt_layer(nir_shader *nir)
+ void
+ dxil_spirv_nir_link(nir_shader *nir, nir_shader *prev_stage_nir,
+                     const struct dxil_spirv_runtime_conf *conf,
+-                    struct dxil_spirv_metadata *metadata)
++                      struct dxil_spirv_metadata *metadata)
+ {
+    glsl_type_singleton_init_or_ref();
+ 
+@@ -976,10 +976,96 @@ merge_ubos_and_ssbos(nir_shader *nir)
+    return progress;
+ }
+ 
+-void
+-dxil_spirv_nir_passes(nir_shader *nir,
++
++struct native_vertex_state {
++   nir_variable *inputs[2];
++   int locations[2];
++   uint32_t transported;
++};
++
++static bool
++transport_native_vertex_id(nir_builder *b, nir_instr *instr, void *data)
++{
++   if (instr->type != nir_instr_type_intrinsic)
++      return false;
++   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++   unsigned index;
++   if (intr->intrinsic == nir_intrinsic_load_vertex_id)
++      index = 0;
++   else if (intr->intrinsic == nir_intrinsic_load_instance_id)
++      index = 1;
++   else
++      return false;
++   struct native_vertex_state *state = data;
++   assert(intr->def.bit_size == 32);
++   if (!state->inputs[index]) {
++      state->inputs[index] = nir_variable_create(b->shader, nir_var_shader_in, glsl_uint_type(),
++         index ? "melonx_native_instance_id" : "melonx_native_vertex_id");
++      state->inputs[index]->data.location = VERT_ATTRIB_GENERIC0 + state->locations[index];
++      state->inputs[index]->data.how_declared = nir_var_hidden;
++   }
++   b->cursor = nir_before_instr(instr);
++   nir_def *value = nir_load_var(b, state->inputs[index]);
++   nir_def_rewrite_uses(&intr->def, value);
++   nir_instr_remove(instr);
++   state->transported |= 4u << index;
++   return true;
++}
++
++static void
++lower_metal_vertex_ids(nir_shader *nir, uint32_t *native_vertex_io)
++{
++   if (!native_vertex_io || nir->info.stage != MESA_SHADER_VERTEX) {
++      NIR_PASS(_, nir, nir_lower_system_values);
++      return;
++   }
++   uint32_t occupied = 0;
++   nir_foreach_variable_with_modes(var, nir, nir_var_shader_in) {
++      int first = var->data.location - VERT_ATTRIB_GENERIC0;
++      if (first < 0 || first >= 32)
++         continue;
++      unsigned slots = glsl_count_attribute_slots(var->type, false);
++      if (slots > 32u - first) {
++         NIR_PASS(_, nir, nir_lower_system_values);
++         return;
++      }
++      occupied |= BITFIELD_RANGE(first, slots);
++   }
++   int locations[2] = {-1, -1};
++   for (unsigned i = 0; i < 2; ++i) {
++      for (int slot = 31; slot >= 0; --slot) {
++         if (!(occupied & BITFIELD_BIT(slot))) {
++            locations[i] = slot;
++            occupied |= BITFIELD_BIT(slot);
++            break;
++         }
++      }
++      // Preserve the previous runtime route when there is no spare input slot.
++      if (locations[i] < 0) {
++         NIR_PASS(_, nir, nir_lower_system_values);
++         return;
++      }
++   }
++   const nir_shader_compiler_options *original = nir->options;
++   nir_shader_compiler_options options = *original;
++   options.vertex_id_zero_based = false;
++   options.instance_id_includes_base_index = true;
++   nir->options = &options;
++   NIR_PASS(_, nir, nir_lower_system_values);
++   nir->options = original;
++   struct native_vertex_state state = {0};
++   state.locations[0] = locations[0];
++   state.locations[1] = locations[1];
++   NIR_PASS(_, nir, nir_shader_instructions_pass, transport_native_vertex_id,
++            nir_metadata_control_flow, &state);
++   *native_vertex_io = state.transported;
++}
++
++static void
++dxil_spirv_nir_passes_impl(nir_shader *nir,
+                       const struct dxil_spirv_runtime_conf *conf,
+-                      struct dxil_spirv_metadata *metadata)
++                      struct dxil_spirv_metadata *metadata,
++                      uint32_t *native_vertex_io)
+ {
+    glsl_type_singleton_init_or_ref();
+ 
+@@ -998,7 +1084,7 @@ dxil_spirv_nir_passes(nir_shader *nir,
+    };
+    NIR_PASS(_, nir, nir_lower_sysvals_to_varyings, &sysvals_to_varyings);
+ 
+-   NIR_PASS(_, nir, nir_lower_system_values);
++   lower_metal_vertex_ids(nir, native_vertex_io);
+ 
+    nir_lower_compute_system_values_options compute_options = {
+       .has_base_workgroup_id = conf->workgroup_id_mode != DXIL_SPIRV_SYSVAL_TYPE_ZERO,
+@@ -1262,3 +1348,21 @@ dxil_spirv_nir_passes(nir_shader *nir,
+ 
+    glsl_type_singleton_decref();
+ }
++
++void
++dxil_spirv_nir_passes(nir_shader *nir,
++                      const struct dxil_spirv_runtime_conf *conf,
++                        struct dxil_spirv_metadata *metadata)
++{
++   dxil_spirv_nir_passes_impl(nir, conf, metadata, NULL);
++}
++
++void
++dxil_spirv_nir_passes_with_metal_vertex_ids(nir_shader *nir,
++                      const struct dxil_spirv_runtime_conf *conf,
++                      struct dxil_spirv_metadata *metadata,
++                      uint32_t *native_vertex_io)
++{
++   *native_vertex_io = 0;
++   dxil_spirv_nir_passes_impl(nir, conf, metadata, native_vertex_io);
++}
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
+index fab330c..92bc63d 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
+@@ -44,12 +44,12 @@ dxil_spirv_nir_has_unit_point_size(nir_shader *nir);
+ void
+ dxil_spirv_nir_link(nir_shader *nir, nir_shader *prev_stage_nir,
+                     const struct dxil_spirv_runtime_conf *conf,
+-                    struct dxil_spirv_metadata *metadata);
++                      struct dxil_spirv_metadata *metadata);
+ 
+ void
+ dxil_spirv_nir_passes(nir_shader *nir,
+                       const struct dxil_spirv_runtime_conf *conf,
+-                      struct dxil_spirv_metadata *metadata);
++                        struct dxil_spirv_metadata *metadata);
+ 
+ struct dxil_spirv_binding_remapping {
+    /* If ~0, don't lower to bindless */
+@@ -95,4 +95,10 @@ dxil_spirv_nir_lower_yz_flip(nir_shader *shader,
+                              const struct dxil_spirv_runtime_conf *rt_conf,
+                              bool *reads_sysval_ubo);
+ 
++void
++dxil_spirv_nir_passes_with_metal_vertex_ids(nir_shader *nir,
++                      const struct dxil_spirv_runtime_conf *conf,
++                      struct dxil_spirv_metadata *metadata,
++                      uint32_t *native_vertex_io);
++
+ #endif
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+index 2440d6e..2484e3d 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+@@ -151,7 +151,7 @@ spirv_to_dxil_impl(const uint32_t *words, size_t word_count,
+               const struct dxil_spirv_runtime_conf *conf,
+               const struct dxil_spirv_logger *logger,
+               struct dxil_spirv_object *out_dxil,
+-              bool clip_halfz, uint32_t *native_io)
++              bool clip_halfz, uint32_t *native_io, uint32_t *native_vertex_io)
+ {
+    if (stage == DXIL_SPIRV_SHADER_NONE || stage == DXIL_SPIRV_SHADER_KERNEL)
+       return false;
+@@ -222,7 +222,10 @@ spirv_to_dxil_impl(const uint32_t *words, size_t word_count,
+       NIR_PASS(_, nir, nir_lower_clip_halfz);
+    }
+ 
+-   dxil_spirv_nir_passes(nir, conf, &out_dxil->metadata);
++   if (native_vertex_io)
++      dxil_spirv_nir_passes_with_metal_vertex_ids(nir, conf, &out_dxil->metadata, native_vertex_io);
++   else
++      dxil_spirv_nir_passes(nir, conf, &out_dxil->metadata);
+    out_dxil->metadata.unit_point_size |= unit_point_size;
+ 
+    maybe_lower_to_bindless(nir, conf);
+@@ -267,7 +270,7 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
+ {
+    return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
+                             stage, entry_point_name, validator_version_max,
+-                            debug_options, conf, logger, out_dxil, false, NULL);
++                            debug_options, conf, logger, out_dxil, false, NULL, NULL);
+ }
+ 
+ bool
+@@ -283,7 +286,7 @@ spirv_to_dxil_with_clip_space(const uint32_t *words, size_t word_count,
+ {
+    return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
+                             stage, entry_point_name, validator_version_max,
+-                            debug_options, conf, logger, out_dxil, clip_halfz, NULL);
++                            debug_options, conf, logger, out_dxil, clip_halfz, NULL, NULL);
+ }
+ 
+ bool
+@@ -301,7 +304,29 @@ spirv_to_dxil_with_native_raster(const uint32_t *words, size_t word_count,
+       return false;
+    return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
+                             stage, entry_point_name, validator_version_max,
+-                            debug_options, conf, logger, out_dxil, clip_halfz, native_io);
++                            debug_options, conf, logger, out_dxil, clip_halfz, native_io, NULL);
++}
++
++bool
++spirv_to_dxil_with_absolute_vertex_ids(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz,
++              bool point_io, uint32_t *native_io)
++{
++   if (!native_io) return false;
++   uint32_t points = 0, ids = 0;
++   bool ok = spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
++                            stage, entry_point_name, validator_version_max,
++                            debug_options, conf, logger, out_dxil, clip_halfz,
++                            point_io ? &points : NULL, &ids);
++   *native_io = points | ids;
++   return ok;
+ }
+ 
+ bool
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.def b/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
+index 27587aa..7e6ee81 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
+@@ -1,6 +1,7 @@
+ EXPORTS
+     spirv_to_dxil
+     spirv_to_dxil_with_clip_space
++    spirv_to_dxil_with_absolute_vertex_ids
+     spirv_to_dxil_link
+     spirv_to_dxil_free
+     spirv_to_dxil_get_version
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index bf8952c..55059a7 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -294,6 +294,21 @@ spirv_to_dxil_with_native_raster(const uint32_t *words, size_t word_count,
+               const struct dxil_spirv_logger *logger,
+               struct dxil_spirv_object *out_dxil, bool clip_halfz, uint32_t *native_io);
+ 
++// Metal-only native ID transport. Existing config/metadata structs and entry
++// points retain their ABI. Requires an AIR/public-attribute adapter. native_io
++// reports point-size/coord in bits0/1 and absolute vertex/instance ID in bits2/3.
++bool
++spirv_to_dxil_with_absolute_vertex_ids(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz,
++              bool point_io, uint32_t *native_io);
++
+ // One SPIR-V stage fed to spirv_to_dxil_link.
+ struct dxil_spirv_link_stage {
+    const uint32_t *words;

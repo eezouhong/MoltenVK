@@ -162,7 +162,7 @@ are not whole-frame costs or FPS measurements.
 CPU-only contract/calibration test, from the repository root:
 
 ```sh
-clang++ -std=c++17 -O2 -pthread -I MoltenVK/MoltenVK/GPUObjects \
+clang++ -std=c++17 -O2 -pthread -DMVK_REPLAY_TRACE=1 -I MoltenVK/MoltenVK/GPUObjects \
   Tests/ReplayTrace/binding_trace_test.cpp -o "$TEST_OUTPUT"
 "$TEST_OUTPUT"
 ```

@@ -48,4 +48,30 @@ int main() {
     for (auto& thread : threads) thread.join();
     assert(calls == 1);
     for (const auto& artifact : output) assert(artifact == output[0]);
+
+    // Deterministic compiler rejection is shared across callers, whereas an
+    // allocation/transient failure remains retryable on the same key.
+    Cache failures(0, 0);
+    unsigned rejected=0;
+    for(unsigned i=0;i<100;++i)assert(!failures.get("unsupported",[&] {
+        ++rejected;return Cache::Result{{},0,true};
+    }));
+    assert(rejected==1);
+    unsigned retries=0;
+    assert(!failures.get("retry",[&] {++retries;return Cache::Result{{},0,false};}));
+    auto recovered=failures.get("retry",[&] {
+        ++retries;return Cache::Result{std::make_shared<Artifact>(Artifact{9}),1,false};
+    });
+    assert(recovered&&recovered->value==9&&retries==2);
+
+    calls=0;entered=0;threads.clear();
+    for(unsigned i=0;i<8;++i)threads.emplace_back([&] {
+        ++entered;
+        while(entered.load()!=8)std::this_thread::yield();
+        assert(!failures.get("concurrent-rejection",[&] {
+            ++calls;return Cache::Result{{},0,true};
+        }));
+    });
+    for(auto& thread:threads)thread.join();
+    assert(calls==1);
 }

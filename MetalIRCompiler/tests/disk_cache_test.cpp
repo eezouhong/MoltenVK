@@ -64,6 +64,27 @@ int main(int argc,char** argv) {
         DiskCache cache(root/"lru",3000);cache.store(key('d'),5,r,metadata);cache.waitIdle();
         assert(!load(cache,key('a'))&&load(cache,key('c'))&&load(cache,key('d')));
     }
+    {
+        // A payload at the byte limit plus its header cannot fit in the write
+        // queue. This deterministically exercises pressure without racing I/O.
+        DiskCache cache(root/"pressure",0);
+        std::vector<uint8_t> large(16*1024*1024,42);auto oversized=result(large);
+        cache.store(key('e'),5,oversized,metadata);cache.waitIdle();
+        assert(cache.droppedWrites()==1&&cache.failedWrites()==0);
+        assert(!load(cache,key('e')));
+        cache.store(key('a'),5,r,metadata);cache.waitIdle();
+        assert(load(cache,key('a'))&&cache.droppedWrites()==1);
+    }
+    {
+        // Rename onto a directory must fail; the writer must release its
+        // reservation, report failure, and continue accepting valid writes.
+        auto directory=root/"write-failure";fs::create_directories(directory/(key('f')+".mir"));
+        DiskCache cache(directory,0);
+        cache.store(key('f'),5,r,metadata);cache.waitIdle();
+        assert(cache.failedWrites()==1&&cache.droppedWrites()==0);
+        cache.store(key('a'),5,r,metadata);cache.waitIdle();assert(load(cache,key('a')));
+        for(auto& e:fs::directory_iterator(directory))assert(e.path().extension()==".mir");
+    }
     DiskCache disabled({},0);assert(!disabled.enabled());disabled.store(key('a'),5,r,metadata);
-    assert(!load(disabled,key('a')));printf("disk cache: roundtrip, corruption, truncation, version, ABI, trailing bytes, concurrent writes, LRU, restart, disabled and key validation passed\n");
+    assert(!load(disabled,key('a')));printf("disk cache: roundtrip, corruption, truncation, version, ABI, trailing bytes, concurrent writes, LRU, restart, pressure, failed-write recovery, disabled and key validation passed\n");
 }

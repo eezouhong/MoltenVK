@@ -89,6 +89,10 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 
 5,000-set 定向夹具中，固定 draw origins 的编码 CPU 没有改善（1.1861→1.1964 ms）；变化 origins 的同输入对照降约 4.01%（1.2544→1.2041 ms）。每条路径一个进程、一批 warmup 加八批测量，所有 320,000 rows/sentinels 均核验，时序测量关闭 validation。这个范围只支持变化参数路径的收益，不能关闭固定场景的 +0.65 ms binding gate。首份 microfixture 的 criteria 文本误沿用了 root-payload 候选描述，原文保留，实际源码/身份/ flags 和修正的范围另行记录。
 
+烟雾已定位到捕获中的全屏合成 draw 631800（pipeline 100918，indexed 3 vertices）。一个隔离回放器在关闭跳过开关时，烟雾 ROI 与普通 MSL 回放逐像素一致；整帧只有 ROI 外四个像素相差 1 色阶。只跳过该 draw（日志确认一次）后，白色地面烟雾消失，ROI 33,330 个像素变化超过 1 色阶。这个干预支持来源归因，不是对省略绘制的正确性验收。
+
+实际 VS/FS bytes、绑定序列与完整资源输入录制已核验并留在私有 handoff。之前同一固定输入的 MSL/IR-strict/IR-fast 都出现烟雾：53,868-pixel ROI 中 MSL/IR 各 29 个像素差 >1、4 个差 >4，最大差 6；strict/fast 最大差 1。没有任意容差宣布等价；最终 public 860615/匹配 compiler 的三路对比正在执行。资源抓取检查点曾改变最终画面，因此已排除其 oracle 用途；原始失败保留。
+
 ## 修正和失败记录
 
 - Xcode 源/header membership 曾导致缺 header、重复安装 header 和 wrapper 链接失败。header 改为 Project 可见性，IR 实现只由四个 core static target 编译，dynamic wrapper 使用已有静态库；修复后的完整 CI 通过。
@@ -98,11 +102,27 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 - 两次完整 frame capture 的 controller 分别因存储耗尽、诊断容量上限失败。后续离线检查发现第二次正常退出后的最终文件能完整解析出一帧，并已固定哈希；这修正了“controller 失败即录制不可用”的推断。基线回放先因缺显式 Vulkan loader 失败，配置修复后在 GFXReconstruct 的 graphics-pipeline dispatch table 查找处崩溃，尚无有效画面。原失败、录制及回放崩溃报告保留，未宣称烟雾正确。
 - 较早的不同游戏时刻截图不能证明烟雾等价。连续帧显示两条路径都能出现烟雾，但缺少同一实际 smoke draw/input 的逐像素 oracle。
 
+### Public 860615 的最终固定场景对照
+
+同产品运行时和冻结存档，MSL/IR 各正常 F24/实际 process exit 0；实际 native SHA 与 public 860615 对应，IR 使用匹配 compiler。两路各一次静态窗口，分别校准 native clock 6 与 .NET clock 8，再排除 pipeline 时间段（±100 ms）。MSL/IR 有效 pipeline-free 帧为 1746/1786。
+
+| 指标 | MSL | IR | 当前结论 |
+|---|---:|---:|---|
+| 编码线程 CPU | 7.4928 ms | 7.5654 ms | 增量 +0.0726；1/30/60/120-frame bootstrap 上界最大 +1.63%，通过总编码 ≤2% 条件 |
+| 校准 resource binding CPU | 1.3481 ms | 1.6716 ms | **+0.3234 ms，仍超过 ≤0.1 条件** |
+| GPU interval union | 18.0412 ms | 17.6446 ms | 这一个静态对照的原始范围；不外推 FPS |
+| Metal−Vulkan 整段中位增量 | — | +9.88 MiB | 较历史 +58–64 和上一轮 +23.27 明显下降；为同采样点代理 |
+| footprint−Vulkan 整段中位增量 | — | +39.25 MiB | 较上一轮 +664.19 下降；不是物理所有者分解 |
+
+内存窗口是 requested Vulkan live >512 MiB 的整段会话，包含加载，不与静态帧窗口混用。两路采样窗口中仍有 11/2 个 pipeline 创建，均通过 ticket 时间段转换明确排除，而不是因“稳定 warmup”默认为完全无编译。单对串行帧 bootstrap 不能替代多运行置信区间。
+
+最终 public 860615/匹配 compiler 的 MSL/IR-strict/IR-fast 对同一输入录制均正常 process exit 0，无 shader/replayer 错误。已定位合成 draw 的 53,868-pixel 烟雾 ROI，MSL/IR 仍只有 29 pixels 差 >1、4 pixels 差 >4，最大 6；strict/fast 最大 1。没有重现烟雾消失，没有宣称位级完全相同。剩余性能工作仍针对 binding 分项，不用总编码通过替代它。
+
 ## 合入前仍需完成
 
-1. 将绑定 CPU 回退降至约定门槛；候选优化需要定向回归与最终同指标确认。
-2. 找到实际烟雾 draw，固定 shader、资源和 draw inputs，比较 MSL / IR-strict / IR-fast。通用 point/math/system-value 用例不能替代这项验收。
-3. 解释并处理额外进程 footprint；已降低的 descriptor pool/Metal residual 与未降低的进程 residual 都需保留报告。
+1. 继续将 binding 分项 +0.3234 ms 降至 ≤0.1；总编码条件已通过，两者不能相互替代。
+2. 实际烟雾来源 draw 631800 已由无 dumper 的单操作因果对照定位；最终三路固定输入和逐像素结果已记录，没有重现烟雾消失。剩余微小精度差异保留，不套任意容差声称位级等价。
+3. review 指定的同采样点 Metal residual 已降至 +9.88 MiB，进程 residual 为 +39.25；分配与并发修复证据完整，物理归因限制和所有不利历史结果继续保留。
 4. 实际 MSC 确定性拒绝与同设备负缓存覆盖已通过；stage-key 复用/失效 GPU 夹具已通过。CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
 5. 可选 ABI9 iOS arm64/macOS compiler framework 已构建并核验四个导出符号、二进制 SHA 和 iOS 17.0 最低部署版本；iOS 对象代码的 ABI 函数返回 9。iOS compiler 为 13.30 MB，Apple MSC 为 34.63 MB，原始厂商 SHA 保持不变。候选 manifest 已准备；默认清单仍须等匹配的 ABI9 native 进入维护 RC 后一起更新。仅构建，没有安装或操作手机；现有功能分支 pin 仍是实验状态。
 

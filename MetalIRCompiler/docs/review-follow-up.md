@@ -160,6 +160,33 @@ root 容量，不再只为 ≤128 B 的小表建立 tail，以扩大单 used-set
 路径覆盖。实际使用 push/runtime 或多个 set 的 stage 继续原路线。
 候选尚未进入生产代码，同一双条件门槛保持不变。
 
+### 最新场景与完整 app 构建证据
+
+全部固定表的静态根表候选在实际对照中仍未过线：binding 增量
++0.3871 ms，总编码 bootstrap 上界最大 +8.06%。同采样点整段
+Metal/process residual 中位增量 +10.59/−159.61 MiB；窗口末
+IR pool 请求量约 31.39 MiB，退出全部释放。容量越界负例确认在
+分配前返回 OUT_OF_DEVICE_MEMORY 并清空句柄。该候选仍已撤下。
+
+进一步检查发现 runtimeFlags 包含 raster annotation：flags4
+为 UNIT_POINT_SIZE，而 root 参数只由 bits1/2/32/64 请求。
+此前要求所有 flags 为零错误排除了实际记录中 398 个单 set 顶点
+stage。这个数字是 stage inventory，不是运行时 draw 频率。
+修正条件后 flags4 的独立输出与 direct-root proof、普通/点精灵/
+描述符回归均通过；实际场景仍为 binding +0.5272 ms、编码上界
++3.39%，不能宣布性能接受。原始结果全部保留。当前私有实验只
+改变地址读取策略：按 descriptor invalidation 复用编码器本地地址，
+避免每次访问大 GPU table 尾部；定向收益尚需原场景双门槛验收。
+
+当前产品代码已经完成真实 NativeAOT 库和 iOS app 构建，而不再
+只有旧 executable 的包检查。隔离 preview worktree 使用匹配 ABI9
+compiler/framework、实际已核验 native 和 preview manifest；正式
+产品清单保持不变。NativeAOT 库约 41.12 MB；Xcode app build 成功，
+可选动态加载边界、四个 compiler 导出、依赖路径与 legal notices
+静态检查通过。41 条 Xcode warning 和原始 AOT warning 留在证据中。
+首次 AOT 构建的缺失路径斜杠导致错误 sysroot 已修正；失败日志
+lossless gzip 保留。只构建、未签名验收、未安装或操作手机。
+
 ## 合入前仍需完成
 
 1. 继续将 binding 分项 +0.3234 ms 降至 ≤0.1；总编码条件已通过，两者不能相互替代。

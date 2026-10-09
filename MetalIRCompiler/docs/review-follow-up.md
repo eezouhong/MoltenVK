@@ -4,6 +4,37 @@ MeloNX 首次遇到 shader 时，MSL 源码编译会阻塞 pipeline 准备。这
 
 关联 PR：[MeloNX #285](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/285)、[MoltenVK #24](https://github.com/eezouhong/MoltenVK/pull/24)。两者仍为 Draft。本文区分已实现的功能、已验证的范围和待验收事项。
 
+## 当前交付状态（2026-10-09）
+
+用户已明确接受最新实测 binding 增量 **+0.2871 ms/帧**，并要求达到不了的门槛留下 PR 评论，由用户统一验收。原 review 的 ≤0.1 ms 条件仍记为未达到；这是显式接受的例外，不改写测量结果。两个功能 PR 保持 Draft，默认维护 RC pin 的更新及手机验收留待该最终决定。
+
+最新保留实现把固定 IR descriptor table 的 136 B 只读 root 放在各 allocation 尾部，只有单 used-set、没有实际 push/runtime 参数的 stage 使用。UNIT_POINT_SIZE 等 raster annotation 不请求 root payload。普通 root bytes 路线保持完整 ABI；GPU→bytes 切换强制刷新地址和 ABI。IR 复用无 auxiliary offsets 的 union slot 保存 allocation 地址，MSL auxiliary pointer 与 64 B descriptor-set stride 保持原状；pool 包含 root/对齐容量并提前拒绝越界。没有采用慢的多 set 快照实验。私有 proof/pool 日志已从产品代码移除。
+
+| 最新测量 | MSL | IR | 范围与结论 |
+|---|---:|---:|---|
+| encode 线程 CPU | 7.4809 ms | 7.5225 ms | 1787/1784 个 pipeline-free 帧，增量 +0.0416 ms；1/30/60/120-frame bootstrap 上界最大 +1.07%，满足总编码 ≤2% |
+| 校准 resource binding 增量 | — | +0.2871 ms | 原 ≤0.1 未达到；用户明确接受已披露开销 |
+| GPU interval union | 18.1707 ms | 17.9574 ms | 单个 warm 静态对照，不能外推 FPS |
+| 静态窗口末 native pool | 18.456 MiB | 31.300 MiB | 退出均全部释放；历史旧 IR 79.66 MiB |
+| Metal allocated−Vulkan requested 中位差 | — | +21.63 MiB | Vulkan requested live >512 MiB 的整段会话、含加载；历史 +58–64 MiB |
+| footprint−Vulkan requested 中位差 | — | −60.14 MiB | 同范围的比较代理，不能作物理所有者分解 |
+
+两路使用同产品代码、冻结输入、诊断/校准配置，各正常 F24 与实际 process exit0。native/.NET 时钟分别校准，pipeline ticket 区间 ±100 ms 明确排除。采样校准保留负值、要求实际激活与完整计数匹配；串行 frame bootstrap 不等于独立运行置信区间。CPU 验收来自保留的私有诊断候选；去掉临时日志的正式版本另做 GPU/固定输入与 package 校验，不声称测得未插桩产品 FPS。
+
+### 最终正式版本校验
+
+去掉私有 proof/pool 日志后的 Mac ON/OFF 版本均编译成功。Release OFF 的系统值/缓存/明确拒绝 23 项、点精灵 14 项与 IR 描述符 40-row oracle 通过。需要 replay 导出的独立 root probes 使用 ON 版本：set0/set7、100000 小 UBO 容量/free/reset、提前 capacity-overflow 拒绝、GPU→bytes→GPU 的三个独立输出区域、交替 pool 和大表均通过 Metal API/GPU validation。
+
+最终 Release native、release compiler 对同一捕获的 MSL/IR-strict/IR-fast 均正常 process exit0，加载身份验证通过，无 replayer ERROR/FATAL 或 IR stage rejection。烟雾 ROI 共 53868 pixels，MSL/IR 各29 pixels差>1、4 pixels差>4、最大6；strict/fast最大1。整帧 MSL/IR 最大43，strict/fast最大5，完整分布保留；不能把 ROI 结论当作整帧位级等价。startup 的“automatic MSL fallback disabled”是明确选择提示，不是失败计数。
+
+新增 MSL combined-image/sampler 描述符夹具在 API/GPU validation 下抛出 `MTLDebugSamplerState storageMode` 异常，未产生输出 oracle。未改动的维护 RC6 `9a09a595` 使用同一输入也出现相同异常；这支持“不是本次 root/union 改动新增”的判断，但该额外 MSL 用例仍未通过，保留为基线独立问题，不能计入全部通过。
+
+Xcode 首次重建因默认工具链缺 iOS 平台失败，改用已安装且原先成功的 beta3 工具链。提交后的增量 build 又复用了旧 revision header；该生成 phase 声明 output、没有 Git input。删除仅本任务 derived output 的自动生成 header 后重建，二进制已确认宣告实际代码提交 `fe36cb9d`。所有失败和误配均保留。
+
+最终 `fe36cb9d` native iOS Release 与 ABI9 compiler 已进入隔离 preview manifest，pin/dependency preflight 通过；现有当前 NativeAOT 库搭配它完成真实 iOS app 增量构建，静态包验证和 app 内 native/compiler SHA 对应检查通过。二进制无 replay 导出，compiler 不直接链接进 iOS15 executable，最低动态加载范围仍是 iOS17。当前完整 app 的首次构建与后续匹配 native 的增量构建均保留日志；不是签名/安装/设备运行验证。正式清单仍为既有 `3744ea5f`/ABI8，尚未满足 review 要求的“合入维护 RC 后改为实际合入 revision”。
+
+下文保留各阶段设计、失败和不利结果。早期“继续追 ≤0.1”的阶段结论已由上述用户决定取代。
+
 ## 已拆出并合入的三个独立 PR
 
 | PR | 问题与修复 | 已有验证 |
@@ -228,12 +259,13 @@ CPU 夹具通过，普通/点精灵/描述符和独立 GPU 输出均通过。
 定向 parent 对照编码 1.3041→1.2396 ms，校准 binding 35.08→26.90 ns，
 正确性已验证，实际双条件验收仍在进行；不据此提前接受。
 
-## 合入前仍需完成
+## 用户统一验收的事项
 
-1. 继续将 binding 分项 +0.3234 ms 降至 ≤0.1；总编码条件已通过，两者不能相互替代。
-2. 实际烟雾来源 draw 631800 已由无 dumper 的单操作因果对照定位；最终三路固定输入和逐像素结果已记录，没有重现烟雾消失。剩余微小精度差异保留，不套任意容差声称位级等价。
-3. review 指定的同采样点 Metal residual 已降至 +9.88 MiB，进程 residual 为 +39.25；分配与并发修复证据完整，物理归因限制和所有不利历史结果继续保留。
-4. 实际 MSC 确定性拒绝与同设备负缓存覆盖已通过；stage-key 复用/失效 GPU 夹具已通过。CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
-5. 可选 ABI9 iOS arm64/macOS compiler framework 已构建并核验四个导出符号、二进制 SHA 和 iOS 17.0 最低部署版本；iOS 对象代码的 ABI 函数返回 9。iOS compiler 为 13.30 MB，Apple MSC 为 34.63 MB，原始厂商 SHA 保持不变。候选 manifest 已准备；默认清单仍须等匹配的 ABI9 native 进入维护 RC 后一起更新。仅构建，没有安装或操作手机；现有功能分支 pin 仍是实验状态。
+- 原 binding ≤0.1 ms 条件未达到，最新 +0.2871 ms 已由用户明确接受；总 encode 条件通过。所有不利候选继续保留，不再通过复跑寻找有利负载。
+- 同一实际 smoke draw/input 的 MSL/IR-strict/IR-fast 没有重现烟雾消失；微小像素差仍披露，不声称位级等价。
+- 源码与主机验证、ABI9 compiler、NativeAOT/iOS preview package 已准备。默认清单应在 native #24 经用户验收合入维护 RC 后，更新到实际 merge revision，并补维护 RC 的 MSL 回归；没有提前把默认清单改成新功能分支。
+- 最新完整远端 CI 无法执行：native 仓库 Actions 禁用，产品 hosted CI 有账单限制。旧全平台成功 CI 不代表新代码已通过；本地 Mac/iOS build 与定向 GPU 证据单独记录。
+- 主机静态场景没有 indirect draw；真实非零合成夹具验证了 producer、输出和参数路径，游戏 indirect 场景覆盖、真机动态加载、jetsam 与 FPS 仍由用户决定后续范围。
+- 历史累计编译时间与 warm cache 命中已改善，现有前台 join/限流事件不足以证明前台卡顿下降；该限制明确保留。
 
-不再通过六对整局 ABBA 或挑选负载接近的复跑寻找有利结果。数据分析方法已整理为本地 `melonx-graphics-acceptance` skill，并使用历史三组日志验证其计算。手机验收暂不在用户授权范围内；主机数据不能宣称真机动态加载、jetsam 或最终 FPS 已通过。
+数据分析和 first-divergence 调试方法已提交到项目 `.agents/skills`，本机副本同步。原始资源、失败和身份记录保存在私有 handoff，公共仓库只保留方法、源码与聚合结论。

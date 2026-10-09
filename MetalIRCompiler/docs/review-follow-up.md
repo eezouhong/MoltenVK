@@ -302,11 +302,38 @@ IR并发峰值1/2/2，默认cap2，结束时active/waiting均0；batch/quiet-rel
 
 机械执行器在测试结束后误用zsh保留变量`status`，其外层包装返回1；队列1785的权威终态exit0、两实际子进程exit0、结果和输入身份核验均通过。包装错误单独保留，没有作为产品失败或隐藏掉。
 
+### 正式 180 秒 ZL 巡逻补验
+
+此前约 30 FPS 的窗口是静态 binding 诊断，不能作为 Debug Tool 的正式移动路线结果。用户指出范围缺口后，重新读取 canonical TOTK case，使用当前 shipping master `09d98ddd5ccf1e3f980ff012ac6b9ed6ae4494a4` / native pin `9a09a595a54792a517c7d34437ad4857a894a685` 作为 MSL 基线；IR 候选使用合入该 master 的 managed runtime `558b568d50935efbdacbc66e98e0c9cf4420299d`、native `c2ca76af6dcde4355969ddf2a8933eb51e7f7765`（代码仍为 `fe36cb9d`）及 release17 / absolute-ID0007 / ABI9 compiler。合入 master 后的四类定向 CPU 测试共 52 项通过，0 失败、0 跳过。
+
+两路从同一 frozen save 完整恢复到独立 profile，manifest 相同，固件均确认 23.0.0；应用 shader/MSL/IR cache 冷启动，系统 Metal cache 未清。canonical navigation 使用 `--start-clock none`，从第一个可读 HUD 开始，起始时钟分别 17:30 / 17:35。canonical `run_zl_patrol.py` 执行 10 个 18 秒循环，每条输入包含 ZL，前进 5+3 秒、后退 5+5 秒。测量期间没有截图或额外导航输入。
+
+共享队列 1812 两组均完成 40/40 段 matching ACK，计划时序/按住时长全部一致，最大提交延迟 11.879 / 10.074 ms，远低于脚本 1 秒拒绝线。实际时长 180.0155 / 180.0227 秒；F24 ACK、关闭 handler、controller 和实际 process exit0 均确认，无强制停止。实际映射的 native SHA 与候选 compiler SHA 均核验。聚合身份和完整分布见 [路线证据](evidence/zl-route-20261009.json)。
+
+| 正式路线窗口 | MSL master | IR 候选 |
+|---|---:|---:|
+| FPS 区间样本数 | 177 | 177 |
+| FPS 样本均值 | 19.8637 | 25.0378 |
+| FPS 样本中位数 | 21.3252 | 25.4929 |
+| FPS 样本 P05 | 3.5147 | 16.8834 |
+| FPS 样本范围 | 0–31.7319 | 6.4309–31.2727 |
+| 近似前进分段 FPS 均值 | 19.2106 | 25.7274 |
+| 近似后退分段 FPS 均值 | 20.3783 | 24.4818 |
+| pipeline 创建次数 / 累计耗时 | 551 / 39463.3171 ms | 391 / 9011.1525 ms |
+| blocking shader join 累计耗时 | 13.6250 ms | 2.7494 ms |
+| blocking pipeline join 累计耗时 | 0 ms | 0 ms |
+
+这补齐了正式移动输入协议的主机观测，**不是独立重复实验的性能 PASS，也不证明 IR 编译器单独带来上述 FPS 差值**。MSL 先跑、IR 后跑，系统 Metal cache 与外部负载未受控；比较是 shipping master/pin 与整个 IR 功能候选，实际终点位置和游戏时钟不同，pipeline 工作量也不同。起终点截图中人物均在地面，未见历史拒绝路线的爬墙症状；截图只回答这些可见状态，不证明中途所有帧的正确性。FPS/分位数属于遥测区间样本，不能冒充逐帧 P95；前后分段按 ACK 关联的性能游标近似划分，不能证明原生按键 acceptance/expiry 或绝对持续 ZL。累计 pipeline 耗时与 join 计数也不能相加为前台阻塞时间。
+
+首次 baseline 因旧二进制 revision header 不匹配 pin 被启动门禁拒绝；纠正本任务生成 header 并重建后，下一次 baseline 首帧前又发生 NAS 游戏输入 I/O 错误并 SIGABRT。两次失败都保留；用户暂停 NAS 解压期间未再启动游戏，确认 NAS 正常后 fresh905 两路才完成。没有丢弃不利样本，也没有为寻找有利负载复跑。
+
+当前源码已推送，可以 review。正式路线退出后，最新 master-merged `558b568d` 的 NativeAOT 库和 unsigned iOS preview app 重建成功，静态包验证通过；app 内 `Ryujinx.Library.dylib` 与本次 AOT 产物逐字节相同（41137632 B，SHA256 `6855e244da8552d7a01645799a7e3324980d17e83705b939beb7be5d3fbdb867`）。包使用已核验的 native iOS `fe36cb9d` / ABI9 preview 依赖，compiler 和 MSC SHA 与 manifest 一致。该结果补齐最新 managed 代码的构建与嵌入身份，不证明设备动态加载、签名、jetsam 或手机 FPS；手机未操作。
+
 ## 用户统一验收的事项
 
 - 原 binding ≤0.1 ms 条件未达到，最新 +0.2871 ms 已由用户明确接受；总 encode 条件通过。所有不利候选继续保留，不再通过复跑寻找有利负载。
 - 同一实际 smoke draw/input 的 MSL/IR-strict/IR-fast 没有重现烟雾消失；微小像素差仍披露，不声称位级等价。
-- 源码与主机验证、ABI9 compiler、NativeAOT/iOS preview package 已准备。默认清单应在 native #24 经用户验收合入维护 RC 后，更新到实际 merge revision，并补维护 RC 的 MSL 回归；没有提前把默认清单改成新功能分支。
+- 源码、主机验证、ABI9 compiler 与最新 master-merged managed runtime 的 NativeAOT/iOS preview package 校验均已准备，身份和范围见上述记录。默认清单应在 native #24 经用户验收合入维护 RC 后，更新到实际 merge revision，并补维护 RC 的 MSL 回归；没有提前把默认清单改成新功能分支。
 - 最新完整远端 CI 无法执行：native 仓库 Actions 禁用，产品 hosted CI 有账单限制。旧全平台成功 CI 不代表新代码已通过；本地 Mac/iOS build 与定向 GPU 证据单独记录。
 - 主机静态场景没有 indirect draw；真实非零合成夹具验证了 producer、输出和参数路径，游戏 indirect 场景覆盖、真机动态加载、jetsam 与 FPS 仍由用户决定后续范围。
 - 历史累计编译时间与 warm cache 命中已改善，现有前台 join/限流事件不足以证明前台卡顿下降；该限制明确保留。

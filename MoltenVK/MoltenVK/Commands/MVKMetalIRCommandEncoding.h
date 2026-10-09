@@ -38,6 +38,8 @@ public:
     void prepareIndirectDispatch(const MVKMetalIRMetadata* artifact, id<MTLBuffer> arguments, NSUInteger offset);
     BufferBinding runtimeBinding(bool compute) const;
     BufferBinding rawRuntimeBinding(bool compute) const;
+    // Valid only for metadata with DRAW_PARAMETERS. Other shaders leave _draw
+    // cached; consumers must use the same flag and never infer it from this data.
     const DrawBinding& drawBinding() const { return _draw; }
 
 private:

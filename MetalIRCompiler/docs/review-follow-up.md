@@ -6,14 +6,14 @@ MeloNX 首次遇到 shader 时，MSL 源码编译会阻塞 pipeline 准备。这
 
 ## 当前交付状态（2026-10-09）
 
-用户已明确接受最新实测 binding 增量 **+0.2871 ms/帧**，并要求达到不了的门槛留下 PR 评论，由用户统一验收。原 review 的 ≤0.1 ms 条件仍记为未达到；这是显式接受的例外，不改写测量结果。两个功能 PR 保持 Draft，默认维护 RC pin 的更新及手机验收留待该最终决定。
+最新复审已撤销 **binding ≤0.1 ms** 分项门槛：分组采样用于归因，不能代替总成本验收。后续只按总编码线程 CPU（≤2%）、GPU union 和动态 guest 帧间隔评估性能，不再为 binding 跑实验。历史 +0.2871 ms 测量和用户当时接受该值的决定继续保留，不改写旧数据。两个功能 PR 保持 Draft，默认维护 RC pin 的更新及手机验收留待该最终决定。
 
 最新保留实现把固定 IR descriptor table 的 136 B 只读 root 放在各 allocation 尾部，只有单 used-set、没有实际 push/runtime 参数的 stage 使用。UNIT_POINT_SIZE 等 raster annotation 不请求 root payload。普通 root bytes 路线保持完整 ABI；GPU→bytes 切换强制刷新地址和 ABI。IR 复用无 auxiliary offsets 的 union slot 保存 allocation 地址，MSL auxiliary pointer 与 64 B descriptor-set stride 保持原状；pool 包含 root/对齐容量并提前拒绝越界。没有采用慢的多 set 快照实验。私有 proof/pool 日志已从产品代码移除。
 
 | 最新测量 | MSL | IR | 范围与结论 |
 |---|---:|---:|---|
 | encode 线程 CPU | 7.4809 ms | 7.5225 ms | 1787/1784 个 pipeline-free 帧，增量 +0.0416 ms；1/30/60/120-frame bootstrap 上界最大 +1.07%，满足总编码 ≤2% |
-| 校准 resource binding 增量 | — | +0.2871 ms | 原 ≤0.1 未达到；用户明确接受已披露开销 |
+| 校准 resource binding 增量 | — | +0.2871 ms | 仅诊断分项；复审已撤销独立 ≤0.1 门槛 |
 | GPU interval union | 18.1707 ms | 17.9574 ms | 单个 warm 静态对照，不能外推 FPS |
 | 静态窗口末 native pool | 18.456 MiB | 31.300 MiB | 退出均全部释放；历史旧 IR 79.66 MiB |
 | Metal allocated−Vulkan requested 中位差 | — | +21.63 MiB | Vulkan requested live >512 MiB 的整段会话、含加载；历史 +58–64 MiB |
@@ -329,9 +329,17 @@ IR并发峰值1/2/2，默认cap2，结束时active/waiting均0；batch/quiet-rel
 
 当前源码已推送，可以 review。正式路线退出后，最新 master-merged `558b568d` 的 NativeAOT 库和 unsigned iOS preview app 重建成功，静态包验证通过；app 内 `Ryujinx.Library.dylib` 与本次 AOT 产物逐字节相同（41137632 B，SHA256 `6855e244da8552d7a01645799a7e3324980d17e83705b939beb7be5d3fbdb867`）。包使用已核验的 native iOS `fe36cb9d` / ABI9 preview 依赖，compiler 和 MSC SHA 与 manifest 一致。该结果补齐最新 managed 代码的构建与嵌入身份，不证明设备动态加载、签名、jetsam 或手机 FPS；手机未操作。
 
+### 复审 A6/A7 的纯代码确认
+
+binding 分项门槛已按新复审撤销，历史报告保留。项目 skills 已从 #285 拆到 [独立 #295](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/295)。
+
+Mesa `0007` 的回归覆盖包括 `native-absolute-ids`（60 个 direct/indexed draws、960 行独立 CPU oracle，nonindexed firstVertex = 7+3d、indexed vertexOffset = −11+d、firstInstance = 5+2d）；以及 `msl-graphics` / `ir-graphics` 的 `draw-system-values`、`msl-tail` / `ir-tail`。后者包含 `vkCmdDrawIndirect` 的 firstVertex 10/20、firstInstance 3/7，和 `vkCmdDrawIndexedIndirect` 的 vertexOffset −4/+6、firstInstance 5/7；间接参数由 GPU transfer 写入后消费。ID-only suite 确认不用的 runtime flags 为零；混合 BaseVertex/BaseInstance/DrawID suite 对实际系统值逐项核验，不能只用前者证明间接路径覆盖。
+
+`drawBinding()` 加上有效性契约注释：只有 metadata 带 DRAW_PARAMETERS 时才可消费 `_draw`，其他 shader 可以保留缓存值，不能从这个值推断 flag。消费方已有同一 flag guard，没有修改编码行为。额外 MSL combined-image/sampler validation 异常已建 [issue #294](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/issues/294) 独立跟踪；native 仓库关闭了 Issues，因此放在项目仓库，不阻塞 #285。
+
 ## 用户统一验收的事项
 
-- 原 binding ≤0.1 ms 条件未达到，最新 +0.2871 ms 已由用户明确接受；总 encode 条件通过。所有不利候选继续保留，不再通过复跑寻找有利负载。
+- 复审已撤销 binding ≤0.1 ms 分项门槛；+0.2871 ms 只保留作历史诊断。总 encode 条件通过，GPU union 与动态 guest 卡顿指标按复审继续补对照；所有不利候选保留。
 - 同一实际 smoke draw/input 的 MSL/IR-strict/IR-fast 没有重现烟雾消失；微小像素差仍披露，不声称位级等价。
 - 源码、主机验证、ABI9 compiler 与最新 master-merged managed runtime 的 NativeAOT/iOS preview package 校验均已准备，身份和范围见上述记录。默认清单应在 native #24 经用户验收合入维护 RC 后，更新到实际 merge revision，并补维护 RC 的 MSL 回归；没有提前把默认清单改成新功能分支。
 - 最新完整远端 CI 无法执行：native 仓库 Actions 禁用，产品 hosted CI 有账单限制。旧全平台成功 CI 不代表新代码已通过；本地 Mac/iOS build 与定向 GPU 证据单独记录。

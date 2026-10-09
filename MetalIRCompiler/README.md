@@ -163,7 +163,7 @@ CPU-only contract/calibration test, from the repository root:
 
 ```sh
 clang++ -std=c++17 -O2 -pthread -I MoltenVK/MoltenVK/GPUObjects \
-  MetalIRCompiler/tests/binding_trace_test.cpp -o "$TEST_OUTPUT"
+  Tests/ReplayTrace/binding_trace_test.cpp -o "$TEST_OUTPUT"
 "$TEST_OUTPUT"
 ```
 

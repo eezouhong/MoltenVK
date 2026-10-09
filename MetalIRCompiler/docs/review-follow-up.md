@@ -44,6 +44,10 @@ stage key 的 GPU 验证通过：增加无关 sampler 或 trailing unused set �
 
 最新公开 native 基线 `fc5afc32` 的[完整 CI](https://github.com/eezouhong/MoltenVK/actions/runs/37871350297)通过。MeloNX `66b14bc68e` 的相关本地测试为 53 passed / 0 failed / 0 skipped。后续修改的验证需要单独记录，不能继承为最新 CI 已通过。
 
+补充复算旧 cold/warm 日志的显式 join：cold 的 `blockingShaderJoinMs` 为 MSL 6.17 / IR 31.04 ms，warm 为 5.28 / 55.67 ms；四条日志的 `blockingPipelineJoinMs` 均为 0。`pipelineCreateMs` 是累计 elapsed wall time，并非渲染线程 CPU。pipeline 诊断事件在持久化前会限流，不能靠事件之和还原精确的前台创建总时长，也不能为遗漏事件建立时长上界。`draw_request_overlap` 标签还需实际执行 lane 才能归为渲染阻塞。这些数据没有证明前台阻塞下降，不能把累计准备时间的收益直接当作卡顿/FPS收益。
+
+同四条日志中的连续 guest fence-ready 间隔 >100 ms 分别为 cold MSL 82/10136、IR 43/8227，warm MSL 23/8967、IR 13/8294。ready sequence 连续、无 trace drop/layer切换；窗口是包含加载的整段会话且长度不同。它们是 guest buffer ready 间隔，不是显示帧或 native GPU 时间，保留为描述性证据，不作为静态场景验收。
+
 ### 更新后的固定场景
 
 同产品源、存档和诊断设置，MSL/IR 各一个固定场景会话；两者正常关闭、实际 process exit 0。使用 1,718 个 pipeline-free 帧，比较渲染线程 CPU 时间与 GPU interval union。30 FPS 限帧下不使用小幅 FPS 差异作为验收指标。

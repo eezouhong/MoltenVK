@@ -277,6 +277,12 @@ CPU 夹具通过，普通/点精灵/描述符和独立 GPU 输出均通过。
 
 Window.Present入口的CPU调用间隔不是物理显示帧或GPU时间；flush work含submit/rent/restore等等待，并非线程CPU。这是一对观察，不是多运行置信区间，也不据此宣称FPS或手机收益。native为与测试清单860615匹配的既有a69诊断版本，IR/replay/private pool日志关闭，两路相同；不是最终clean Release性能验收。首次用clean代码但旧embedded revision的库因严格版本门禁在启动前失败，原记录保留，未绕过门禁。
 
+### Debug Tool 的离线 AIR 接入
+
+Debug Tool [PR24](https://github.com/eezouhong/ryujinx-ios-host-debug/pull/24) 已合入，提供 `air diagnose`。共享工具 checkout 仍有本地未提交改动，保留原样；已用 merge96408dd的隔离快照、task-local资源别名，对之前保留的合成vertex AIR文本跑通source-only诊断（exit0、source_only）。输入/快照、stage、工具及caller request ID进入独立证据；未启动GPU或手机。首次私有alias配置缺少evidenceDirectory而拒绝启动，纠正后成功，失败记录保留。
+
+这能把guest→SPIR-V→DXIL→AIR的离线观察整理成标准证据，帮助查浮点权限、volatile/atomic和资源访问结构；不会自动抓取实际shader，也不证明哈希关联的产物被GPU消费。此次样本是保留合成AIR，未冒充最新真实烟雾compile request；数值/像素/性能验收仍以原独立oracle为准。方法已加入项目graphics-debugging skill。
+
 ## 用户统一验收的事项
 
 - 原 binding ≤0.1 ms 条件未达到，最新 +0.2871 ms 已由用户明确接受；总 encode 条件通过。所有不利候选继续保留，不再通过复跑寻找有利负载。

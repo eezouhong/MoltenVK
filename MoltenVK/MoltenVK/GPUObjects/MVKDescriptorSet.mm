@@ -789,6 +789,17 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
 	ret->_gpuSize = ret->_metalIRTableBytes;
 	ret->_gpuAuxBase = ret->_sizeBufSize = ret->_numAuxOffsets = 0;
 	ret->_gpuAlignment = std::max(ret->_gpuAlignment, uint32_t(alignof(uint64_t)));
+	if (tableBytes) {
+		const uint64_t rootEnd = ((tableBytes + 15) & ~uint64_t(15)) + MVKDescriptorSet::MetalIRRootBytes;
+		const uint32_t rootAlignment = std::max(std::max(ret->_gpuAlignment, 16u),
+			uint32_t(device->getPhysicalDevice()->getMetalFeatures()->mtlConstantBufferAlignment));
+		if (rootEnd + rootAlignment - 1 > UINT32_MAX) {
+			ret->setConfigurationResult(ret->reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+				"MetalIR descriptor root exceeds the allocation range."));
+			return ret;
+		}
+		ret->_gpuSize = static_cast<uint32_t>(rootEnd);
+	}
 
 	return ret;
 }
@@ -2128,10 +2139,25 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 	bool hostOnly = mvkIsAnyFlagEnabled(pCreateInfo->flags, VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_EXT) && argBufMode != MVKArgumentBufferMode::ArgEncoder;
 
 	// Apply Metal constant buffer offset alignment padding for descriptor sets
-	if (metalIR)
-		gpuAlign = std::max(gpuAlign, uint32_t(alignof(uint64_t)));
+	if (metalIR) {
+		gpuAlign = std::max(gpuAlign, 16u);
+		dataAlign = std::max(dataAlign, gpuAlign);
+	}
 	const uint32_t mtlCbufAlign = (uint32_t)device->getPhysicalDevice()->getMetalFeatures()->mtlConstantBufferAlignment;
 	const uint32_t cbufAlign = std::max(dataAlign, hostOnly || argBufMode == MVKArgumentBufferMode::Off ? 1u : mtlCbufAlign);
+	if (metalIR && gpuSize) {
+		const uint64_t rootCapacity = uint64_t(gpuSize) +
+			uint64_t(pCreateInfo->maxSets) * (MVKDescriptorSet::MetalIRRootBytes + 30);
+		const uint64_t paddingCapacity = uint64_t(pCreateInfo->maxSets) *
+			(std::max(gpuAlign, cbufAlign) - gpuAlign) + 16384;
+		if (rootCapacity + paddingCapacity > UINT32_MAX) {
+			MVKDescriptorPool* invalid = Constructor::Create(std::tuple{}, device);
+			invalid->setConfigurationResult(invalid->reportError(VK_ERROR_OUT_OF_DEVICE_MEMORY,
+				"MetalIR descriptor root capacity exceeds the pool allocator range."));
+			return invalid;
+		}
+		gpuSize = static_cast<uint32_t>(rootCapacity);
+	}
 	gpuSize = calcGroupSizeWithPadding(gpuSize, pCreateInfo->maxSets, gpuAlign, cbufAlign);
 	gpuAlign = cbufAlign;
 
@@ -2299,6 +2325,16 @@ VkResult MVKDescriptorPool::initDescriptorSet(MVKDescriptorSetLayout* mvkDSL, ui
 
 	if (mvkDSL->isMetalIRStorage()) {
 		mvkInitializeMetalIRDescriptors(mvkDSL, set);
+		assert(!mvkDSL->numAuxOffsets());
+		set->metalIRTableAddress = set->gpuBufferObject ? _gpuBufferGPUAddress + set->gpuBufferOffset : 0;
+		const uint32_t rootOffset = set->metalIRRootOffset();
+		if (rootOffset != UINT32_MAX) {
+			// Only a single used set with no push/runtime parameters selects this
+			// root. Unused root slots may alias the same valid table allocation.
+			auto* root = reinterpret_cast<uint64_t*>(set->gpuBuffer + rootOffset - set->gpuBufferOffset);
+			std::fill_n(root, kMVKMaxDescriptorSetCount * 2, _gpuBufferGPUAddress + set->gpuBufferOffset);
+			root[kMVKMaxDescriptorSetCount * 2] = 0; // Stable unused push pointer.
+		}
 		return VK_SUCCESS;
 	}
 

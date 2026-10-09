@@ -33,6 +33,45 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 		cached.reset();
 		cached.stage = vkStage;
 	}
+	const uint32_t rootPayloadFlags = MVK_METAL_IR_RUNTIME_DATA | MVK_METAL_IR_DRAW_PARAMETERS |
+		MVK_METAL_IR_DRAW_BASES | MVK_METAL_IR_DISPATCH_GROUPS;
+	if (artifact.usedSets && artifact.setCount <= kMVKMaxDescriptorSetCount &&
+		!(artifact.usedSets & (artifact.usedSets - 1)) &&
+		!artifact.usesPushConstants && !(artifact.runtimeFlags & rootPayloadFlags)) {
+		const uint32_t idx = __builtin_ctzll(artifact.usedSets);
+		MVKDescriptorSet* set = idx < artifact.setCount ? common._descriptorSets[idx] : nullptr;
+		const uint32_t rootStart = set ? set->metalIRRootOffset() : UINT32_MAX;
+		if (rootStart != UINT32_MAX) {
+			// End the stage's root at the last pair. Its unused push slot then
+			// reads the terminal zero regardless of the stage's trimmed set count.
+			const uint32_t rootOffset = rootStart + (kMVKMaxDescriptorSetCount - artifact.setCount) * 2 * sizeof(uint64_t);
+			const bool refreshAddress = !exists.descriptorSetData.get(idx) || !cached.descriptorSetBases[idx];
+			if (!exists.descriptorSetData.get(idx)) {
+				bindings.descriptorSetResourceUse[idx].resizeAndClear(set->layout->bindings().size());
+				exists.descriptorSetData.set(idx);
+			}
+			// Refresh the address cache even for a direct root: a later ordinary
+			// root can reuse descriptorSetData without observing this invalidation.
+			if (refreshAddress)
+				cached.descriptorSetBases[idx] = set->metalIRTableAddress;
+			bindingTrace.checkpoint();
+			encodeResidency();
+			bindingTrace.checkpoint();
+			auto& bound = bindings.buffers[2];
+			if (!exists.buffers.get(2) || bound.buffer != set->gpuBufferObject) {
+				binder.setBuffer(encoder, set->gpuBufferObject, rootOffset, 2);
+				exists.buffers.set(2);
+				bound = {set->gpuBufferObject, rootOffset};
+			} else if (bound.offset != rootOffset) {
+				binder.setBufferOffset(encoder, rootOffset, 2);
+				bound.offset = rootOffset;
+			}
+			// Metal binding retains/resides the same buffer containing both the
+			// root and its table. Descriptor resources still use the common script.
+			cached.rootArtifact = nullptr; // Force exact ABI refresh on bytes fallback.
+			return;
+		}
+	}
 	const bool usesRuntime = artifact.runtimeFlags & MVK_METAL_IR_RUNTIME_DATA;
 	const auto runtime = usesRuntime
 		? mvkEncoder.metalIR().runtimeBinding(vkStage == kMVKShaderStageCompute)
@@ -77,7 +116,7 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 				shared._useResource.add(set->gpuBufferObject, useResourceStage, false);
 			}
 			if (refreshAddress) {
-				cached.descriptorSetBases[idx] = set->gpuBufferObject.gpuAddress + set->gpuBufferOffset;
+				cached.descriptorSetBases[idx] = set->metalIRTableAddress;
 			}
 			// Descriptor contents may change without changing their allocation. Keep
 			// reading the table itself on the GPU; only reuse its encoder-local address.

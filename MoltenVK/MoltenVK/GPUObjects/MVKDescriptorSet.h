@@ -483,7 +483,11 @@ struct MVKDescriptorSet {
 	/** Host pointer to the device-side argument buffer. */
 	char* gpuBuffer;
 	/** An array of offsets in the auxiliary buffer for buffers that need it. */
-	const uint32_t* auxIndices;
+	union {
+		const uint32_t* auxIndices;
+		/** IR layouts have no auxiliary offsets; address stays fixed for this allocation. */
+		uint64_t metalIRTableAddress;
+	};
 	/** The Metal device-side argument buffer object. */
 	id<MTLBuffer> gpuBufferObject;
 	/** The offset into the GPU buffer object used by this descriptor set. */
@@ -494,6 +498,16 @@ struct MVKDescriptorSet {
 	uint32_t cpuBufferSize;
 	/** The number of variable descriptors. */
 	uint32_t variableDescriptorCount;
+
+	static constexpr uint32_t MetalIRRootBytes = (kMVKMaxDescriptorSetCount * 2 + 1) * sizeof(uint64_t);
+	/** A root occupies a reserved tail, never descriptor table bytes. */
+	uint32_t metalIRRootOffset() const {
+		if (!gpuBufferObject || !layout->isMetalIRStorage() ||
+			!layout->metalIRTableBytes()) return UINT32_MAX;
+		const uint64_t relative = (uint64_t(layout->metalIRTableBytes()) + 15) & ~uint64_t(15);
+		if (relative > gpuBufferSize || MetalIRRootBytes > gpuBufferSize - relative) return UINT32_MAX;
+		return gpuBufferOffset + static_cast<uint32_t>(relative);
+	}
 
 	void setGPUBuffer(id<MTLBuffer> buffer, void* contents, size_t offset, size_t size) {
 		gpuBufferObject = buffer;
@@ -507,6 +521,9 @@ struct MVKDescriptorSet {
 		cpuBufferSize = static_cast<uint32_t>(size);
 	}
 };
+
+static_assert(sizeof(void*) != 8 || sizeof(MVKDescriptorSet) == 64,
+	"Preserve the MSL descriptor set stride when caching the IR table address");
 
 #pragma mark - MVKDescriptorPool
 

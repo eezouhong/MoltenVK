@@ -3409,7 +3409,7 @@ void MVKPhysicalDevice::initFeatures() {
 
 	// Additional non-extension Vulkan 1.4 features.
 	mvkClear(&_vulkan14NoExtFeatures);		// Start with everything cleared
-	_vulkan14NoExtFeatures.pushDescriptor = true;
+	_vulkan14NoExtFeatures.pushDescriptor = !mvkMetalIREnabled();
 
 }
 
@@ -4081,6 +4081,8 @@ void MVKPhysicalDevice::initExternalMemoryProperties() {
 void MVKPhysicalDevice::initExtensions() {
 	MVKExtensionList* pWritableExtns = (MVKExtensionList*)&_supportedExtensions;
 	pWritableExtns->disableAllButEnabledDeviceExtensions();
+	// IR currently rejects push-descriptor layouts; advertise that limitation.
+	if (mvkMetalIREnabled()) pWritableExtns->vk_KHR_push_descriptor.enabled = false;
 
 	if (!_metalFeatures.subgroupUniformControlFlow) {
 		pWritableExtns->vk_KHR_shader_subgroup_uniform_control_flow.enabled = false;

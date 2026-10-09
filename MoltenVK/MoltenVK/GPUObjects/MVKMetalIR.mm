@@ -2,6 +2,7 @@
 #include "MVKMetalIR.h"
 #include "MVKMetalIRCache.h"
 #include "MVKMetalIRResidentCache.h"
+#include "MVKMetalIRCompilerLimit.h"
 #include "MVKPipeline.h"
 #include "MVKShaderModule.h"
 #include "MVKShaderMathPolicy.h"
@@ -15,6 +16,9 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <malloc/malloc.h>
+#include "MVKSPIRVMathFlags.h"
+#include "mvkGitRevDerived.h"
 
 bool mvkMetalIREnabled() {
     const char* value = getenv("MELONX_EXPERIMENTAL_METAL_IR");
@@ -23,6 +27,16 @@ bool mvkMetalIREnabled() {
 MVKMetalIRArtifact::~MVKMetalIRArtifact(){[function release];[library release];}
 
 namespace {
+mvkir::CompilerLimit& compilerLimit() {
+    static mvkir::CompilerLimit limit([] {
+        const char* value=getenv("MELONX_METAL_IR_COMPILE_WORKERS");
+        if (!value || !*value) return 2u;
+        char* end=nullptr;
+        unsigned long count=strtoul(value,&end,10);
+        return end && !*end && count>=1 && count<=8 ? unsigned(count) : 2u;
+    }());
+    return limit;
+}
 struct Plugin {
     void* library=nullptr;MVKMetalIRCompileFunction compile=nullptr;MVKMetalIRReleaseFunction release=nullptr;
     std::string identity;
@@ -30,7 +44,6 @@ struct Plugin {
 Plugin& plugin() {
     static Plugin result=[] {
         Plugin p;
-#include "mvkGitRevDerived.h"
         fprintf(stderr,"MetalIR native base MoltenVK %s %s (local experimental changes)\n",MVK_VERSION_STRING,mvkRevString);
         const char* path=getenv("MELONX_METAL_IR_PLUGIN");if(!path||!*path)return p;
         p.library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
@@ -48,6 +61,29 @@ Plugin& plugin() {
         unsigned char hash[CC_SHA256_DIGEST_LENGTH];CC_SHA256(bytes.data(),(CC_LONG)bytes.size(),hash);
         char hex[65];for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",hash[i]);p.identity=hex;
         p.identity+=dependencyIdentity();
+        for(const char* symbol:{"spirv_to_dxil", "IRCompilerCreate"}) {
+            Dl_info dependency{};
+            void* address=dlsym(p.library,symbol);
+            // iOS links Mesa into the four-export compiler framework. Its
+            // bytes are already covered by the plugin hash, with no sidecar.
+            if(!address && !strcmp(symbol,"spirv_to_dxil")) {
+                p.identity+="embedded-mesa";continue;
+            }
+            if(!address || !dladdr(address,&dependency) || !dependency.dli_fname) {
+                fprintf(stderr,"MetalIR dependency identity unavailable: %s\n",symbol);
+                dlclose(p.library);return Plugin{};
+            }
+            std::ifstream sidecar(dependency.dli_fname,std::ios::binary);
+            CC_SHA256_CTX sidecarHash;CC_SHA256_Init(&sidecarHash);
+            char chunk[64*1024];uint64_t size=0;
+            while(sidecar.read(chunk,sizeof(chunk)) || sidecar.gcount()) {
+                auto count=sidecar.gcount();size+=count;CC_SHA256_Update(&sidecarHash,chunk,CC_LONG(count));
+            }
+            if(!size || sidecar.bad()){dlclose(p.library);return Plugin{};}
+            CC_SHA256_Final(hash,&sidecarHash);
+            for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",hash[i]);
+            p.identity+=hex;
+        }
         fprintf(stderr,"MetalIR experimental compiler loaded; ABI %u\n",MVK_METAL_IR_ABI_VERSION);
         return p;
     }();return result;
@@ -90,9 +126,7 @@ std::shared_ptr<DeviceArtifacts> deviceArtifacts(MVKDevice* device) {
 }
 uint32_t shaderMathMode(const std::vector<uint32_t>& code, const char* entry,
                         spv::ExecutionModel execution, MVKConfigFastMath preference) {
-    SPIRV_CROSS_NAMESPACE::CompilerMSL reflection(code);
-    reflection.set_entry_point(entry, execution);
-    switch (mvkshader::resolveMathMode(preference, reflection.get_fp_fast_math_flags(true))) {
+    switch (mvkshader::resolveMathMode(preference, mvkshader::spirvMathFlags(code,entry,execution))) {
         case mvkshader::MathMode::Safe: return MVK_METAL_IR_MATH_SAFE;
         case mvkshader::MathMode::Relaxed: return MVK_METAL_IR_MATH_RELAXED;
         case mvkshader::MathMode::Fast: return MVK_METAL_IR_MATH_FAST;
@@ -103,11 +137,12 @@ uint32_t shaderMathMode(const std::vector<uint32_t>& code, const char* entry,
 std::string keyFor(const MVKMetalIRCompileRequest& request) {
     CC_SHA256_CTX hash;CC_SHA256_Init(&hash);
     auto add=[&](const void* data,size_t size){CC_SHA256_Update(&hash,data,(CC_LONG)size);};
-    const uint32_t cacheVersion=4;add(&cacheVersion,4);
+    const uint32_t cacheVersion=5;add(&cacheVersion,4);
     auto sized=[&](const void* data,size_t bytes){uint64_t length=bytes;add(&length,sizeof(length));if(bytes)add(data,bytes);};
+    sized(mvkRevString,strlen(mvkRevString));
     sized(plugin().identity.data(),plugin().identity.size());add(&request.abiVersion,4);add(&request.executionModel,4);
     sized(request.words,request.wordCount*4);sized(request.entry,strlen(request.entry));
-    sized(request.bindings,request.bindingCount*sizeof(MVKMetalIRBinding));sized(request.setSizes,request.setCount*4);
+    sized(request.bindings,request.bindingCount*sizeof(MVKMetalIRBinding));add(&request.setCount,sizeof(request.setCount));
     add(&request.pushConstantSize,4);add(&request.preserveInvariance,4);add(&request.mathMode,4);
     add(&request.vertexTransformFlags,4);
     add(&request.runtimeOptions,4);
@@ -135,6 +170,22 @@ VkResult mvkMetalIRConfigureCache(MVKDevice* device,const char* directory,uint64
         std::atomic_store(&state->disk,std::move(disk));
         return VK_SUCCESS;
     } catch(...) {return VK_ERROR_OUT_OF_HOST_MEMORY;}
+}
+
+uint64_t mvkMetalIRRelieveCompilerMemory() {
+    uint64_t released=0;
+    compilerLimit().relieveWhenIdle(std::chrono::milliseconds(500),[&] {
+        released=malloc_zone_pressure_relief(nullptr,0);
+    });
+    return released;
+}
+
+uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacity) {
+    if (!output || capacity<6) return 0;
+    auto value=compilerLimit().stats();
+    output[0]=value.active;output[1]=value.waiting;output[2]=value.peak;output[3]=value.limit;
+    output[4]=value.batches;output[5]=value.reliefs;
+    return 6;
 }
 
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
@@ -201,6 +252,11 @@ void mvkMetalIRDestroyDevice(MVKDevice* device) {
             (unsigned long long)state->compilerCalls.load(),(unsigned long long)state->diskHits.load(),state->mesaNs.load()/1e6,
             state->converterNs.load()/1e6,state->rasterAdapterNs.load()/1e6,state->libraryNs.load()/1e6,state->reflectionNs.load()/1e6);
     }
+    if(telemetryEnabled())if(auto disk=std::atomic_load(&state->disk)) {
+        disk->waitIdle();
+        fprintf(stderr,"MetalIR disk summary: dropped_writes=%llu failed_writes=%llu\n",
+            (unsigned long long)disk->droppedWrites(),(unsigned long long)disk->failedWrites());
+    }
     // Release cached Metal objects outside the global map lock. Vulkan requires
     // users to finish device calls before destruction, so pointer reuse is safe.
 }
@@ -242,7 +298,9 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         for(const auto& b:dsl->bindings()) {
             if(b.descriptorType==VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK||b.descriptorType==VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)return reject("descriptor type unsupported");
             if(b.gpuLayout==MVKDescriptorGPULayout::Tex2SampSoA||b.gpuLayout==MVKDescriptorGPULayout::Tex3SampSoA)return reject("multi-plane descriptor unsupported");
-            bindings.push_back({set,b.binding,b.descriptorCount,(uint32_t)b.descriptorType,mvkMetalIRDenseBinding(dsl,b.binding)});
+            MVKMetalIRBinding irBinding{set,b.binding,b.descriptorCount,(uint32_t)b.descriptorType,mvkMetalIRDenseBinding(dsl,b.binding),{}};
+            std::copy(std::begin(b.metalIRTableOffsets),std::end(b.metalIRTableOffsets),irBinding.tableOffsets);
+            bindings.push_back(irBinding);
         }
     }
     const auto& code=module->getSPIRV();
@@ -258,12 +316,46 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
     const char* strictMathOption=getenv("MELONX_METAL_IR_STRICT_MATH");
     uint32_t mathMode=strictMathOption?(strcmp(strictMathOption,"1")==0):shaderMathMode(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
+    SPIRV_CROSS_NAMESPACE::Compiler reflect(code);
+    reflect.set_entry_point(stage->pName,(spv::ExecutionModel)execution);
+    auto active=reflect.get_shader_resources(reflect.get_active_interface_variables());
+    mvkir::DiskCache::Reflection shaderReflection;
+    shaderReflection.usesPushConstants=!active.push_constant_buffers.empty();
+    for(const auto& input:active.builtin_inputs)
+        shaderReflection.usesPointCoordinates |= input.builtin==spv::BuiltInPointCoord;
+    auto addResources=[&](const auto& resources){for(const auto& resource:resources){
+        uint32_t set=reflect.get_decoration(resource.id,spv::DecorationDescriptorSet);
+        uint32_t binding=reflect.get_decoration(resource.id,spv::DecorationBinding);
+        if(set>=sizes.size())throw std::runtime_error("active descriptor set absent from layout");
+        shaderReflection.usedSets|=1ull<<set;
+        shaderReflection.usedBindings.push_back(((uint64_t)set<<32)|binding);
+    }};
+    addResources(active.uniform_buffers);addResources(active.storage_buffers);
+    addResources(active.sampled_images);addResources(active.separate_images);addResources(active.separate_samplers);
+    addResources(active.storage_images);addResources(active.subpass_inputs);
+    std::sort(shaderReflection.usedBindings.begin(),shaderReflection.usedBindings.end());
+    shaderReflection.usedBindings.erase(std::unique(shaderReflection.usedBindings.begin(),shaderReflection.usedBindings.end()),shaderReflection.usedBindings.end());
+    for(uint64_t used:shaderReflection.usedBindings)
+        if(std::none_of(bindings.begin(),bindings.end(),[&](const auto& b){return used==((uint64_t(b.set)<<32)|b.binding);}))
+            return reject("active descriptor binding absent from layout");
+    bindings.erase(std::remove_if(bindings.begin(),bindings.end(),[&](const auto& b){
+        return !std::binary_search(shaderReflection.usedBindings.begin(),shaderReflection.usedBindings.end(),(uint64_t(b.set)<<32)|b.binding);
+    }),bindings.end());
+    // Preserve each used binding's physical offsets and dense register number.
+    // Only trailing unused root slots can disappear without changing the ABI.
+    while(!sizes.empty() && !(shaderReflection.usedSets & (1ull<<(sizes.size()-1))))sizes.pop_back();
     MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0,mathMode,vertexTransformFlags,runtimeOptions};
     std::string key=keyFor(request);
     auto state=deviceArtifacts(owner->getDevice());
     auto compiled = state->cache.get(key,[&]() -> DeviceArtifacts::Cache::Result {
+    mvkir::CompilerLimit::Permit admission(compilerLimit());
     std::shared_ptr<MVKMetalIRArtifact> artifact;
     MVKMetalIRCompileResult result={};
+    struct LibraryBytes {
+        dispatch_data_t data=nullptr;
+        ~LibraryBytes(){if(data)dispatch_release(data);}
+        void reset(){if(data)dispatch_release(data);data=nullptr;}
+    } libraryBytes;
     auto disk=std::atomic_load(&state->disk);
     mvkir::DiskCache::Reflection cachedReflection;
     bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
@@ -293,9 +385,11 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             artifact=std::make_shared<MVKMetalIRArtifact>();
             NSError* error=nil;
             auto libraryStart=telemetry?IRClock::now():IRClock::time_point{};
-            dispatch_data_t bytes=dispatch_data_create(result.metallib,result.metallibSize,nullptr,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-            { mvkreplay::Timer trace(mvkreplay::IRLibrary); artifact->library=[owner->getMTLDevice() newLibraryWithData:bytes error:&error]; }
-            [bytes release];
+            libraryBytes.reset();
+            libraryBytes.data=dispatch_data_create(result.metallib,result.metallibSize,nullptr,DISPATCH_DATA_DESTRUCTOR_FREE);
+            if(!libraryBytes.data)throw std::bad_alloc();
+            result.metallib=nullptr; // dispatch_data owns this malloc allocation.
+            { mvkreplay::Timer trace(mvkreplay::IRLibrary); artifact->library=[owner->getMTLDevice() newLibraryWithData:libraryBytes.data error:&error]; }
             if(artifact->library) { mvkreplay::Timer trace(mvkreplay::IRFunction); artifact->function=[artifact->library newFunctionWithName:@(result.entry)]; }
             if(telemetry)state->libraryNs+=elapsedNs(libraryStart);
             MTLFunctionType expectedType=execution==0?MTLFunctionTypeVertex:execution==4?MTLFunctionTypeFragment:MTLFunctionTypeKernel;
@@ -304,7 +398,6 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             else {
                 artifact->setCount=request.setCount;artifact->pushConstantSize=request.pushConstantSize;
                 artifact->runtimeFlags=result.runtimeFlags;
-                std::copy(sizes.begin(),sizes.end(),artifact->descriptorCounts);
                 memcpy(artifact->vertexAttributes,result.vertexAttributes,sizeof(artifact->vertexAttributes));
                 for(int i=0;i<3;++i)artifact->threadgroupSize[i]=result.threadgroupSize[i]?result.threadgroupSize[i]:1;
                 // Vulkan permits unused descriptor sets to remain unbound or
@@ -318,21 +411,10 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
                     artifact->usesPushConstants=cachedReflection.usesPushConstants;
                     artifact->usesPointCoordinates=cachedReflection.usesPointCoordinates;
                 } else {
-                SPIRV_CROSS_NAMESPACE::Compiler reflect(code);
-                reflect.set_entry_point(stage->pName,(spv::ExecutionModel)execution);
-                auto active=reflect.get_shader_resources(reflect.get_active_interface_variables());
-                artifact->usesPushConstants=!active.push_constant_buffers.empty();
-                for (const auto& input : active.builtin_inputs)
-                    artifact->usesPointCoordinates |= input.builtin == spv::BuiltInPointCoord;
-                auto addResources=[&](const auto& resources){for(const auto& resource:resources){
-                    uint32_t set=reflect.get_decoration(resource.id,spv::DecorationDescriptorSet);
-                    uint32_t binding=reflect.get_decoration(resource.id,spv::DecorationBinding);
-                    artifact->usedSets|=1ull<<set;
-                    artifact->usedBindings.push_back(((uint64_t)set<<32)|binding);
-                }};
-                addResources(active.uniform_buffers);addResources(active.storage_buffers);
-                addResources(active.sampled_images);addResources(active.separate_images);addResources(active.separate_samplers);
-                addResources(active.storage_images);addResources(active.subpass_inputs);
+                artifact->usedSets=shaderReflection.usedSets;
+                artifact->usedBindings=shaderReflection.usedBindings;
+                artifact->usesPushConstants=shaderReflection.usesPushConstants;
+                artifact->usesPointCoordinates=shaderReflection.usesPointCoordinates;
                 if(execution==0) {
                     MVKSmallVector<mvk::SPIRVShaderInterfaceVariable,16> inputs;std::string errorLog;
                     if(!mvk::getShaderInputs(code,spv::ExecutionModelVertex,stage->pName,inputs,errorLog))artifact.reset();
@@ -354,10 +436,22 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             reflection.usedSets=artifact->usedSets;reflection.usedBindings=artifact->usedBindings;
             reflection.vertexLocations=artifact->vertexLocations;reflection.usesPushConstants=artifact->usesPushConstants;
             reflection.usesPointCoordinates=artifact->usesPointCoordinates;
-            disk->store(key,execution,result,reflection);
+            auto borrowed=result;
+            // Keep a borrowed contiguous view alive only for the queue's one
+            // persistence copy; library construction itself performs no copy.
+            const void* storage=nullptr;size_t size=0;
+            dispatch_data_t mapped=dispatch_data_create_map(libraryBytes.data,&storage,&size);
+            if(mapped) {
+                borrowed.metallib=const_cast<void*>(storage);borrowed.metallibSize=size;
+                disk->store(key,execution,borrowed,reflection);
+                dispatch_release(mapped);
+            }
         }
         break;
       }
+        if (artifact) {
+            artifact->metadata = std::make_shared<const MVKMetalIRMetadata>(static_cast<const MVKMetalIRMetadata&>(*artifact));
+        }
         if(!artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR stage %u rejected: %s",execution,result.error[0]?result.error:"unsupported interface or library");
     } catch(...) {if(fromDisk)free(result.metallib);else plugin().release(&result);throw;}
     // Capture status before the compiler's release callback clears its result.

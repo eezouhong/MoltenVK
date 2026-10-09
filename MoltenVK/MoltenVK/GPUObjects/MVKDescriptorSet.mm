@@ -758,16 +758,28 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
 
 	// Immutable IR metadata is computed once, never by descriptor update loops.
 	if (!device->isMetalIRShaderCompilerEnabled()) return ret;
-	uint64_t irCount = 0;
+	uint64_t irCount = 0, tableCounts[4] = {};
 	bool irEligible = (!hasAnyBindings || argBufMode == MVKArgumentBufferMode::Metal3) &&
 		!ret->isCPUAllocationVariable() && !ret->isGPUAllocationVariable() && !ret->dynamicOffsetCount(0);
 	for (auto& binding : ret->_bindings) {
 		binding.metalIRDenseOffset = irCount <= UINT32_MAX ? (uint32_t)irCount : UINT32_MAX;
 		irCount += binding.descriptorCount;
-		if (binding.descriptorCount && !mvkMetalIRDescriptorTableMask(binding.descriptorType)) irEligible = false;
+		const uint32_t mask = mvkMetalIRDescriptorTableMask(binding.descriptorType);
+        if (binding.descriptorCount && !mask) irEligible = false;
+        for (uint32_t table = 0; table < 4; ++table) {
+            binding.metalIRTableOffsets[table] = mask & (1u << table) ? uint32_t(tableCounts[table]) : UINT32_MAX;
+            if (mask & (1u << table)) tableCounts[table] += binding.descriptorCount;
+        }
 	}
 	ret->_metalIRDescriptorCount = irCount <= UINT32_MAX ? (uint32_t)irCount : UINT32_MAX;
-	uint64_t tableBytes = irCount * 4 * 24;
+	uint64_t tableEntries = 0;
+    for (uint32_t table = 0; table < 4; ++table) {
+        for (auto& binding : ret->_bindings)
+            if (binding.metalIRTableOffsets[table] != UINT32_MAX)
+                binding.metalIRTableOffsets[table] += uint32_t(tableEntries);
+        tableEntries += tableCounts[table];
+    }
+    uint64_t tableBytes = tableEntries * 24;
 	if (!irEligible || tableBytes > UINT32_MAX) {
 		ret->setConfigurationResult(ret->reportError(VK_ERROR_FEATURE_NOT_PRESENT,
 		    "MetalIR descriptor layout is unsupported (descriptor kind, dynamic/variable layout or oversized storage); MSL fallback disabled."));
@@ -2076,7 +2088,7 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 		MVKDescriptorCPULayout cpu = pickCPULayout(pool.type, 1, argBufMode, device);
 		numElem += descriptorGPUBindingCount(gpu) * pool.descriptorCount;
 		cpuSize += alignDescriptorOffset(descriptorCPUSize(cpu), cpuAlign) * pool.descriptorCount;
-		gpuSize += (metalIR ? 4 * 24 : alignDescriptorOffset(maxGPUSize(gpu, sizes), gpuAlign)) * pool.descriptorCount;
+		gpuSize += (metalIR ? __builtin_popcount(mvkMetalIRDescriptorTableMask(pool.type)) * 24 : alignDescriptorOffset(maxGPUSize(gpu, sizes), gpuAlign)) * pool.descriptorCount;
 		numAuxOffset += !metalIR && needsAuxOffset(gpu) ? pool.descriptorCount : 0;
 		usesAuxBuffer |= !metalIR && gpu == MVKDescriptorGPULayout::BufferAuxSize;
 	}

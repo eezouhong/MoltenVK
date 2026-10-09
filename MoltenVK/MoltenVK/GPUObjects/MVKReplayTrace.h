@@ -132,6 +132,11 @@ inline void indirectRuntime(uint32_t draws,uint64_t bytes,bool passBreak,bool co
 inline void directRuntimeUpload() {
     if (mode()==Mode::Coarse) gpu.irDirectUploads.fetch_add(1,std::memory_order_relaxed);
 }
+// Actual CPU payload copied into the IR arena, including direct, indirect and
+// push-constant updates. Raw indirect aliases contribute zero bytes.
+inline void runtimeParameterBytes(uint64_t bytes) {
+    if (mode()==Mode::Coarse) gpu.irTemporaryBytes.fetch_add(bytes,std::memory_order_relaxed);
+}
 inline void indirectInvocation(uint32_t count,bool compute) {
     if (mode()!=Mode::Coarse) return;
     if (compute) gpu.allIRIndirectDispatches.fetch_add(1,std::memory_order_relaxed);

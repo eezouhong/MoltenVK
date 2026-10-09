@@ -235,6 +235,7 @@ struct MVKDescriptorBinding {
 	uint32_t binding;                 /**< The Vulkan binding number. */
 	VkDescriptorType descriptorType;  /**< The Vulkan descriptor type. */
 	uint32_t descriptorCount;         /**< The number of Vulkan descriptors bound. */
+	uint32_t metalIRTableOffsets[4]; /**< Absolute entries by CBV/SRV/UAV/sampler kind. */
 	uint32_t metalIRDenseOffset;      /**< Precomputed offset in the IR descriptor tables. */
 	VkShaderStageFlags stageFlags;    /**< Flags from Vulkan indicating the stages that use this descriptor. */
 	uint8_t flags;                    /**< MVKDescriptorBindingFlagBits */

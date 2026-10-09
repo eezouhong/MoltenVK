@@ -1,13 +1,18 @@
 # Experimental Metal IR compiler
 
 SPIR-V → pinned Mesa `spirv_to_dxil` → Apple Metal Shader Converter → metallib.
-MoltenVK loads this plugin through ABI 8 in `MVKMetalIRBridge.h`. Guest compilation
+MoltenVK loads this plugin through ABI 9 in `MVKMetalIRBridge.h`. Guest compilation
 errors fail explicitly; this plugin does not invoke the MSL source compiler.
 The AIR adapter preserves native point rasterizer I/O and exact memory attributes.
 This directory packages the existing implementation; runtime optimizations remain
 separate work.
 
-ABI 8 represents the shared shader mathematical policy explicitly: Fast=0,
+ABI 9 adds absolute per-kind offsets for compact 24-byte descriptor entries.
+Only the CBV/SRV/UAV/sampler kinds used by a binding reserve table space. Both
+root tables use the same allocation base; compiler ranges carry the exact native
+entry offsets. Native and compiler bundles must be rebuilt together.
+
+The shared shader mathematical policy is explicit: Fast=0,
 Safe=1, Relaxed=2. Partial Relaxed retains NaN/Inf behavior while allowing
 reassociation, contraction, signed-zero simplification and reciprocals.
 Mesa marks only non-exact floating binary operations with `nsz/arcp`; the AIR
@@ -19,9 +24,23 @@ The adapter edits fixed-width flag fields in the original MSC bitstream and
 updates its checksum. It preserves the type graph, metadata and offsets, avoiding
 LLVM 17's upgrade from legacy typed pointers to opaque pointers. Unknown flag
 encodings, narrow fields, invalid ranges and checksum failures reject IR
-compilation. ABI 6/7 plugins and frameworks must be rebuilt together with Mesa;
+compilation. Older ABI plugins and frameworks must be rebuilt together with Mesa;
 the native loader rejects mismatches. The cache key includes this ABI, the full
 math mode and the compiler binary/dependency identity.
+
+The native key also includes the MoltenVK revision and actual loaded sidecar
+hashes. It includes each stage's used bindings with their real offsets/registers;
+unused trailing layout entries do not create another artifact. The resident
+cache bounds construction objects independently of pipeline metadata. Known
+deterministic MSC failures are cached; unknown/allocation failures remain retryable.
+
+`MELONX_METAL_IR_COMPILE_WORKERS` accepts 1–8 (default 2) for process-wide native
+compiler admission. Native memory relief runs once after a quiet completed
+batch. Disk-cache teardown telemetry reports dropped/failed writes. These are
+mechanisms, not a claim that the measured footprint target has been met.
+
+Host compiler diagnostics require `--replay-trace`; normal builds compile them
+out. GPU workloads always enter the Debug Tool queue.
 
 ## Dependencies
 

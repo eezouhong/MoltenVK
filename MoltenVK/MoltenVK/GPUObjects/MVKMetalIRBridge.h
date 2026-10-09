@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 8 };
+enum : uint32_t { MVK_METAL_IR_ABI_VERSION = 9 };
 enum : uint32_t { MVK_METAL_IR_MATH_FAST = 0, MVK_METAL_IR_MATH_SAFE = 1, MVK_METAL_IR_MATH_RELAXED = 2 };
 enum : uint32_t { MVK_METAL_IR_FLIP_Y = 1, MVK_METAL_IR_CLIP_HALF_Z = 2 };
 enum : uint32_t { MVK_METAL_IR_RUNTIME_DATA = 1, MVK_METAL_IR_DRAW_PARAMETERS = 2 };
@@ -18,6 +18,7 @@ struct MVKMetalIRBinding {
     uint32_t count;
     uint32_t descriptorType;
     uint32_t denseIndex;
+    uint32_t tableOffsets[4]; // Absolute 24-byte entries; absent kinds use UINT32_MAX.
 };
 struct MVKMetalIRCompileRequest {
     uint32_t abiVersion;

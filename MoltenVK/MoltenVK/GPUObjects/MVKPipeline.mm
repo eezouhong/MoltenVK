@@ -4994,7 +4994,7 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
 		auto artifact = mvkCompileMetalIR(this, _layout, _module, pSS, 0,
 			_allowsDispatchBase ? MVK_METAL_IR_ALLOW_DISPATCH_BASE : 0);
 		if (artifact) {
-			_stageResources.metalIR = artifact;
+			_stageResources.metalIR = artifact->metadata;
 			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources);
 			return MVKMTLFunction(artifact->function, {}, MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2]));
 		}

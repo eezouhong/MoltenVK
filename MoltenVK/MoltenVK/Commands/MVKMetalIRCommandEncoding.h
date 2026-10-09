@@ -3,7 +3,7 @@
 #import <Metal/Metal.h>
 
 class MVKCommandEncoder;
-struct MVKMetalIRArtifact;
+struct MVKMetalIRMetadata;
 class MVKMTLBufferAllocation;
 
 // Owns IR parameter preparation only. Compilation, descriptor translation and
@@ -30,12 +30,12 @@ public:
     explicit MVKMetalIRCommandEncoding(MVKCommandEncoder& encoder) : _encoder(encoder) {}
     void reset();
     BufferBinding copyBytes(const void* bytes, NSUInteger length);
-    void prepareDraw(const MVKMetalIRArtifact* artifact, const mvkir::DirectDraw& draw);
-    RuntimeBatch prepareIndirectDraws(const MVKMetalIRArtifact* artifact, uint32_t count, bool indexed);
+    void prepareDraw(const MVKMetalIRMetadata* artifact, const mvkir::DirectDraw& draw);
+    RuntimeBatch prepareIndirectDraws(const MVKMetalIRMetadata* artifact, uint32_t count, bool indexed);
     void selectIndirectDraw(const RuntimeBatch& batch, uint32_t drawId,
         id<MTLBuffer> arguments, NSUInteger offset, uint16_t indexType);
-    void prepareDispatch(const MVKMetalIRArtifact* artifact, const mvkir::ComputeData& data);
-    void prepareIndirectDispatch(const MVKMetalIRArtifact* artifact, id<MTLBuffer> arguments, NSUInteger offset);
+    void prepareDispatch(const MVKMetalIRMetadata* artifact, const mvkir::ComputeData& data);
+    void prepareIndirectDispatch(const MVKMetalIRMetadata* artifact, id<MTLBuffer> arguments, NSUInteger offset);
     BufferBinding runtimeBinding(bool compute) const;
     BufferBinding rawRuntimeBinding(bool compute) const;
     const DrawBinding& drawBinding() const { return _draw; }

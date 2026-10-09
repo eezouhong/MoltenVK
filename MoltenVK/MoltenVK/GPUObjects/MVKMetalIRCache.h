@@ -47,7 +47,11 @@ private:
     std::filesystem::path _directory;
     uint64_t _maxBytes=0, _diskBytes=0;
     std::mutex _lock;
-    std::condition_variable _ready;
+    std::condition_variable _workReady, _idle;
+    // Filesystem mutation never holds the reservation/index lock. Valid loads
+    // perform their reads without either lock.
+    std::mutex _fileLock;
+    std::atomic<uint64_t> _droppedWrites{0}, _failedWrites{0};
     std::deque<Write> _pending;
     std::list<std::string> _lru;
     std::unordered_map<std::string,Entry> _entries;
@@ -76,23 +80,33 @@ private:
         catch(...) {_lru.pop_back();throw;}
         _diskBytes+=bytes;
     }
+    // Caller serializes file mutations; each victim is detached under the
+    // short index lock before deletion, so no compiler waits for rename/trim.
     void trim() {
-        while(_maxBytes&&_diskBytes>_maxBytes&&!_lru.empty()) {
-            auto key=_lru.front();std::error_code error;
+        for (;;) {
+            std::string key;
+            {
+                std::lock_guard<std::mutex> lock(_lock);
+                if (!_maxBytes || _diskBytes<=_maxBytes || _lru.empty()) return;
+                key=_lru.front();forget(key);
+            }
+            std::error_code error;
             std::filesystem::remove(_directory/(key+".mir"),error);
-            forget(key); // A failed delete must not spin or block compilation.
         }
     }
     void discardInvalid(const std::string& key,const struct stat& opened) {
-        std::lock_guard<std::mutex> lock(_lock);struct stat current{};
+        std::lock_guard<std::mutex> files(_fileLock);struct stat current{};
         auto path=_directory/(key+".mir");
         // Do not delete a new valid atomic replacement of the file we read.
         if(!lstat(path.c_str(),&current)&&current.st_dev==opened.st_dev&&current.st_ino==opened.st_ino) {
-            std::error_code error;std::filesystem::remove(path,error);forget(key);
+            std::error_code error;std::filesystem::remove(path,error);
+            std::lock_guard<std::mutex> lock(_lock);forget(key);
         }
     }
     void releaseReservation(size_t bytes) {
-        std::lock_guard<std::mutex> lock(_lock);_pendingBytes-=bytes;--_pendingCount;_ready.notify_all();
+        std::lock_guard<std::mutex> lock(_lock);_pendingBytes-=bytes;--_pendingCount;
+        if(!_pendingCount) _idle.notify_all();
+        if(_stopping) _workReady.notify_all();
     }
     void writeLoop() {
         pthread_set_qos_class_self_np(QOS_CLASS_UTILITY,0);
@@ -100,7 +114,7 @@ private:
             Write work;
             {
                 std::unique_lock<std::mutex> lock(_lock);
-                _ready.wait(lock,[&]{return !_pending.empty()||(_stopping&&_pendingCount==0);});
+                _workReady.wait(lock,[&]{return !_pending.empty()||(_stopping&&_pendingCount==0);});
                 if(_pending.empty())return;work=std::move(_pending.front());_pending.pop_front();
             }
             std::filesystem::path temporary;
@@ -119,12 +133,23 @@ private:
                 }
                 std::error_code error;
                 {
-                    std::lock_guard<std::mutex> lock(_lock);
+                    std::lock_guard<std::mutex> files(_fileLock);
                     if(good)std::filesystem::rename(temporary,destination,error);
-                    if(good&&!error) {remember(work.key,sizeof(Header)+work.bindings.size()*8+work.bytes.size());trim();}
-                    else std::filesystem::remove(temporary,error);
+                    if(good&&!error) {
+                        {
+                            std::lock_guard<std::mutex> lock(_lock);
+                            remember(work.key,sizeof(Header)+work.bindings.size()*8+work.bytes.size());
+                        }
+                        trim();
+                    } else {
+                        ++_failedWrites;
+                        std::filesystem::remove(temporary,error);
+                    }
                 }
-            } catch(...) {if(!temporary.empty()){std::error_code error;std::filesystem::remove(temporary,error);}}
+            } catch(...) {
+                ++_failedWrites;
+                if(!temporary.empty()){std::error_code error;std::filesystem::remove(temporary,error);}
+            }
             releaseReservation(work.bytes.size()+work.bindings.size()*8+sizeof(Header));
         }
     }
@@ -147,13 +172,15 @@ public:
         _writer=std::thread([this]{writeLoop();});
       } catch(...) {_directory.clear();}
     }
+    uint64_t droppedWrites() const {return _droppedWrites.load(std::memory_order_relaxed);}
+    uint64_t failedWrites() const {return _failedWrites.load(std::memory_order_relaxed);}
     bool enabled() const {return !_directory.empty();}
     ~DiskCache() {
-        {std::lock_guard<std::mutex> lock(_lock);_stopping=true;}_ready.notify_one();
+        {std::lock_guard<std::mutex> lock(_lock);_stopping=true;}_workReady.notify_one();
         if(_writer.joinable())_writer.join();
     }
     void waitIdle() {
-        std::unique_lock<std::mutex> lock(_lock);_ready.wait(lock,[&]{return _pendingCount==0;});
+        std::unique_lock<std::mutex> lock(_lock);_idle.wait(lock,[&]{return _pendingCount==0;});
     }
     bool load(const std::string& key,uint32_t execution,MVKMetalIRCompileResult& result,Reflection& reflection) noexcept {
       try {
@@ -178,14 +205,14 @@ public:
         if(memcmp(digest,header.digest,32))return invalid();
         reflection.usedSets=header.usedSets;reflection.vertexLocations=header.vertexLocations;reflection.usedBindings=std::move(bindings);
         reflection.usesPushConstants=header.usageFlags&1;reflection.usesPointCoordinates=header.usageFlags&2;
+        // Touch the opened inode, not a possibly newer atomic replacement.
+        // Do not resurrect a trimmed key in the index after a concurrent read.
+        timespec times[2]={{0,UTIME_OMIT},{0,UTIME_NOW}};
+        futimens(fileno(file.get()),times);
         {
             std::lock_guard<std::mutex> lock(_lock);
-            // Touch only the inode read, keeping another writer's newer entry.
-            struct stat current{};
-            if(!lstat(path.c_str(),&current)&&current.st_ino==opened.st_ino&&current.st_dev==opened.st_dev) {
-                std::error_code error;std::filesystem::last_write_time(path,std::filesystem::file_time_type::clock::now(),error);
-                remember(key,sizeof(Header)+header.bindingCount*8+header.size);
-            }
+            auto found=_entries.find(key);
+            if(found!=_entries.end()) _lru.splice(_lru.end(),_lru,found->second.age);
         }
         result={};result.abiVersion=header.abi;result.metallib=bytes.release();result.metallibSize=header.size;
         memcpy(result.entry,header.entry,sizeof(result.entry));memcpy(result.threadgroupSize,header.group,sizeof(header.group));
@@ -200,7 +227,7 @@ public:
         if(_maxBytes&&bytes>_maxBytes)return;
         {
             std::lock_guard<std::mutex> lock(_lock);
-            if(_stopping||_pendingCount>=32||_pendingBytes+bytes>MaxBytes)return;
+            if(_stopping||_pendingCount>=32||_pendingBytes+bytes>MaxBytes){++_droppedWrites;return;}
             ++_pendingCount;_pendingBytes+=bytes;
         }
       try {
@@ -212,13 +239,14 @@ public:
         work.header.usageFlags=uint32_t(reflection.usesPushConstants)|(uint32_t(reflection.usesPointCoordinates)<<1);
         work.header.bindingCount=reflection.usedBindings.size();work.bindings=reflection.usedBindings;
         work.bytes.assign((const uint8_t*)result.metallib,(const uint8_t*)result.metallib+result.metallibSize);
-        {std::lock_guard<std::mutex> lock(_lock);_pending.push_back(std::move(work));}_ready.notify_one();
-      } catch(...) {releaseReservation(bytes);}
+        {std::lock_guard<std::mutex> lock(_lock);_pending.push_back(std::move(work));}_workReady.notify_one();
+      } catch(...) {++_failedWrites;releaseReservation(bytes);}
     }
     void invalidate(const std::string& key) noexcept {try {
         if(!_directory.empty()&&validKey(key)) {
-            std::lock_guard<std::mutex> lock(_lock);std::error_code error;
-            std::filesystem::remove(_directory/(key+".mir"),error);forget(key);
+            std::lock_guard<std::mutex> files(_fileLock);std::error_code error;
+            std::filesystem::remove(_directory/(key+".mir"),error);
+            std::lock_guard<std::mutex> lock(_lock);forget(key);
         }
       } catch(...) {}
     }

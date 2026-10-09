@@ -33,7 +33,7 @@ class MVKDescriptorSet;
 class MVKOcclusionQueryPool;
 
 struct MVKShaderImplicitRezBinding;
-struct MVKMetalIRArtifact;
+struct MVKMetalIRMetadata;
 
 enum class MVKMetalGraphicsStage {
 	Vertex,
@@ -251,11 +251,10 @@ struct MVKMetalSharedCommandEncoderState {
 #pragma mark - MVKMetalRenderCommandEncoderState
 
 struct MVKStageResourceBindings {
-	bool metalIR = false;
 	/** Only reusable within one Metal encoder and one shader stage. The command
 	 * buffer owns the temporary push allocation; this state does not retain it. */
 	struct MetalIRArguments {
-		const MVKMetalIRArtifact* rootArtifact = nullptr;
+		const MVKMetalIRMetadata* rootArtifact = nullptr;
 		uint64_t runtimeAddress = 0;
 		uint64_t rawRuntimeAddress = 0;
 		id<MTLBuffer> rawRuntimeBuffer = nil;
@@ -289,7 +288,7 @@ struct MVKStageResourceBindings {
 			drawIndirectBuffer = nil;
 			drawArgumentsValid = drawIndexTypeValid = false;
 		}
-	} metalIRArguments;
+	};
 	id<MTLTexture> textures[kMVKMaxTextureCount];
 	struct Buffer {
 		id<MTLBuffer> buffer;
@@ -312,7 +311,13 @@ struct MVKStageResourceBindings {
 	static Buffer MetalIRRootBuffer() { return { nil, ~1ull }; }
 	static Buffer MetalIRDrawBuffer() { return { nil, ~2ull }; }
 	static Buffer MetalIRDrawInfoBuffer() { return { nil, ~3ull }; }
+	// Preserve the original MSL hot member offsets. IR cache state is cold for
+	// an MSL device and must not precede textures/buffers/samplers.
+	bool metalIR = false;
+	MetalIRArguments metalIRArguments;
 };
+
+static_assert(offsetof(MVKStageResourceBindings, textures) == 0, "MSL hot bindings must precede IR metadata");
 
 template <typename T>
 struct MVKOnePerGraphicsStage: public MVKOnePerEnumEntry<T, MVKMetalGraphicsStage> {

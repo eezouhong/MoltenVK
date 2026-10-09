@@ -27,6 +27,7 @@ MVKMetalIRCommandEncoding::BufferBinding MVKMetalIRCommandEncoding::copyBytes(co
 		offset = 0;
 	}
 	memcpy(arena.contents + offset, bytes, length);
+	mvkreplay::runtimeParameterBytes(length);
 	arena.nextOffset = offset + sliceSize;
 	return { arena.allocation->_mtlBuffer, arena.gpuAddress + offset };
 }
@@ -61,7 +62,7 @@ MVKMetalIRCommandEncoding::BufferBinding MVKMetalIRCommandEncoding::rawRuntimeBi
     return _rawRuntime[compute ? 1 : 0].binding;
 }
 
-void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRArtifact* artifact, const mvkir::DirectDraw& draw) {
+void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRMetadata* artifact, const mvkir::DirectDraw& draw) {
     if (!artifact || !artifact->runtimeFlags) return;
     if (artifact->runtimeFlags & MVK_METAL_IR_DRAW_BASES)
         cacheRawRuntimeData(false, &draw.mesa.firstVertex, 8);
@@ -75,9 +76,9 @@ void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRArtifact* artifact, 
 }
 
 MVKMetalIRCommandEncoding::RuntimeBatch MVKMetalIRCommandEncoding::prepareIndirectDraws(
-    const MVKMetalIRArtifact* artifact, uint32_t count, bool indexed) {
+    const MVKMetalIRMetadata* artifact, uint32_t count, bool indexed) {
     mvkreplay::Timer trace(mvkreplay::IndirectParameters);
-    if (artifact && count) mvkreplay::indirectInvocation(count, false);
+    if (artifact && count) mvkreplay::indirectRuntime(count, 0, false, false);
     return {artifact && count, indexed, artifact ? artifact->runtimeFlags : 0};
 }
 
@@ -99,7 +100,7 @@ void MVKMetalIRCommandEncoding::selectIndirectDraw(const RuntimeBatch& batch, ui
     _draw = { {}, arguments, offset, indexType };
 }
 
-void MVKMetalIRCommandEncoding::prepareDispatch(const MVKMetalIRArtifact* artifact, const mvkir::ComputeData& data) {
+void MVKMetalIRCommandEncoding::prepareDispatch(const MVKMetalIRMetadata* artifact, const mvkir::ComputeData& data) {
     if (!artifact) return;
     if (artifact->runtimeFlags & MVK_METAL_IR_DISPATCH_GROUPS)
         cacheRawRuntimeData(true, data.groupCount, sizeof(data.groupCount));
@@ -110,10 +111,10 @@ void MVKMetalIRCommandEncoding::prepareDispatch(const MVKMetalIRArtifact* artifa
     }
 }
 
-void MVKMetalIRCommandEncoding::prepareIndirectDispatch(const MVKMetalIRArtifact* artifact,
+void MVKMetalIRCommandEncoding::prepareIndirectDispatch(const MVKMetalIRMetadata* artifact,
     id<MTLBuffer> arguments, NSUInteger offset) {
     if (!artifact) return;
-    mvkreplay::indirectInvocation(1, true);
+    mvkreplay::indirectRuntime(1, 0, false, true);
     if (artifact->runtimeFlags & MVK_METAL_IR_DISPATCH_GROUPS) {
         auto& raw = _rawRuntime[1];
         raw.binding = {arguments, arguments.gpuAddress + offset};

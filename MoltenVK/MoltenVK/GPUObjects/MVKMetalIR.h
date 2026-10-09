@@ -31,6 +31,8 @@ public:
 };
 VkResult mvkMetalIRConfigureCache(MVKDevice* device, const char* directory, uint64_t maxBytes);
 void mvkMetalIRDestroyDevice(MVKDevice* device);
+uint64_t mvkMetalIRRelieveCompilerMemory();
+uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacity);
 uint32_t mvkMetalIRDescriptorCount(const MVKDescriptorSetLayout* layout);
 uint32_t mvkMetalIRDenseBinding(const MVKDescriptorSetLayout* layout, uint32_t binding);
 uint32_t mvkMetalIRDescriptorTableMask(VkDescriptorType type);
@@ -45,9 +47,8 @@ void mvkCopyMetalIRDescriptors(const MVKDescriptorSetLayout*, const MVKDescripto
 void mvkPopulateMetalIRResidencyOperations(MVKPipelineLayout* layout,
                                           MVKPipelineStageResourceInfo& resources);
 
-struct MVKMetalIRArtifact {
-    id<MTLLibrary> library = nil;
-    id<MTLFunction> function = nil;
+// Encoding metadata survives independently of library/function wrappers.
+struct MVKMetalIRMetadata {
     uint32_t threadgroupSize[3] = {1,1,1};
     uint64_t usedSets = 0;
     std::vector<uint64_t> usedBindings;
@@ -59,12 +60,18 @@ struct MVKMetalIRArtifact {
     uint64_t vertexLocations = 0;
     uint8_t vertexAttributes[32];
     uint32_t setCount = 0;
-    uint32_t descriptorCounts[8] = {};
     uint32_t pushConstantSize = 0;
     // The layout size defines the root-table ABI; usage belongs to this entry point.
     bool usesPushConstants = true;
     bool usesPointCoordinates = false;
     uint32_t runtimeFlags = 0;
+};
+
+// Only construction and the bounded recent-artifact cache own Metal objects.
+struct MVKMetalIRArtifact : MVKMetalIRMetadata {
+    id<MTLLibrary> library = nil;
+    id<MTLFunction> function = nil;
+    std::shared_ptr<const MVKMetalIRMetadata> metadata;
     ~MVKMetalIRArtifact();
 };
 

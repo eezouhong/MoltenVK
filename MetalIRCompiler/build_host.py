@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--meson", default="meson")
     parser.add_argument("--ninja", default="ninja")
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--replay-trace", action="store_true", help="Compile optional host replay diagnostics")
     args = parser.parse_args()
     out = args.output.resolve()
     checkout = ROOT.parent
@@ -104,6 +105,7 @@ def main():
     shutil.copyfile(build / "src/microsoft/spirv_to_dxil/libspirv_to_dxil.dylib", mesa)
     shutil.copyfile(msc, lib / msc.name)
     flags = ["-std=c++17", "-O2", "-fno-rtti", "-fvisibility=hidden", "-DNDEBUG",
+             "-DMVK_REPLAY_TRACE=" + str(int(args.replay_trace)),
              "-isysroot", sdk, "-arch", "arm64", "-mmacosx-version-min=26.0",
              "-I" + str(ROOT / "src"), "-I" + str(ROOT / "src/air"), "-I" + llvm_include]
     objects = []

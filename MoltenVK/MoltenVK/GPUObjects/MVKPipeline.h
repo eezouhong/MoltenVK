@@ -41,7 +41,7 @@
 
 class MVKCommandEncoder;
 class MVKPipelineCache;
-struct MVKMetalIRArtifact;
+struct MVKMetalIRMetadata;
 
 struct MVKPipelineShaderLibraryContribution {
 	MVKShaderModuleKey shaderModuleKey;
@@ -355,7 +355,7 @@ typedef MVKSmallVector<MVKGraphicsStage, 4> MVKPiplineStages;
 
 
 struct MVKPipelineStageResourceInfo {
-	std::shared_ptr<MVKMetalIRArtifact> metalIR;
+	std::shared_ptr<const MVKMetalIRMetadata> metalIR;
 	MVKPipelineBindScript bindScript;
 	MVKImplicitBufferBindings implicitBuffers;
 	bool usesPhysicalStorageBufferAddresses;

@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <list>
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -11,7 +12,8 @@
 namespace mvkir {
 // Device-owned recent artifacts. The byte budget measures serialized code, not
 // Metal's private allocation footprint; an independent object limit is required.
-// No Vulkan object is retained. Active pipelines own artifacts independently.
+// No Vulkan object is retained. Constructing callers share artifacts; completed
+// pipelines retain independent immutable metadata rather than these Metal objects.
 template<class Artifact> class ResidentCache {
 public:
     struct Result {
@@ -21,6 +23,7 @@ public:
     };
     struct Stats {
         uint64_t hits = 0, misses = 0, waits = 0, evictions = 0;
+        uint64_t metadataInspections = 0, metadataPrunes = 0;
         size_t retained = 0, retainedBytes = 0, entries = 0;
     };
     ResidentCache(size_t objects, size_t bytes, size_t metadata = 4096)
@@ -37,7 +40,13 @@ public:
             if (found == _entries.end()) {
                 pruneMetadata();
                 entry = std::make_shared<Entry>();
-                _entries.emplace(key, entry);
+                auto inserted = _entries.emplace(key, entry);
+                try {
+                    _metadata.push_back(key);
+                } catch (...) {
+                    _entries.erase(inserted.first);
+                    throw;
+                }
             } else {
                 entry = found->second;
             }
@@ -95,6 +104,7 @@ public:
 private:
     struct Entry;
     using Recent = std::list<std::shared_ptr<Entry>>;
+    using Metadata = std::list<std::string>;
     struct Entry {
         bool compiling = false, unsupported = false;
         size_t waiters = 0, bytes = 0;
@@ -129,20 +139,32 @@ private:
 
     void pruneMetadata() {
         if (_entries.size() < _maxMetadata) return;
-        for (auto it = _entries.begin(); it != _entries.end() && _entries.size() >= _maxMetadata;) {
-            const auto& entry = it->second;
-            // Waiters retain their published result. Do not remove their key
-            // and let a second compiler race the handoff.
-            if (!entry->compiling && !entry->waiters && !entry->retained) it = _entries.erase(it);
-            else ++it;
+        // Stable list cursors survive unordered-map rehashes. Bound work under
+        // the global lock even when most artifacts are still owned by callers.
+        const size_t budget = std::min<size_t>(_metadata.size(), 64);
+        for (size_t inspected = 0; inspected < budget && _entries.size() >= _maxMetadata; ++inspected) {
+            if (_prunePosition == _metadata.end()) _prunePosition = _metadata.begin();
+            auto candidate = _prunePosition++;
+            auto found = _entries.find(*candidate);
+            ++_stats.metadataInspections;
+            const auto& entry = found->second;
+            // Preserve an in-use weak artifact as well as compiles, waiters and
+            // resident objects. Removing its key would create a duplicate library.
+            if (!entry->compiling && !entry->waiters && !entry->retained && entry->weak.expired()) {
+                _entries.erase(found);
+                _metadata.erase(candidate);
+                ++_stats.metadataPrunes;
+            }
         }
-        // Only live compiles and the bounded recent set may exceed metadata's
-        // soft cap; idle weak/negative entries cannot grow without bound.
+        // Live artifacts may exceed the soft metadata cap. Expired keys are
+        // reclaimed incrementally as new requests arrive.
     }
 
     const size_t _maxObjects, _maxBytes, _maxMetadata;
     mutable std::mutex _lock;
     std::unordered_map<std::string, std::shared_ptr<Entry>> _entries;
+    Metadata _metadata;
+    typename Metadata::iterator _prunePosition = _metadata.end();
     Recent _recent;
     size_t _retainedBytes = 0;
     Stats _stats;

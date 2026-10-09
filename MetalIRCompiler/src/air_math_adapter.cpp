@@ -19,11 +19,11 @@ template<class T> T take(Expected<T> result) {
     return std::move(*result);
 }
 void check(Error error) { if (error) throw std::runtime_error(toString(std::move(error))); }
-template<class T> T load(const std::vector<uint8_t>& bytes, size_t offset) {
+template<class T> T load(ArrayRef<uint8_t> bytes, size_t offset) {
     if (offset > bytes.size() || sizeof(T) > bytes.size()-offset) throw std::runtime_error("range");
     T result; memcpy(&result,bytes.data()+offset,sizeof(T)); return result;
 }
-void bits(std::vector<uint8_t>& bytes,size_t bit,uint32_t value,unsigned count) {
+void bits(MutableArrayRef<uint8_t> bytes,size_t bit,uint32_t value,unsigned count) {
     if(bit > bytes.size()*8 || count > bytes.size()*8-bit) throw std::runtime_error("bit range");
     for(unsigned i=0;i<count;++i) {
         auto mask=uint8_t(1u<<((bit+i)%8));
@@ -34,11 +34,11 @@ struct Scanner {
     ArrayRef<uint8_t> raw;
     BitstreamCursor cursor;
     std::optional<BitstreamBlockInfo> blockInfo;
-    std::vector<uint8_t>& output;
+    MutableArrayRef<uint8_t> output;
     size_t origin;
     bool change;
     unsigned marked=0;
-    Scanner(ArrayRef<uint8_t> input,std::vector<uint8_t>& out,size_t base,bool adapt)
+    Scanner(ArrayRef<uint8_t> input,MutableArrayRef<uint8_t> out,size_t base,bool adapt)
         :raw(input),cursor(input),output(out),origin(base),change(adapt) {}
     void block(unsigned id,bool root=false,unsigned depth=0) {
         if(depth>64) throw std::runtime_error("bitstream nesting limit");
@@ -93,13 +93,11 @@ struct Scanner {
     }
 };
 } // namespace
-bool relaxMathPermissions(const void* input,size_t size,std::vector<uint8_t>& output,
-                          std::string& error,size_t* adjusted) {
-    output.clear();error.clear();if(adjusted)*adjusted=0;
+bool relaxMathPermissionsInPlace(void* input,size_t size,std::string& error,size_t* adjusted) {
+    error.clear();if(adjusted)*adjusted=0;
     try {
         if(!input || size<88 || size>64*1024*1024)throw std::runtime_error("invalid metallib size");
-        const auto* begin=static_cast<const uint8_t*>(input);
-        std::vector<uint8_t> bytes(begin,begin+size);
+        MutableArrayRef<uint8_t> bytes(static_cast<uint8_t*>(input),size);
         if(memcmp(bytes.data(),"MTLB",4) || load<uint64_t>(bytes,16)!=size ||
            load<uint32_t>(bytes,load<uint64_t>(bytes,24))!=1)throw std::runtime_error("invalid metallib header");
         uint64_t offset=load<uint64_t>(bytes,72),length=load<uint64_t>(bytes,80);
@@ -131,7 +129,18 @@ bool relaxMathPermissions(const void* input,size_t size,std::vector<uint8_t>& ou
             memcpy(bytes.data()+hashOffset,digest.data(),32);
         }
         if(adjusted)*adjusted=scanner.marked;
-        output=std::move(bytes);return true;
+        return true;
     } catch(const std::exception& failure) {error=failure.what();return false;}
+}
+bool relaxMathPermissions(const void* input,size_t size,std::vector<uint8_t>& output,
+                          std::string& error,size_t* adjusted) {
+    output.clear();
+    if(!input || size<88 || size>64*1024*1024) {
+        error="invalid metallib size";if(adjusted)*adjusted=0;return false;
+    }
+    const auto* begin=static_cast<const uint8_t*>(input);
+    output.assign(begin,begin+size);
+    if(relaxMathPermissionsInPlace(output.data(),output.size(),error,adjusted))return true;
+    output.clear();return false;
 }
 } // namespace melonx::air

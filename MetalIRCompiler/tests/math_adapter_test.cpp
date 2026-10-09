@@ -86,6 +86,10 @@ int main(int argc, char** argv) {
     size_t changed = 0;
     assert(melonx::air::relaxMathPermissions(original.data(), original.size(), adapted, error, &changed));
     assert(changed == 5 && adapted.size() == original.size() && adapted != original);
+    auto inPlace = original;
+    auto* storage = inPlace.data();
+    assert(melonx::air::relaxMathPermissionsInPlace(inPlace.data(), inPlace.size(), error, &changed));
+    assert(storage == inPlace.data() && changed == 5 && inPlace == adapted);
     if (argc == 1) {
         // Only permitted bits and the checksum change, not types or metadata.
         auto expected = generated.bytes;

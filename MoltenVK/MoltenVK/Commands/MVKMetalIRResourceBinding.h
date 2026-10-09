@@ -73,7 +73,7 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 			// reading the table itself on the GPU; only reuse its encoder-local address.
 			uint64_t base = cached.descriptorSetBases[idx];
 			args[idx * 2] = base;
-			args[idx * 2 + 1] = base + artifact.descriptorCounts[idx] * 3 * 24;
+			args[idx * 2 + 1] = base;
 		}
 	}
 	bindingTrace.checkpoint();
@@ -136,7 +136,6 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
 		if (!sameArguments || !exists.buffers.get(4) || bindings.buffers[4] != MVKStageResourceBindings::MetalIRDrawBuffer()) {
 			if (draw.indirectBuffer) {
 				binder.setBuffer(encoder, draw.indirectBuffer, draw.indirectOffset, 4);
-				shared._useResource.add(draw.indirectBuffer, useResourceStage, false);
 			} else binder.setBytes(encoder, &draw.arguments, sizeof(draw.arguments), 4);
 			memcpy(cached.drawArguments, draw.arguments.words, sizeof(cached.drawArguments));
 			cached.drawIndirectBuffer = draw.indirectBuffer;

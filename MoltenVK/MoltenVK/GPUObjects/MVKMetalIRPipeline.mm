@@ -72,8 +72,8 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 			return false;
 		}
 		if (vertexIR && (!pFragmentSS || fragmentIR)) {
-			_stageResources[kMVKShaderStageVertex].metalIR = vertexIR;
-			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR;
+			_stageResources[kMVKShaderStageVertex].metalIR = vertexIR->metadata;
+			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR ? fragmentIR->metadata : nullptr;
 			plDesc.vertexFunction = vertexIR->function;
 			plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
 			_isRasterizing = true;

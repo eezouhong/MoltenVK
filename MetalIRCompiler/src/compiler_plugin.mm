@@ -1,4 +1,5 @@
 #include "MVKMetalIRBridge.h"
+#include "MVKReplayConfig.h"
 #include "spirv_to_dxil.h"
 #include "native_raster_adapter.h"
 #include "air_math_adapter.h"
@@ -29,6 +30,7 @@ static void logMesa(void* output,const char* message) {
     auto* result=(MVKMetalIRCompileResult*)output;
     snprintf(result->error,sizeof(result->error),"%s",message);
 }
+#if MVK_REPLAY_TRACE
 struct ReplayCompilerPhase {
     const char* region;uint32_t stage;uint64_t wall=0,cpu=0;
     static uint64_t read(clockid_t clock) {timespec t{};return clock_gettime(clock,&t)==0?uint64_t(t.tv_sec)*1000000000+t.tv_nsec:0;}
@@ -38,6 +40,9 @@ struct ReplayCompilerPhase {
     }
     ~ReplayCompilerPhase() {if(wall){uint64_t endCpu=read(CLOCK_THREAD_CPUTIME_ID);fprintf(stderr,"IR_REPLAY_PHASE region=%s stage=%u wall_ns=%llu thread_cpu_ns=%llu cpu_valid=%u\n",region,stage,(unsigned long long)(read(CLOCK_MONOTONIC)-wall),(unsigned long long)(cpu&&endCpu>=cpu?endCpu-cpu:0),cpu&&endCpu>=cpu);}}
 };
+#else
+struct ReplayCompilerPhase { constexpr ReplayCompilerPhase(const char*,uint32_t) noexcept {} };
+#endif
 struct CompileResources {
     dxil_spirv_object dxil={};
     IRError* error=nullptr;
@@ -90,7 +95,7 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                 const auto& b=request->bindings[i];
                 if(b.set==set->second&&b.binding==words[pos+3]){words[pos+3]=b.denseIndex;found=true;break;}
             }
-            if(!found){snprintf(result->error,sizeof(result->error),"descriptor %u/%u missing from layout",set->second,words[pos+3]);return 1;}
+            (void)found; // Inactive interface variables need no range; Mesa removes them.
         }
         pos+=count;
     }
@@ -136,17 +141,33 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     if(runtimeData)result->runtimeFlags|=MVK_METAL_IR_RUNTIME_DATA;
     if(request->executionModel==0&&dxil.metadata.unit_point_size)
         result->runtimeFlags|=MVK_METAL_IR_UNIT_POINT_SIZE;
-    std::vector<IRDescriptorRange1> ranges(request->setCount*4);
+    // Each Vulkan binding has ranges only for the resource kinds it uses.
+    // Offsets are the exact compact native table entries, including samplers.
+    std::vector<std::vector<IRDescriptorRange1>> ranges(request->setCount*2);
     std::vector<IRRootParameter1> params(request->setCount*2+(request->pushConstantSize?1:0)+(runtimeData?1:0)+(runtimeRaw?1:0));
-    for(uint32_t set=0;set<request->setCount;++set) {
-        uint32_t n=request->setSizes[set];
-        for(uint32_t type=0;type<3;++type) {
-            auto& r=ranges[set*4+type];r.RangeType=type==0?IRDescriptorRangeTypeCBV:type==1?IRDescriptorRangeTypeSRV:IRDescriptorRangeTypeUAV;
-            r.NumDescriptors=n?n:1;r.RegisterSpace=set;r.OffsetInDescriptorsFromTableStart=type*n;
+    for(size_t index=0;index<request->bindingCount;++index) {
+        const auto& binding=request->bindings[index];
+        if(binding.set>=request->setCount)return 1;
+        for(uint32_t type=0;type<4;++type) {
+            if(binding.tableOffsets[type]==UINT32_MAX || !binding.count)continue;
+            IRDescriptorRange1 range{};
+            range.RangeType=type==0?IRDescriptorRangeTypeCBV:type==1?IRDescriptorRangeTypeSRV:type==2?IRDescriptorRangeTypeUAV:IRDescriptorRangeTypeSampler;
+            range.NumDescriptors=binding.count;range.BaseShaderRegister=binding.denseIndex;
+            range.RegisterSpace=binding.set;range.OffsetInDescriptorsFromTableStart=binding.tableOffsets[type];
+            ranges[binding.set*2+(type==3)].push_back(range);
         }
-        auto& sampler=ranges[set*4+3];sampler.RangeType=IRDescriptorRangeTypeSampler;sampler.NumDescriptors=n?n:1;sampler.RegisterSpace=set;
-        auto& resourceParam=params[set*2];resourceParam.ParameterType=IRRootParameterTypeDescriptorTable;resourceParam.ShaderVisibility=IRShaderVisibilityAll;resourceParam.DescriptorTable={3,&ranges[set*4]};
-        auto& samplerParam=params[set*2+1];samplerParam.ParameterType=IRRootParameterTypeDescriptorTable;samplerParam.ShaderVisibility=IRShaderVisibilityAll;samplerParam.DescriptorTable={1,&ranges[set*4+3]};
+    }
+    for(uint32_t index=0;index<request->setCount*2;++index) {
+        // Reserved unused root slots keep the runtime/push offsets stable.
+        if(ranges[index].empty()) {
+            IRDescriptorRange1 unused{};
+            unused.RangeType=index%2?IRDescriptorRangeTypeSampler:IRDescriptorRangeTypeSRV;
+            unused.NumDescriptors=1;unused.RegisterSpace=index/2;
+            ranges[index].push_back(unused);
+        }
+        params[index].ParameterType=IRRootParameterTypeDescriptorTable;
+        params[index].ShaderVisibility=IRShaderVisibilityAll;
+        params[index].DescriptorTable={uint32_t(ranges[index].size()),ranges[index].data()};
     }
     if(request->pushConstantSize) {
         auto& push=params[request->setCount*2];push.ParameterType=IRRootParameterTypeCBV;push.ShaderVisibility=IRShaderVisibilityAll;
@@ -197,15 +218,11 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                         result->metallibSize=IRMetalLibGetBytecodeSize(binary);result->metallib=malloc(result->metallibSize);
                         if(result->metallib&&IRMetalLibGetBytecode(binary,(uint8_t*)result->metallib)==result->metallibSize)status=0;
                         if(status==0&&request->mathMode==MVK_METAL_IR_MATH_RELAXED) {
-                            std::vector<uint8_t> adapted;std::string error;
+                            std::string error;
                             start=std::chrono::steady_clock::now();
-                            bool valid=melonx::air::relaxMathPermissions(result->metallib,result->metallibSize,adapted,error);
+                            bool valid=melonx::air::relaxMathPermissionsInPlace(result->metallib,result->metallibSize,error);
                             result->rasterAdapterMs=elapsed(start);
                             if(!valid) {status=1;snprintf(result->error,sizeof(result->error),"math permissions adapter: %s",error.c_str());}
-                            else if(void* bytes=malloc(adapted.size())) {
-                                memcpy(bytes,adapted.data(),adapted.size());free(result->metallib);
-                                result->metallib=bytes;result->metallibSize=adapted.size();
-                            } else {status=2;snprintf(result->error,sizeof(result->error),"math permissions adapter allocation failed");}
                         }
                         if(status==0&&nativeRasterIO) {
                             std::vector<uint8_t> adapted;std::string error;
@@ -252,6 +269,11 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
             }
         }
     }
-    if(error){const char* text=(const char*)IRErrorGetPayload(error);snprintf(result->error,sizeof(result->error),"MSC %u: %s",IRErrorGetCode(error),text?text:"");}
+    if(error){
+        // A known MSC shader/root-signature failure is deterministic for this
+        // key. Allocation/no-error/unknown failures remain retryable.
+        auto code=IRErrorGetCode(error);
+        if(status && code!=IRErrorCodeNoError && code!=IRErrorCodeUnknown)status=1;
+        const char* text=(const char*)IRErrorGetPayload(error);snprintf(result->error,sizeof(result->error),"MSC %u: %s",IRErrorGetCode(error),text?text:"");}
     result->status=status;if(status)MeloNXReleaseMetalIR(result);return status;
 }

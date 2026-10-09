@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.20)
+project(TriangleFanSystemValues LANGUAGES CXX)
+set(VULKAN_HEADERS "" CACHE PATH "Directory containing vulkan/vulkan.h")
+set(MOLTENVK_LIBRARY "" CACHE FILEPATH "Built MoltenVK dylib")
+if(NOT EXISTS "${VULKAN_HEADERS}/vulkan/vulkan.h" OR NOT EXISTS "${MOLTENVK_LIBRARY}")
+    message(FATAL_ERROR "Provide VULKAN_HEADERS and MOLTENVK_LIBRARY")
+endif()
+find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+add_executable(fan_probe fan_probe.cpp)
+target_compile_features(fan_probe PRIVATE cxx_std_17)
+target_include_directories(fan_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(fan_probe PRIVATE "${MOLTENVK_LIBRARY}")
+get_filename_component(MVK_DIRECTORY "${MOLTENVK_LIBRARY}" DIRECTORY)
+set_target_properties(fan_probe PROPERTIES BUILD_RPATH "${MVK_DIRECTORY}")
+foreach(STAGE vert frag)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fan.${STAGE}.spv"
+        COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
+            "${CMAKE_CURRENT_SOURCE_DIR}/fan.${STAGE}" -o "${CMAKE_CURRENT_BINARY_DIR}/fan.${STAGE}.spv"
+        DEPENDS "fan.${STAGE}" VERBATIM)
+endforeach()
+add_custom_target(fan_shaders ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/fan.vert.spv" "${CMAKE_CURRENT_BINARY_DIR}/fan.frag.spv")
+add_dependencies(fan_probe fan_shaders)

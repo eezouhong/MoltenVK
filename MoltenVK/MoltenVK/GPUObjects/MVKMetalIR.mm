@@ -316,23 +316,26 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
     const char* strictMathOption=getenv("MELONX_METAL_IR_STRICT_MATH");
     uint32_t mathMode=strictMathOption?(strcmp(strictMathOption,"1")==0):shaderMathMode(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
-    SPIRV_CROSS_NAMESPACE::Compiler reflect(code);
-    reflect.set_entry_point(stage->pName,(spv::ExecutionModel)execution);
-    auto active=reflect.get_shader_resources(reflect.get_active_interface_variables());
     mvkir::DiskCache::Reflection shaderReflection;
-    shaderReflection.usesPushConstants=!active.push_constant_buffers.empty();
-    for(const auto& input:active.builtin_inputs)
-        shaderReflection.usesPointCoordinates |= input.builtin==spv::BuiltInPointCoord;
-    auto addResources=[&](const auto& resources){for(const auto& resource:resources){
-        uint32_t set=reflect.get_decoration(resource.id,spv::DecorationDescriptorSet);
-        uint32_t binding=reflect.get_decoration(resource.id,spv::DecorationBinding);
-        if(set>=sizes.size())throw std::runtime_error("active descriptor set absent from layout");
-        shaderReflection.usedSets|=1ull<<set;
-        shaderReflection.usedBindings.push_back(((uint64_t)set<<32)|binding);
-    }};
-    addResources(active.uniform_buffers);addResources(active.storage_buffers);
-    addResources(active.sampled_images);addResources(active.separate_images);addResources(active.separate_samplers);
-    addResources(active.storage_images);addResources(active.subpass_inputs);
+    {
+        // Release the parser before a cache miss waits for compiler admission.
+        SPIRV_CROSS_NAMESPACE::Compiler reflect(code);
+        reflect.set_entry_point(stage->pName,(spv::ExecutionModel)execution);
+        auto active=reflect.get_shader_resources(reflect.get_active_interface_variables());
+        shaderReflection.usesPushConstants=!active.push_constant_buffers.empty();
+        for(const auto& input:active.builtin_inputs)
+            shaderReflection.usesPointCoordinates |= input.builtin==spv::BuiltInPointCoord;
+        auto addResources=[&](const auto& resources){for(const auto& resource:resources){
+            uint32_t set=reflect.get_decoration(resource.id,spv::DecorationDescriptorSet);
+            uint32_t binding=reflect.get_decoration(resource.id,spv::DecorationBinding);
+            if(set>=sizes.size())throw std::runtime_error("active descriptor set absent from layout");
+            shaderReflection.usedSets|=1ull<<set;
+            shaderReflection.usedBindings.push_back(((uint64_t)set<<32)|binding);
+        }};
+        addResources(active.uniform_buffers);addResources(active.storage_buffers);
+        addResources(active.sampled_images);addResources(active.separate_images);addResources(active.separate_samplers);
+        addResources(active.storage_images);addResources(active.subpass_inputs);
+    }
     std::sort(shaderReflection.usedBindings.begin(),shaderReflection.usedBindings.end());
     shaderReflection.usedBindings.erase(std::unique(shaderReflection.usedBindings.begin(),shaderReflection.usedBindings.end()),shaderReflection.usedBindings.end());
     for(uint64_t used:shaderReflection.usedBindings)

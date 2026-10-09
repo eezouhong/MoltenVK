@@ -44,9 +44,9 @@ public:
     std::vector<VkPipeline> pipelines;
 
     explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
-                     bool floatControls2 = false, bool fragmentStorageMode = false)
+                     bool floatControls2 = false, bool fragmentStorageMode = false, bool meshMode = false)
         : negativeDepth(negativeDepthMode), fragmentStorage(fragmentStorageMode) {
-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = (floatControls2 || meshMode) ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
         VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
         VK_CHECK(vkCreateInstance(&info, nullptr, &instance));
         uint32_t count{}; VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
@@ -68,18 +68,29 @@ public:
         features.fragmentStoresAndAtomics=fragmentStorage;
         features.largePoints=largePoints;
         features.multiDrawIndirect=VK_TRUE; features.drawIndirectFirstInstance=VK_TRUE;
-        const char* extensions[]={"VK_KHR_portability_subset", floatControls2 ? VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME : VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
-                                  VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME};
+        std::vector<const char*> extensions={"VK_KHR_portability_subset"};
+        if(floatControls2)extensions.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME);
+        if(negativeDepth)extensions.push_back(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
+        VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        if(meshMode) {
+            VkPhysicalDeviceFeatures2 queried{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};queried.pNext=&mesh;
+            vkGetPhysicalDeviceFeatures2(physical,&queried);
+            if(!mesh.meshShader)throw std::runtime_error("mesh shader fixture unsupported");
+            mesh={VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;
+            extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        }
         VkPhysicalDeviceDepthClipControlFeaturesEXT depth{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT}; depth.depthClipControl=VK_TRUE;
         VkPhysicalDeviceShaderFloatControls2FeaturesKHR math{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR}; math.shaderFloatControls2=VK_TRUE;
         if(floatControls2) { draw.pNext=&math; if(negativeDepth) math.pNext=&depth; }
         else if(negativeDepth) draw.pNext=&depth;
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&draw; dc.pEnabledFeatures=&features;
-        dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qi; dc.enabledExtensionCount=1+unsigned(floatControls2)+unsigned(negativeDepth); dc.ppEnabledExtensionNames=extensions;
+        dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qi; dc.enabledExtensionCount=uint32_t(extensions.size()); dc.ppEnabledExtensionNames=extensions.data();
+        if(meshMode){mesh.pNext=&draw;dc.pNext=&mesh;}
         VK_CHECK(vkCreateDevice(physical, &dc, nullptr, &device)); vkGetDeviceQueue(device, family, 0, &queue);
         vkGetPhysicalDeviceMemoryProperties(physical, &memory);
         VkShaderStageFlags outputStages=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_COMPUTE_BIT;
         if(fragmentStorage)outputStages|=VK_SHADER_STAGE_FRAGMENT_BIT;
+        if(meshMode)outputStages|=VK_SHADER_STAGE_MESH_BIT_EXT;
         VkDescriptorSetLayoutBinding binding{0,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,outputStages,nullptr};
         VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; dl.bindingCount=1; dl.pBindings=&binding;
         VK_CHECK(vkCreateDescriptorSetLayout(device,&dl,nullptr,&descriptorLayout));

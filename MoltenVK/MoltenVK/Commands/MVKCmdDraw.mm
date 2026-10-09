@@ -1471,6 +1471,7 @@ void MVKCmdDrawMeshTasksIndirect::encode(MVKCommandEncoder* cmdEncoder) {
 	if ( !pipeline ) { return; }
 
 	if (@available(macOS 13.0, iOS 16.0, *)) {
+		mvkreplay::indirectInvocation(_drawCount, false);
 		// VkDrawMeshTasksIndirectCommandEXT has the same layout as MTLDispatchThreadgroupsIndirectArguments.
 		VkDeviceSize mtlIndBuffOfst = _mtlIndirectBufferOffset;
 		for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {

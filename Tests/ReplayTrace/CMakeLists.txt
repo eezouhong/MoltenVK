@@ -18,3 +18,13 @@ foreach(STAGE vert frag comp)
 endforeach()
 add_custom_target(trace_shaders ALL DEPENDS ${SHADERS})
 add_dependencies(trace_probe trace_shaders)
+add_executable(trace_mesh_probe trace_mesh_probe.cpp)
+target_compile_features(trace_mesh_probe PRIVATE cxx_std_17)
+target_include_directories(trace_mesh_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(trace_mesh_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(trace_mesh_probe PROPERTIES BUILD_RPATH "${MVK_DIRECTORY}")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/trace.mesh.spv"
+    COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.2 "${CMAKE_CURRENT_SOURCE_DIR}/trace.mesh" -o "${CMAKE_CURRENT_BINARY_DIR}/trace.mesh.spv"
+    DEPENDS trace.mesh VERBATIM)
+add_custom_target(trace_mesh_shader ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/trace.mesh.spv")
+add_dependencies(trace_mesh_probe trace_mesh_shader trace_shaders)

@@ -204,6 +204,30 @@ GPU union 18.2742/17.5927 ms。native pool 事件在计时时窗内为
 准备/提交，共约 +0.305 ms；这些 wall 子段不是 CPU 毫秒分区，
 下一项干预必须结合实际调用路径，不能仅由这三个数猜具体指令。
 
+### 实际 root 路径计数与被拒绝的快照实验
+
+一次独立短诊断先验证 single/multiple/parameter/empty 的正值 producer，
+再记录静态窗口 9.02 s/270 帧，无 pipeline 创建，正常退出。实际绑定
+调用每帧约：vertex single GPU 2123、multiple/no-parameters 2579、
+parameters 44；fragment multiple/no-parameters 3360、empty 1371、
+single GPU 46；compute multiple约26。约64%落在多个 set 且不需要
+参数的 root bytes 路线。计数按实际绑定调用，不是编译 stage 数量或
+GPU 已执行 draw 次数；插入计数器的这次运行不作 CPU 验收。
+
+因此单独测试了每 allocation/阶段只发布一次的不可变多 set GPU
+root；tuple 不同或并发 writer 占用时走原 bytes。8-thread/32-round
+发布、同 tuple 复用、不同 tuple 不覆盖、Busy 不等待、终止零的
+CPU 夹具通过，普通/点精灵/描述符和独立 GPU 输出均通过。
+但固定输入的编码 1.3031→1.5195 ms（+16.6%），校准 binding
+23.64→71.20 ns，已拒绝；没有为它再跑游戏。新增容量估算约6.53 MB
+也未作为可接受 tradeoff 留入产品。原始代码、二进制与结果保留。
+
+下一项私有测试在 descriptor allocation 时缓存稳定的 IR table
+地址，复用 IR 不用的 aux slot；MSL aux pointer 和64 B结构 stride
+保持不变。写入/复制路径按 IR/MSL 分派，IR没有 aux offset。
+定向 parent 对照编码 1.3041→1.2396 ms，校准 binding 35.08→26.90 ns，
+正确性已验证，实际双条件验收仍在进行；不据此提前接受。
+
 ## 合入前仍需完成
 
 1. 继续将 binding 分项 +0.3234 ms 降至 ≤0.1；总编码条件已通过，两者不能相互替代。

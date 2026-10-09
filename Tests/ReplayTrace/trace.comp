@@ -1,0 +1,4 @@
+#version 460
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std430) buffer Output { uvec4 rows[]; } data;
+void main() { data.rows[1]=uvec4(11,22,33,44); }

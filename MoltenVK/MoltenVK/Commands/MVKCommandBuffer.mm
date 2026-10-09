@@ -1,3 +1,5 @@
+#include "MVKReplayTrace.h"
+#include "MVKReplayGPUStages.h"
 /*
  * MVKCommandBuffer.mm
  *
@@ -59,7 +61,9 @@ void MVKCommandEncodingContext::syncFences(MVKDevice *device, id<MTLCommandBuffe
 		auto fenceIndex = fenceSlots.update[i];
 		if (!fenceIndex) continue;
 
-		auto encoder = [mtlCommandBuffer blitCommandEncoder];
+		auto* stagePass=mvkreplay::blitGPUStagePass(mtlCommandBuffer);
+		auto encoder = stagePass?[mtlCommandBuffer blitCommandEncoderWithDescriptor:stagePass]:[mtlCommandBuffer blitCommandEncoder];
+		if(encoder)mvkreplay::encoderStarted(2);
 		[encoder waitForFence:device->getFence((MVKBarrierStage)i, fenceIndex)];
 		[encoder updateFence:device->getFence((MVKBarrierStage)i, 0)];
 		[encoder endEncoding];
@@ -437,6 +441,7 @@ void MVKCommandEncoder::beginEncoding(id<MTLCommandBuffer> mtlCmdBuff, MVKComman
 
 // Multithread autorelease prefill style uses a dedicated autorelease pool when encoding each command.
 void MVKCommandEncoder::encodeCommands(MVKCommand* command) {
+	mvkreplay::Timer replayTrace(mvkreplay::MetalCommandEncoding);
 	if (_prefillStyle == MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS_STYLE_IMMEDIATE_ENCODING) {
 		@autoreleasepool {
 			encodeCommandsImpl(command);
@@ -653,6 +658,7 @@ void MVKCommandEncoder::barrierWait(MVKBarrierStage stage, id<MTLRenderCommandEn
 	for (int i = 0; i < kMVKBarrierStageCount; ++i) {
 		auto fenceIndex = _pEncodingContext->fenceSlots.wait[stage][i];
 		auto fence = _device->getFence((MVKBarrierStage)i, fenceIndex);
+		mvkreplay::noteGPUStageFenceWait(_mtlCmdBuffer,unsigned(i),unsigned(stage),fenceIndex);
 		[mtlEncoder waitForFence:fence beforeStages:beforeStages];
 	}
 }
@@ -662,6 +668,7 @@ void MVKCommandEncoder::barrierWait(MVKBarrierStage stage, id<MTLBlitCommandEnco
 	for (int i = 0; i < kMVKBarrierStageCount; ++i) {
 		auto fenceIndex = _pEncodingContext->fenceSlots.wait[stage][i];
 		auto fence = _device->getFence((MVKBarrierStage)i, fenceIndex);
+		mvkreplay::noteGPUStageFenceWait(_mtlCmdBuffer,unsigned(i),unsigned(stage),fenceIndex);
 		[mtlEncoder waitForFence:fence];
 	}
 }
@@ -671,6 +678,7 @@ void MVKCommandEncoder::barrierWait(MVKBarrierStage stage, id<MTLComputeCommandE
 	for (int i = 0; i < kMVKBarrierStageCount; ++i) {
 		auto fenceIndex = _pEncodingContext->fenceSlots.wait[stage][i];
 		auto fence = _device->getFence((MVKBarrierStage)i, fenceIndex);
+		mvkreplay::noteGPUStageFenceWait(_mtlCmdBuffer,unsigned(i),unsigned(stage),fenceIndex);
 		[mtlEncoder waitForFence:fence];
 	}
 }
@@ -835,7 +843,12 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
 		[mtlRPDesc setSamplePositions: sampPosns.data() count: sampPosns.size()];
 	}
 
+#if MVK_REPLAY_TRACE
+    _replayRenderWork={};
+    _replayRenderWorkActive=mvkreplay::attachGPUStages(_mtlCmdBuffer,mtlRPDesc);
+#endif
     _mtlRenderEncoder = [_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
+    if (_mtlRenderEncoder) mvkreplay::encoderStarted(0);
 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
 	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, getMTLRenderCommandEncoderName(cmdUse));
 	getState().beginGraphicsEncoding(getSampleCount());
@@ -856,6 +869,7 @@ void MVKCommandEncoder::restartMetalRenderPassIfNeeded() {
 }
 
 void MVKCommandEncoder::encodeStoreActions(bool storeOverride) {
+    if (storeOverride && _mtlRenderEncoder) mvkreplay::renderPassInterrupted();
 	getSubpass()->encodeStoreActions(this,
 									 _isRenderingEntireAttachment,
 									 _attachments.contents(),
@@ -972,6 +986,14 @@ void MVKCommandEncoder::updateAttachmentInputIndices(const MVKArrayRef<uint32_t>
 	}
 }
 
+#if MVK_REPLAY_TRACE
+void MVKCommandEncoder::noteReplayDraw(uint64_t elements,uint64_t instances,bool indexed,bool known) {
+    if(!_replayRenderWorkActive)return;
+    auto* pipeline=getGraphicsPipeline();
+    _replayRenderWork.add(pipeline?pipeline->getReplayVertexHash():0,pipeline?pipeline->getReplayFragmentHash():0,elements,instances,indexed,known);
+}
+#endif
+
 void MVKCommandEncoder::finalizeDrawState(MVKGraphicsStage stage) {
     if (stage == kMVKGraphicsStageVertex) {
         // Must happen before switching encoders.
@@ -1060,6 +1082,12 @@ void MVKCommandEncoder::endRenderpass() {
 
 void MVKCommandEncoder::endMetalRenderEncoding() {
     if (_mtlRenderEncoder == nil) { return; }
+#if MVK_REPLAY_TRACE
+    if(_replayRenderWorkActive) {
+        mvkreplay::noteGPUStageRenderWork(_mtlCmdBuffer,_replayRenderWork);
+        _replayRenderWorkActive=false;
+    }
+#endif
 
 	if (_cmdBuffer->_hasStageCounterTimestampCommand) { [_mtlRenderEncoder updateFence: getStageCountersMTLFence() afterStages: MTLRenderStageFragment]; }
 	encodeBarrierUpdates();
@@ -1117,7 +1145,14 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
 	if (!_mtlComputeEncoder || shouldStartNewEncoder(_mtlComputeEncoderUse, cmdUse)) {
 		needWaits = true;
 		endCurrentMetalEncoding();
+#if MVK_REPLAY_TRACE
+		auto* stagePass=mvkreplay::computeGPUStagePass(_mtlCmdBuffer,getDispatchType(cmdUse));
+		_mtlComputeEncoder = stagePass?[_mtlCmdBuffer computeCommandEncoderWithDescriptor:stagePass]
+			:[_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+#else
 		_mtlComputeEncoder = [_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+#endif
+		if (_mtlComputeEncoder) mvkreplay::encoderStarted(1);
 		retainIfImmediatelyEncoding(_mtlComputeEncoder);
 		beginMetalComputeEncoding(cmdUse);
 	}
@@ -1137,7 +1172,9 @@ id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmd
 	if ( !_mtlBlitEncoder ) {
 		needWaits = true;
 		endCurrentMetalEncoding();
-		_mtlBlitEncoder = [_mtlCmdBuffer blitCommandEncoder];
+		auto* stagePass=mvkreplay::blitGPUStagePass(_mtlCmdBuffer);
+		_mtlBlitEncoder = stagePass?[_mtlCmdBuffer blitCommandEncoderWithDescriptor:stagePass]:[_mtlCmdBuffer blitCommandEncoder];
+		if (_mtlBlitEncoder) mvkreplay::encoderStarted(2);
 		retainIfImmediatelyEncoding(_mtlBlitEncoder);
 	}
     if (_mtlBlitEncoderUse != cmdUse) {
@@ -1216,6 +1253,7 @@ const MVKMTLBufferAllocation* MVKCommandEncoder::copyToTempMTLBufferAllocation(c
 
     return mtlBuffAlloc;
 }
+
 
 
 #pragma mark Queries
@@ -1304,6 +1342,8 @@ void MVKCommandEncoder::encodeTimestampStageCounterSamples() {
 		}
 
 		auto* mtlEnc = [_mtlCmdBuffer blitCommandEncoderWithDescriptor: bpDesc];
+		if(mtlEnc)mvkreplay::encoderStarted(2);
+		mvkreplay::noteUnmeasuredGPUStage(_mtlCmdBuffer,2);
 		_cmdBuffer->setMetalObjectLabel(mtlEnc, mvkMTLBlitCommandEncoderLabel(kMVKCommandUseRecordGPUCounterSample));
 		[bpDesc release];		// Release temp object
 		[mtlEnc waitForFence: getStageCountersMTLFence()];

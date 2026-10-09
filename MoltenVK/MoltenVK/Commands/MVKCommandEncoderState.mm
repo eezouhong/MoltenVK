@@ -1,3 +1,5 @@
+#include "MVKReplayTrace.h"
+#include "MVKReplayBindingTrace.h"
 /*
  * MVKCommandEncoderState.mm
  *
@@ -577,6 +579,7 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
                            MVKStageResourceBits& exists,
                            MVKStageResourceBindings& bindings,
                            const MVKResourceBinder& RESTRICT binder) {
+	mvkreplay::Timer replayTrace(mvkreplay::DescriptorBinding);
 	bool didUseResource = false;
 	for (const MVKDescriptorBindOperation& op : ops) {
 		MVKDescriptorSet* set = common._descriptorSets[op.set];
@@ -668,6 +671,7 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
                                const MVKResourceBinder& RESTRICT binder) {
+	mvkreplay::BindingTrace bindingTrace(false);
 	// Clear descriptor set resource use bitarray for new sets and bind them
 	MVKStaticBitSet<kMVKMaxDescriptorSetCount> setsNeeded = resources.resources.descriptorSetData.clearingAllIn(exists.descriptorSetData);
 	exists.descriptorSetData |= resources.resources.descriptorSetData;
@@ -678,7 +682,9 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
 		bindBuffer(encoder, set->gpuBufferObject, set->gpuBufferOffset, idx, exists, bindings, binder);
 	}
 
+	bindingTrace.checkpoint();
 	executeBindOps(encoder, mvkEncoder, common, implicitBufferData, resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+	bindingTrace.checkpoint();
 
 	MVKMetalSharedCommandEncoderState& mtlShared = mvkEncoder.getState().mtlShared();
 	if (resources.usesPhysicalStorageBufferAddresses && !isCompatible(mtlShared._gpuAddressableResourceStages, useResourceStage)) {
@@ -1497,7 +1503,12 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
 		bindVertexBuffers(encoder, vk, _exists.vertex(), _bindings.vertex(), MVKVertexBufferBinder::Vertex());
 	}
 	bindVulkanGraphicsToMetalGraphics(encoder, mvkEncoder, vk, vkShared, *this, pipeline, kMVKShaderStageFragment, MVKMetalGraphicsStage::Fragment);
-	useResource.bindAndResetGraphics(encoder);
+	{
+		mvkreplay::BindingTrace residencyTrace(false, mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::Residency);
+		residencyTrace.checkpoint();
+		useResource.bindAndResetGraphics(encoder);
+		residencyTrace.checkpoint();
+	}
 	useResource.meshStage = false;
 }
 

@@ -1,3 +1,4 @@
+#include "MVKReplayTrace.h"
 /*
  * MVKShaderModule.mm
  *
@@ -396,7 +397,9 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
 			NSString* mtlFuncName = @(_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str());
 
 			uint64_t startTime = pShaderFeedback ? mvkGetTimestamp() : getPerformanceTimestamp();
-			id<MTLFunction> mtlFunc = [[lib newFunctionWithName: mtlFuncName] autorelease];
+			id<MTLFunction> mtlFunc;
+			{ mvkreplay::Timer trace(mvkreplay::MSLFunction);
+			  mtlFunc = [[lib newFunctionWithName: mtlFuncName] autorelease]; }
 			addPerformanceInterval(getPerformanceStats().shaderCompilation.functionRetrieval, startTime);
 			if (pShaderFeedback) {
 				if (mtlFunc) {
@@ -1892,7 +1895,9 @@ bool MVKShaderModule::convert(SPIRVToMSLConversionConfiguration* pShaderConfig,
 	bool shouldLogEstimatedGLSL = shouldLogCode && mvkCfg.shaderLogEstimatedGLSL;
 
 	uint64_t startTime = getPerformanceTimestamp();
-	bool wasConverted = _spvConverter.convert(*pShaderConfig, conversionResult, shouldLogCode, shouldLogCode, shouldLogEstimatedGLSL);
+	bool wasConverted;
+	{ mvkreplay::Timer trace(mvkreplay::SPIRVToMSL);
+	  wasConverted = _spvConverter.convert(*pShaderConfig, conversionResult, shouldLogCode, shouldLogCode, shouldLogEstimatedGLSL); }
 	addPerformanceInterval(getPerformanceStats().shaderCompilation.spirvToMSL, startTime);
 
 	const char* dumpDir = getMVKConfig().shaderDumpDir;
@@ -2027,6 +2032,7 @@ MVKShaderModule::~MVKShaderModule() {
 id<MTLLibrary> MVKShaderLibraryCompiler::newMTLLibrary(NSString* mslSourceCode,
 												   const SPIRVToMSLConversionResultInfo& shaderConversionResults,
 												   const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& specializationMacroDef) {
+	mvkreplay::Timer trace(mvkreplay::MSLLibrary);
 	auto mtlCompileOptions = [getDevice()->getMTLCompileOptions(
 		shaderConversionResults.entryPoint.fpFastMathFlags,
 		shaderConversionResults.isPositionInvariant) retain];

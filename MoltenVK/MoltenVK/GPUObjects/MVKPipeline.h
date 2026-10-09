@@ -1,3 +1,4 @@
+#include "MVKReplayConfig.h"
 /*
  * MVKPipeline.h
  *
@@ -363,6 +364,13 @@ struct MVKPipelineStageResourceInfo {
 class MVKGraphicsPipeline : public MVKPipeline {
 
 public:
+#if MVK_REPLAY_TRACE
+    uint64_t getReplayVertexHash() const { return _replayVertexHash; }
+    uint64_t getReplayFragmentHash() const { return _replayFragmentHash; }
+#else
+    uint64_t getReplayVertexHash() const { return 0; }
+    uint64_t getReplayFragmentHash() const { return 0; }
+#endif
 
 	/** Returns the number and order of stages in this pipeline. Draws commands must encode this pipeline once per stage. */
 	void getStages(MVKPiplineStages& stages);
@@ -551,6 +559,9 @@ protected:
 	MTLSize _meshThreadgroupSize = {1, 1, 1};
 
 	MVKShaderModule* _vertexModule = nullptr;
+#if MVK_REPLAY_TRACE
+    uint64_t _replayVertexHash=0,_replayFragmentHash=0;
+#endif
 	MVKShaderModule* _tessCtlModule = nullptr;
 	MVKShaderModule* _tessEvalModule = nullptr;
 	MVKShaderModule* _fragmentModule = nullptr;
@@ -578,6 +589,11 @@ class MVKComputePipeline : public MVKPipeline {
 public:
 	/** Returns if this pipeline allows non-zero dispatch bases in vkCmdDispatchBase(). */
 	bool allowsDispatchBase() { return _allowsDispatchBase; }
+#if MVK_REPLAY_TRACE
+    uint64_t getReplayProgramHash() const { return _replayProgramHash; }
+#else
+    uint64_t getReplayProgramHash() const { return 0; }
+#endif
 
 	/** Returns the MTLRenderPipelineState for the final stage of the pipeline */
 	id<MTLComputePipelineState> getPipelineState() const { return _mtlPipelineState; }
@@ -611,6 +627,9 @@ protected:
 	MVKPipelineStageResourceInfo _stageResources = {};
     MTLSize _mtlThreadgroupSize;
 	bool _allowsDispatchBase = false;
+#if MVK_REPLAY_TRACE
+    uint64_t _replayProgramHash=0;
+#endif
 
 	MVKShaderModule* _module = nullptr;
 	bool _ownsModule = false;

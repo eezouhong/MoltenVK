@@ -39,7 +39,7 @@ Xcode 首次重建因默认工具链缺 iOS 平台失败，改用已安装且原
 
 | PR | 问题与修复 | 已有验证 |
 |---|---|---|
-| [MeloNX #287](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/287) | flush 从完成时刻开始计下一次 draw 窗口，避免慢 flush 让后续窗口过早到期 | 8 个 CPU 测试、关闭诊断的产品构建通过；合入前未完成主机游戏 off/on 对比，此限制保留 |
+| [MeloNX #287](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/287) | flush 从完成时刻开始计下一次 draw 窗口，避免慢 flush 让后续窗口过早到期 | 8 个 CPU 测试、关闭诊断产品构建、实际 MSL off/on 主机对照通过；DrawTimer/fast-mode producer 实际非零，完整范围见下文 |
 | [MoltenVK #25](https://github.com/eezouhong/MoltenVK/pull/25) | 原生非索引 triangle fan 使用相对索引和正确 base vertex；间接生成与读取都按容量限制 | MSL、IR 各 7 个 GPU 用例；非零 firstVertex、高偏移、超过容量、系统值 CPU oracle；Metal validation 通过 |
 | [MoltenVK #26](https://github.com/eezouhong/MoltenVK/pull/26) | replay 诊断默认编译关闭，提供空 inline stub；真实普通与 mesh 间接调用更新计数器 | 6 个 CPU 测试、OFF/ON 普通与 mesh GPU 输出、导出符号检查、完整平台 CI 通过 |
 
@@ -258,6 +258,24 @@ CPU 夹具通过，普通/点精灵/描述符和独立 GPU 输出均通过。
 保持不变。写入/复制路径按 IR/MSL 分派，IR没有 aux offset。
 定向 parent 对照编码 1.3041→1.2396 ms，校准 binding 35.08→26.90 ns，
 正确性已验证，实际双条件验收仍在进行；不据此提前接受。
+
+### Flush 完成计时的实际 MSL off/on 对照
+
+补齐 #287 的主机要求：同一个完整测试程序、相同 native/冻结存档与诊断配置，只有私有启动控制切换旧的 flush-start 时间戳和产品的 flush-completed 时间戳。通过 Debug Tool 共享队列，每路30秒稳定等待后观察60秒，均正常 F24/实际 exit0。原有每秒累计 snapshot 不足以给出逐帧分布，因此私有诊断在 Window.Present 入口发布累计数组，并核验连续 sequence、时钟与实际生产计数。诊断补丁和测量 DLL 保留，测试后恢复源码并重建，未进入产品。
+
+| 有效 pipeline-free CPU Present 区间 | 旧 start 策略 | 新 completed 策略 |
+|---|---:|---:|
+| 有效区间数 | 1432 | 1545 |
+| 所有原因 flush 平均次数/区间 | 21.1418 | 17.7320 |
+| DrawTimer 平均次数/区间 | 6.8848 | 4.2278 |
+| AttachmentTimer 平均次数/区间 | 3.4756 | 2.7489 |
+| 所有 flush 工作 wall 总和/区间 | 11.1827 ms | 10.6817 ms |
+| 单次 DrawTimer flush 的平均 work wall | 0.7111 ms | 0.9892 ms |
+| CPU Present 间隔中位数 / P95 | 33.4215 / 54.4950 ms | 33.5670 / 51.0737 ms |
+
+总 flush 次数少16.13%，DrawTimer少38.59%，总 flush work wall少4.48%；单次 flush更长，不将其写成单次成本下降。DrawTimer全部处于fast mode（9859/6532次），每次 DrawTimer 前平均draw数425.09/621.58，验证了真实路径，而不只依赖零计数。其他原因的完整分项、原始不利长帧保留。采样窗口有14/2个pipeline创建，按实际ticket区间±100ms排除33/14个Present区间；分别仍有45/21个>100ms区间，未删除。
+
+Window.Present入口的CPU调用间隔不是物理显示帧或GPU时间；flush work含submit/rent/restore等等待，并非线程CPU。这是一对观察，不是多运行置信区间，也不据此宣称FPS或手机收益。native为与测试清单860615匹配的既有a69诊断版本，IR/replay/private pool日志关闭，两路相同；不是最终clean Release性能验收。首次用clean代码但旧embedded revision的库因严格版本门禁在启动前失败，原记录保留，未绕过门禁。
 
 ## 用户统一验收的事项
 

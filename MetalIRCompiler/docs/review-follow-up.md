@@ -187,6 +187,23 @@ compiler/framework、实际已核验 native 和 preview manifest；正式
 首次 AOT 构建的缺失路径斜杠导致错误 sysroot 已修正；失败日志
 lossless gzip 保留。只构建、未签名验收、未安装或操作手机。
 
+### 地址刷新候选的实际对照
+
+避免每次读取大 GPU table 尾部、按 descriptor invalidation/cache reset
+刷新地址后，实际 MSL/IR 编码线程 CPU 为 7.3951/7.2167 ms，
+增量 −0.1784 ms；1/30/60/120-frame bootstrap 区间都为负，总编码
+条件通过。但校准 binding 增量仍为 **+0.3086 ms**，≤0.1 分项未过。
+不能把总编码收益替代分项门槛。该修改以实测总收益保留为私有
+继续工作基础，仍未进入生产代码。
+
+两路正常 F24/实际 process exit0，分别 1786/1785 个有效帧；
+GPU union 18.2742/17.5927 ms。native pool 事件在计时时窗内为
+42/12 条，窗口末 IR pool 约 30.52 MiB，退出全部释放。整段
+同采样点 Metal/process residual 中位增量 +24.66/−30.00 MiB，
+只是比较代理。binding 的诊断 wall 子段显示剩余差异集中在 root
+准备/提交，共约 +0.305 ms；这些 wall 子段不是 CPU 毫秒分区，
+下一项干预必须结合实际调用路径，不能仅由这三个数猜具体指令。
+
 ## 合入前仍需完成
 
 1. 继续将 binding 分项 +0.3234 ms 降至 ≤0.1；总编码条件已通过，两者不能相互替代。

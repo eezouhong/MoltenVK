@@ -86,3 +86,12 @@ must match the CPU's separated float32 multiply/add exactly; the fixture first
 proves its sentinel differs from FMA. Cases that permit contraction use a finite
 tolerance for the corresponding output. This does not turn a legal optimization
 into a precision failure.
+
+`run_msc_negative.py` sends the same structurally valid FP64 compute shader
+through two separate shader modules and pipeline requests. The pinned MSC
+3.1.1 must reject it with `IRErrorCodeFP64Usage` (19), and native telemetry must
+show one compiler call and unchanged positive MSC time after the second
+request. Both Vulkan requests fail explicitly with no MSL fallback. This is an
+unsupported-feature rejection/cache test; it submits no dispatch and makes no
+rendering or Vulkan-conformance claim. Use the same path arguments and queue
+wrapper as the other runners.

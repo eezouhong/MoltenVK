@@ -73,7 +73,13 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 
 一个额外的最小归因实验仅关闭 resident library 缓存：4 workers 的残留从 193.09 MiB 降至 189.52 MiB，约减少 3.58 MiB；实际 retained/code bytes 为 0，200 stage 全部重编且 100 PSO 通过 validation。它不能解释主要的约 70 MiB 差距；没有据此修改默认缓存容量。
 
+补充生命周期实验使用相同 200 stage、默认 resident LRU64 和 4 个请求 worker，记录 allocator 与对象销毁阶段；两条路线各 100 PSO 通过。开启 API/GPU validation 时，销毁 instance 后的 footprint 增量为 MSL 121.23 / IR 186.48 MiB（差 +65.25）。关闭两种 validation 后为 42.69 / 72.44 MiB（差 +29.75），而 malloc 活跃分配增量仅为 11.05 / 11.24 MiB。validation 放大了本夹具的驻留开销；剩余差距不能归于已销毁的 pipeline，也不能把 malloc 保留空间当作物理所有者分解。该实验只有固定 shader 的编译/链接，没有游戏内存或画面验收结论。
+
 缓存 descriptor pool GPU 基地址的候选修改也未保留。5,000 个不同 set/输出偏移的 GPU oracle 通过；关闭 API/GPU validation 后编码 CPU 中位数 1.16875→1.16981 ms/批次，没有明显收益。开启 validation 的成本明显放大，未用该数据宣称产品性能改善。
+
+另两个 root 上传候选均通过输出 oracle 后撤回：GPU buffer/offset 方案的 5,000-set 编码 CPU 中位数增加 3.52%；CPU payload 复用与活跃 set 遍历方案在稀疏 set 2 夹具增加 2.77%。两者均在 validation 关闭的配置测量，失败候选和输入保留。没有用正确性通过替代性能收益。
+
+实际 MSC 负缓存端到端测试已通过：两个不同 shader module 提交相同 FP64 stage，MSC 3.1.1 明确返回 `IRErrorCodeFP64Usage`（19）。两次 Vulkan pipeline 请求都失败，compiler calls 保持 1，正值 MSC 累计时间保持不变；没有 MSL 回退。此用例只验证不支持的 optional feature 的拒绝与缓存，不提交 dispatch。可复用入口为 [run_msc_negative.py](../tests/replay/run_msc_negative.py)。
 
 ## 修正和失败记录
 
@@ -81,7 +87,7 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 - 第一版 200-stage 夹具有五个 depth-writing shader，但 render pass 没有 depth attachment。按实际输出反射补上 depth attachment 后，整组重跑；未删掉失败 shaders，也未把夹具失败记为产品缺陷。
 - 原 benchmark stdout/stderr 混写曾破坏 JSON 解析；成功数据从原日志恢复，随后分流输出。失败记录保留。
 - 对缺失局部 autoreleasepool 的初步怀疑撤回：实际 pipeline 创建外层已有 pool，不能用该差异解释额外进程 footprint。
-- 两次完整 frame capture 分别因存储耗尽、诊断容量上限未得到有效的固定帧 replay。原始文件保留，未当作有效画面证明，也未继续盲目大规模抓帧。
+- 两次完整 frame capture 的 controller 分别因存储耗尽、诊断容量上限失败。后续离线检查发现第二次正常退出后的最终文件能完整解析出一帧，并已固定哈希；这修正了“controller 失败即录制不可用”的推断。基线回放先因缺显式 Vulkan loader 失败，配置修复后在 GFXReconstruct 的 graphics-pipeline dispatch table 查找处崩溃，尚无有效画面。原失败、录制及回放崩溃报告保留，未宣称烟雾正确。
 - 较早的不同游戏时刻截图不能证明烟雾等价。连续帧显示两条路径都能出现烟雾，但缺少同一实际 smoke draw/input 的逐像素 oracle。
 
 ## 合入前仍需完成
@@ -89,7 +95,7 @@ CPU 的 IID 与 30/60/120 帧 block bootstrap 区间均为正；这些区间描�
 1. 将绑定 CPU 回退降至约定门槛；候选优化需要定向回归与最终同指标确认。
 2. 找到实际烟雾 draw，固定 shader、资源和 draw inputs，比较 MSL / IR-strict / IR-fast。通用 point/math/system-value 用例不能替代这项验收。
 3. 解释并处理额外进程 footprint；已降低的 descriptor pool/Metal residual 与未降低的进程 residual 都需保留报告。
-4. 补实际 MSC 确定性拒绝的端到端覆盖。stage-key 复用/失效 GPU 夹具已通过；CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
+4. 实际 MSC 确定性拒绝与同设备负缓存覆盖已通过；stage-key 复用/失效 GPU 夹具已通过。CPU 层已验证正值 dropped/failed counters、负缓存、瞬时重试与并发拒绝。
 5. 可选 ABI9 iOS arm64/macOS compiler framework 已构建并核验四个导出符号、二进制 SHA 和 iOS 17.0 最低部署版本；iOS 对象代码的 ABI 函数返回 9。iOS compiler 为 13.30 MB，Apple MSC 为 34.63 MB，原始厂商 SHA 保持不变。候选 manifest 已准备；默认清单仍须等匹配的 ABI9 native 进入维护 RC 后一起更新。仅构建，没有安装或操作手机；现有功能分支 pin 仍是实验状态。
 
 不再通过六对整局 ABBA 或挑选负载接近的复跑寻找有利结果。数据分析方法已整理为本地 `melonx-graphics-acceptance` skill，并使用历史三组日志验证其计算。手机验收暂不在用户授权范围内；主机数据不能宣称真机动态加载、jetsam 或最终 FPS 已通过。

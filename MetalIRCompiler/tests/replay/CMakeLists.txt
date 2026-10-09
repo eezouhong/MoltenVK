@@ -7,6 +7,10 @@ if(NOT EXISTS "${VULKAN_HEADERS}/vulkan/vulkan.h" OR NOT EXISTS "${MOLTENVK_LIBR
     message(FATAL_ERROR "Set VULKAN_HEADERS and MOLTENVK_LIBRARY explicitly")
 endif()
 find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+add_executable(msc_negative_probe msc_negative_probe.cpp)
+target_compile_features(msc_negative_probe PRIVATE cxx_std_17)
+target_include_directories(msc_negative_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(msc_negative_probe PRIVATE "${MOLTENVK_LIBRARY}")
 add_executable(runtime_probe runtime_probe.cpp)
 target_compile_features(runtime_probe PRIVATE cxx_std_17)
 target_include_directories(runtime_probe PRIVATE "${VULKAN_HEADERS}")
@@ -15,7 +19,7 @@ get_filename_component(MOLTENVK_DIRECTORY "${MOLTENVK_LIBRARY}" DIRECTORY)
 set_target_properties(runtime_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 
 set(SHADER_OUTPUTS)
-foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp descriptors.comp points.vert points.frag points_plain.frag)
+foreach(SHADER msc_negative.comp runtime.vert runtime.frag runtime.comp unused.comp descriptors.comp points.vert points.frag points_plain.frag)
     set(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv")
     add_custom_command(OUTPUT "${OUTPUT}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
@@ -25,6 +29,8 @@ foreach(SHADER runtime.vert runtime.frag runtime.comp unused.comp descriptors.co
 endforeach()
 add_custom_target(replay_shaders ALL DEPENDS ${SHADER_OUTPUTS})
 add_dependencies(runtime_probe replay_shaders)
+set_target_properties(msc_negative_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(msc_negative_probe replay_shaders)
 add_executable(concurrent_probe concurrent_probe.cpp)
 target_compile_features(concurrent_probe PRIVATE cxx_std_17)
 target_include_directories(concurrent_probe PRIVATE "${VULKAN_HEADERS}")

@@ -19,6 +19,7 @@
  */
 
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
 #include "MVKCommandBuffer.h"
 #include "MVKInlineObjectConstructor.h"
 #include "MVKImage.h"
@@ -2431,29 +2432,6 @@ static bool hasDynamicBuffer(VkDescriptorType type) {
 	}
 }
 
-static bool hasBuffer(MVKDescriptorGPULayout layout) {
-	switch (layout) {
-		case MVKDescriptorGPULayout::Buffer:
-		case MVKDescriptorGPULayout::BufferAuxSize:
-		case MVKDescriptorGPULayout::TexBufSoA:
-			return true;
-		default:
-			return false;
-	}
-}
-
-static bool isWriteable(VkDescriptorType type) {
-	switch (type) {
-		case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-		case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-		case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-			return true;
-		default:
-			return false;
-	}
-}
-
 bool MVKPipelineLayout::boundsCheckBindOp(uint32_t bind, uint32_t count, uint32_t limit, const char *type) {
 	if (bind + count > limit) {
 		char desc[32];
@@ -2529,11 +2507,11 @@ void MVKPipelineLayout::populateBindOperations(MVKPipelineBindScript& script, co
 			MVKDescriptorBindOperationCode useTex = partiallyBound ? MVKDescriptorBindOperationCode::UseTextureWithLiveCheck : MVKDescriptorBindOperationCode::UseResource;
 			MVKDescriptorBindOperationCode useBuf = partiallyBound ? MVKDescriptorBindOperationCode::UseBufferWithLiveCheck  : MVKDescriptorBindOperationCode::UseResource;
 			MVKDescriptorGPULayout gpuLayout = desc.gpuLayout;
-			uint32_t target = isWriteable(desc.descriptorType);
+			uint32_t target = descriptorIsWriteable(desc.descriptorType);
 			for (uint32_t i = 0, n = descriptorTextureCount(gpuLayout); i < n; i++) {
 				script.ops.push_back({ useTex, set, target, descIdx, sizeof(id) * i });
 			}
-			if (hasBuffer(gpuLayout)) {
+			if (descriptorHasBuffer(gpuLayout)) {
 				script.ops.push_back({ useBuf, set, target, descIdx, nonTexOffset });
 			}
 		}
@@ -3155,6 +3133,16 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 		}
 	}
 
+	// Tessellation has a separate Metal construction path below. Reject it here,
+	// before that path can compile a guest shader with the MSL compiler.
+	if (device->isMetalIRShaderCompilerEnabled() &&
+		(pTessCtlSS || pTessEvalSS || _isMeshPipeline)) {
+		_hasValidMTLPipelineStates = false;
+		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+			"MetalIR tessellation/mesh shader stages are unsupported; MSL fallback disabled."));
+		return;
+	}
+
 	_vertexModule = getOrCreateShaderModule(device, pVertexSS, _ownsVertexModule);
 	_tessCtlModule = getOrCreateShaderModule(device, pTessCtlSS, _ownsTessCtlModule);
 	_tessEvalModule = getOrCreateShaderModule(device, pTessEvalSS, _ownsTessEvalModule);
@@ -3383,6 +3371,7 @@ id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPi
 																		 bool allowMetal4Flexible) {
 	if ( !plState ) {
 		mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
+		MVKMetalIRPSOTimer irPSOTiming(getDevice());
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
 		bool attemptedMetal4 = false;
@@ -3622,6 +3611,11 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	}
 
 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
+	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
+		if (addMetalIRShadersToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pFragmentSS,
+		                               getRenderingCreateInfo(pCreateInfo)->viewMask)) return plDesc;
+		[plDesc release]; return nil;
+	}
 	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
 
 	// Vertex input
@@ -4289,7 +4283,8 @@ bool MVKGraphicsPipeline::addVertexInputToPipeline(T* inputDesc,
 		if (shaderConfig.isShaderInputLocationUsed(pVKVA->location)) {
 			uint32_t vaBinding = pVKVA->binding;
 			uint32_t vaOffset = pVKVA->offset;
-			auto vaDesc = inputDesc.attributes[pVKVA->location];
+			auto& artifact = _stageResources[kMVKShaderStageVertex].metalIR;
+			auto vaDesc = inputDesc.attributes[artifact ? artifact->vertexAttributes[pVKVA->location] : pVKVA->location];
 			auto mtlFormat = (decltype(vaDesc.format))getPixelFormats()->getMTLVertexFormat(pVKVA->format);
 
 			// Vulkan allows offsets to exceed the buffer stride, but Metal doesn't.
@@ -4926,6 +4921,7 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 
 	id<MTLFunction> mtlFunc = func.getMTLFunction();
 	if (mtlFunc) {
+		MVKMetalIRPSOTimer irPSOTiming(getDevice());
 		MTLComputePipelineDescriptor* plDesc = [MTLComputePipelineDescriptor new];	// temp retain
 		plDesc.computeFunction = mtlFunc;
 		plDesc.maxTotalThreadsPerThreadgroup = _mtlThreadgroupSize.width * _mtlThreadgroupSize.height * _mtlThreadgroupSize.depth;
@@ -4976,6 +4972,7 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 	} else {
 		_hasValidMTLPipelineStates = false;
 	}
+
 	if (pPipelineFB) {
 		if (_hasValidMTLPipelineStates) { mvkEnableFlags(pPipelineFB->flags, VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT); }
 		pPipelineFB->duration = mvkGetElapsedNanoseconds(pipelineStart);
@@ -4992,7 +4989,17 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
     const VkPipelineShaderStageCreateInfo* pSS = &pCreateInfo->stage;
     if ( !mvkAreAllFlagsEnabled(pSS->stage, VK_SHADER_STAGE_COMPUTE_BIT) ) { return MVKMTLFunctionNull; }
 
-	_module = getOrCreateShaderModule(_device, pSS, _ownsModule);
+	if (!_module) _module = getOrCreateShaderModule(_device, pSS, _ownsModule);
+	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
+		auto artifact = mvkCompileMetalIR(this, _layout, _module, pSS, 0,
+			_allowsDispatchBase ? MVK_METAL_IR_ALLOW_DISPATCH_BASE : 0);
+		if (artifact) {
+			_stageResources.metalIR = artifact->metadata;
+			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources);
+			return MVKMTLFunction(artifact->function, {}, MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2]));
+		}
+        return MVKMTLFunctionNull;
+	}
 
 	warnIfUnsupportedRobustnessEnabled(this, pSS);
 

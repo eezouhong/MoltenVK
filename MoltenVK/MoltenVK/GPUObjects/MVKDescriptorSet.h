@@ -27,6 +27,9 @@
 #include <vector>
 
 class MVKDescriptorPool;
+class MVKDescriptorSetLayout;
+struct MVKDescriptorSet;
+enum class MVKDescriptorUpdateSourceType;
 class MVKPipelineLayout;
 class MVKCommandEncoder;
 class MVKResourcesCommandEncoderState;
@@ -204,6 +207,19 @@ static constexpr uint32_t descriptorTextureCount(MVKDescriptorGPULayout layout) 
 	}
 }
 
+static constexpr bool descriptorHasBuffer(MVKDescriptorGPULayout layout) {
+	return layout == MVKDescriptorGPULayout::Buffer ||
+	       layout == MVKDescriptorGPULayout::BufferAuxSize ||
+	       layout == MVKDescriptorGPULayout::TexBufSoA;
+}
+
+static constexpr bool descriptorIsWriteable(VkDescriptorType type) {
+	return type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ||
+	       type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER ||
+	       type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
+	       type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+}
+
 enum MVKDescriptorBindingFlagBits {
 	MVK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT           = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
 	MVK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT = VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
@@ -219,6 +235,8 @@ struct MVKDescriptorBinding {
 	uint32_t binding;                 /**< The Vulkan binding number. */
 	VkDescriptorType descriptorType;  /**< The Vulkan descriptor type. */
 	uint32_t descriptorCount;         /**< The number of Vulkan descriptors bound. */
+	uint32_t metalIRTableOffsets[4]; /**< Absolute entries by CBV/SRV/UAV/sampler kind. */
+	uint32_t metalIRDenseOffset;      /**< Precomputed offset in the IR descriptor tables. */
 	VkShaderStageFlags stageFlags;    /**< Flags from Vulkan indicating the stages that use this descriptor. */
 	uint8_t flags;                    /**< MVKDescriptorBindingFlagBits */
 	MVKDescriptorCPULayout cpuLayout; /**< The layout in the descriptor set's host-side storage. */
@@ -334,8 +352,20 @@ public:
 	uint32_t gpuAlignment() const { return _gpuAlignment; }
 	/** Returns the required CPU buffer size. */
 	uint32_t cpuSize(uint32_t numVariable = 0) const { return _cpuSize + numVariable * _cpuVariableElementSize; }
-	/** Returns the required GPU buffer size.  For variable descriptor sets with argument encoders, returns zero; you must get the actual value from the encoder in that case. */
+	/** Returns the required GPU buffer size for the selected storage strategy. */
 	uint32_t gpuSize(uint32_t numVariable = 0) const { return _gpuSize + numVariable * _gpuVariableElementSize; }
+	bool isMetalIRStorage() const { return _metalIRStorage; }
+	uint32_t metalIRDescriptorCount() const { return _metalIRDescriptorCount; }
+	uint32_t metalIRTableBytes() const { return _metalIRTableBytes; }
+	using WriteBinding = void (*)(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const void*, MVKDescriptorUpdateSourceType,
+	    size_t, uint32_t, uint32_t);
+	using CopyBinding = void (*)(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const MVKDescriptorBinding*,
+	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, uint32_t, uint32_t, uint32_t);
+	WriteBinding descriptorWriter() const { return _writeBinding; }
+	CopyBinding descriptorCopier() const { return _copyBinding; }
+
 	/** Returns the offset of the aux buffers in the GPU buffer.  For variable descriptor sets with argument encoders, returns zero; you must get the actual value from the encoder in that case. */
 	uint32_t gpuAuxBase(uint32_t numVariable = 0) const { return _gpuAuxBase + (isMainGPUBufferVariable() ? numVariable * _gpuVariableElementSize : 0); }
 	uint32_t dynamicOffsetCount(uint32_t numVariable) const { return _dynamicOffsetCount + (_flags.has(Flag::IsDynamicOffsetCountVariable) ? numVariable : 0); }
@@ -414,6 +444,11 @@ private:
 	uint32_t _cpuVariableElementSize = 0;
 	/** The required size of gpu buffer minus any variable descriptors. */
 	uint32_t _gpuSize = 0;
+	uint32_t _metalIRDescriptorCount = 0;
+	uint32_t _metalIRTableBytes = 0;
+	bool _metalIRStorage = false;
+	WriteBinding _writeBinding = nullptr;
+	CopyBinding _copyBinding = nullptr;
 	/** If using variable descriptors, the size of each variable element in the gpu buffer. */
 	uint32_t _gpuVariableElementSize = 0;
 	/** The total number of buffers using dynamic offsets, minus any variable descriptors. */
@@ -448,7 +483,11 @@ struct MVKDescriptorSet {
 	/** Host pointer to the device-side argument buffer. */
 	char* gpuBuffer;
 	/** An array of offsets in the auxiliary buffer for buffers that need it. */
-	const uint32_t* auxIndices;
+	union {
+		const uint32_t* auxIndices;
+		/** IR layouts have no auxiliary offsets; address stays fixed for this allocation. */
+		uint64_t metalIRTableAddress;
+	};
 	/** The Metal device-side argument buffer object. */
 	id<MTLBuffer> gpuBufferObject;
 	/** The offset into the GPU buffer object used by this descriptor set. */
@@ -459,6 +498,16 @@ struct MVKDescriptorSet {
 	uint32_t cpuBufferSize;
 	/** The number of variable descriptors. */
 	uint32_t variableDescriptorCount;
+
+	static constexpr uint32_t MetalIRRootBytes = (kMVKMaxDescriptorSetCount * 2 + 1) * sizeof(uint64_t);
+	/** A root occupies a reserved tail, never descriptor table bytes. */
+	uint32_t metalIRRootOffset() const {
+		if (!gpuBufferObject || !layout->isMetalIRStorage() ||
+			!layout->metalIRTableBytes()) return UINT32_MAX;
+		const uint64_t relative = (uint64_t(layout->metalIRTableBytes()) + 15) & ~uint64_t(15);
+		if (relative > gpuBufferSize || MetalIRRootBytes > gpuBufferSize - relative) return UINT32_MAX;
+		return gpuBufferOffset + static_cast<uint32_t>(relative);
+	}
 
 	void setGPUBuffer(id<MTLBuffer> buffer, void* contents, size_t offset, size_t size) {
 		gpuBufferObject = buffer;
@@ -472,6 +521,9 @@ struct MVKDescriptorSet {
 		cpuBufferSize = static_cast<uint32_t>(size);
 	}
 };
+
+static_assert(sizeof(void*) != 8 || sizeof(MVKDescriptorSet) == 64,
+	"Preserve the MSL descriptor set stride when caching the IR table address");
 
 #pragma mark - MVKDescriptorPool
 

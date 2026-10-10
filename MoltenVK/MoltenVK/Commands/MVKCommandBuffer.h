@@ -27,6 +27,7 @@
 #include "MVKCmdPipeline.h"
 #include "MVKQueryPool.h"
 #include "MVKSmallVector.h"
+#include "MVKMetalIRCommandEncoding.h"
 #include "MVKReplayDrawWork.h"
 #include <unordered_map>
 
@@ -448,6 +449,9 @@ public:
 	/** Copy the bytes to a temporary MTLBuffer that will be returned to a pool after the command buffer is finished. */
 	const MVKMTLBufferAllocation* copyToTempMTLBufferAllocation(const void* bytes, NSUInteger length, bool isDedicated = false);
 
+	/** IR-only immutable parameters, owned by this command buffer. */
+	MVKMetalIRCommandEncoding& metalIR() { return _metalIRCommands; }
+
     /** Returns the command encoding pool. */
     MVKCommandEncodingPool* getCommandEncodingPool();
 
@@ -565,6 +569,7 @@ protected:
 	MVKCommandUse _mtlBlitEncoderUse;
 	bool _isRenderingEntireAttachment;
 
+	MVKMetalIRCommandEncoding _metalIRCommands{*this};
 };
 
 

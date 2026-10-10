@@ -29,6 +29,7 @@
 #include "MVKFoundation.h"
 #include "MVKShaderModule.h"
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
 #include "MVKQueue.h"
 #include <string>
 
@@ -150,6 +151,50 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkEndMetal4CompilerWorkMVK(
         return result;
     }
     return mvkCopyGrowingStruct(pStats, &stats, pStatsSize);
+}
+
+#if MVK_REPLAY_TRACE
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayBindingStatisticsMVK(mvkreplay::BindingSample* output, uint32_t capacity) {
+    return mvkreplay::bindingSnapshot(output, capacity);
+}
+#endif
+
+#if MVK_REPLAY_TRACE
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayPhaseStatisticsMVK(mvkreplay::Sample* output, uint32_t capacity, VkBool32 reset) {
+    return mvkreplay::snapshot(output,capacity,reset);
+}
+#endif
+
+#if MVK_REPLAY_TRACE
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(mvkreplay::SubmissionSample* output) {
+    return mvkreplay::submissionSnapshot(output);
+}
+#endif
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
+    return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkResult vkConfigureMetalIRCacheMVK(
+    VkDevice device,const char* directory,uint64_t maxBytes) {
+    return mvkMetalIRConfigureCache(device?MVKDevice::getMVKDevice(device):nullptr,directory,maxBytes);
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity) {
+    return device ? mvkMetalIRCompilerStatistics(MVKDevice::getMVKDevice(device), output, capacity) : 0;
+}
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags) {
+    return mvkMetalIRSetProbeDiagnostics(flags);
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkTrimMetalIRCompilerMemoryMVK(void) {
+    return mvkMetalIRRelieveCompilerMemory();
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerAdmissionStatisticsMVK(uint64_t* output,uint32_t capacity) {
+    return mvkMetalIRCompilerAdmissionStatistics(output,capacity);
 }
 
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMetal4CompilerConcurrencyStatisticsMVK(
@@ -312,9 +357,9 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetWorkgroupSizeMVK(
     mvkShaderModule->setWorkgroupSize(x, y, z);
 }
 
+// Headless diagnostic replays can close an epoch without a swapchain.
 #if MVK_REPLAY_TRACE
-extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayBindingStatisticsMVK(mvkreplay::BindingSample* output, uint32_t capacity) { return mvkreplay::bindingSnapshot(output, capacity); }
-extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetReplayPhaseStatisticsMVK(mvkreplay::Sample* output, uint32_t capacity, VkBool32 reset) { return mvkreplay::snapshot(output,capacity,reset); }
-extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(mvkreplay::SubmissionSample* output) { return mvkreplay::submissionSnapshot(output); }
-extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkFinishReplayFrameMVK() { auto frame=mvkreplay::framePresented();mvkreplay::sealGPUStageEpoch(frame);return frame; }
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkFinishReplayFrameMVK() {
+    auto frame=mvkreplay::framePresented();mvkreplay::sealGPUStageEpoch(frame);return frame;
+}
 #endif

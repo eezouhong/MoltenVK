@@ -69,6 +69,7 @@ inline constexpr bool submissionSnapshot(SubmissionSample*) noexcept { return fa
 inline constexpr void encoderStarted(unsigned) noexcept {}
 inline constexpr void indirectRuntime(uint32_t,uint64_t,bool,bool) noexcept {}
 inline constexpr void directRuntimeUpload() noexcept {}
+inline constexpr void runtimeParameterBytes(uint64_t) noexcept {}
 inline constexpr void indirectInvocation(uint32_t,bool) noexcept {}
 inline constexpr void renderPassInterrupted() noexcept {}
 inline constexpr uint64_t frameBufferCreated() noexcept { return 0; }

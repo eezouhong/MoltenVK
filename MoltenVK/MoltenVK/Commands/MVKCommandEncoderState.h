@@ -33,6 +33,7 @@ class MVKDescriptorSet;
 class MVKOcclusionQueryPool;
 
 struct MVKShaderImplicitRezBinding;
+struct MVKMetalIRMetadata;
 
 enum class MVKMetalGraphicsStage {
 	Vertex,
@@ -250,6 +251,47 @@ struct MVKMetalSharedCommandEncoderState {
 #pragma mark - MVKMetalRenderCommandEncoderState
 
 struct MVKStageResourceBindings {
+	/** Only reusable within one Metal encoder and one shader stage. The command
+	 * buffer owns the temporary push allocation; this state does not retain it. */
+	struct MetalIRArguments {
+		const MVKMetalIRMetadata* rootArtifact = nullptr;
+		uint64_t rootUsedSets = 0;
+		uint32_t rootSetCount = 0, rootPushConstantSize = 0, rootRuntimeFlags = 0;
+		bool rootUsesPushConstants = false;
+		uint64_t runtimeAddress = 0;
+		uint64_t rawRuntimeAddress = 0;
+		id<MTLBuffer> rawRuntimeBuffer = nil;
+		/** The descriptor allocation is stable while its set remains bound.
+		 * descriptorSetData invalidation refreshes these addresses on rebind. */
+		uint64_t descriptorSetBases[kMVKMaxDescriptorSetCount] = {};
+		uint64_t pushConstantAddress = 0;
+		id<MTLBuffer> pushConstantBuffer = nil;
+		uint32_t pushConstantSize = 0;
+		uint32_t argumentBytes = 0;
+		uint64_t arguments[kMVKMaxDescriptorSetCount * 2 + 3] = {};
+		id<MTLBuffer> runtimeBuffer = nil;
+		id<MTLBuffer> drawIndirectBuffer = nil;
+		NSUInteger drawIndirectOffset = 0;
+		uint32_t drawArguments[5] = {};
+		uint16_t drawIndexType = 0;
+		bool drawArgumentsValid = false, drawIndexTypeValid = false;
+		MVKShaderStage stage = kMVKShaderStageCount;
+
+		void reset() {
+			rootArtifact = nullptr;
+			runtimeAddress = 0;
+			rawRuntimeAddress = 0;
+			rawRuntimeBuffer = nil;
+			memset(descriptorSetBases, 0, sizeof(descriptorSetBases));
+			pushConstantSize = 0;
+			pushConstantBuffer = nil;
+			argumentBytes = 0;
+			stage = kMVKShaderStageCount;
+			runtimeBuffer = nil;
+			drawIndirectBuffer = nil;
+			drawArgumentsValid = drawIndexTypeValid = false;
+		}
+	};
 	id<MTLTexture> textures[kMVKMaxTextureCount];
 	struct Buffer {
 		id<MTLBuffer> buffer;
@@ -268,7 +310,17 @@ struct MVKStageResourceBindings {
 	}
 	static Buffer NullBuffer() { return { nil, 0 }; }
 	static Buffer InvalidBuffer() { return { nil, ~0ull }; }
+	/** Distinguishes IR root bytes from helper draws and ordinary buffer binds. */
+	static Buffer MetalIRRootBuffer() { return { nil, ~1ull }; }
+	static Buffer MetalIRDrawBuffer() { return { nil, ~2ull }; }
+	static Buffer MetalIRDrawInfoBuffer() { return { nil, ~3ull }; }
+	// Preserve the original MSL hot member offsets. IR cache state is cold for
+	// an MSL device and must not precede textures/buffers/samplers.
+	bool metalIR = false;
+	MetalIRArguments metalIRArguments;
 };
+
+static_assert(offsetof(MVKStageResourceBindings, textures) == 0, "MSL hot bindings must precede IR metadata");
 
 template <typename T>
 struct MVKOnePerGraphicsStage: public MVKOnePerEnumEntry<T, MVKMetalGraphicsStage> {
@@ -583,5 +635,3 @@ private:
 	/// If true, accumulation will be run at the end of the next render pass.
 	bool _shouldAccumulate = false;
 };
-
-

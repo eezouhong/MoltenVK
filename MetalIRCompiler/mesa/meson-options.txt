@@ -1,0 +1,16 @@
+buildtype=release
+default_library=shared
+platforms=[]
+gallium-drivers=[]
+vulkan-drivers=[]
+shared-glapi=auto
+gles1=disabled
+gles2=disabled
+opengl=false
+gbm=disabled
+glx=disabled
+egl=disabled
+spirv-to-dxil=true
+llvm=disabled
+tools=[]
+video-codecs=[]

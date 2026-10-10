@@ -24,6 +24,7 @@
 #include "MVKBuffer.h"
 #include "MVKPipeline.h"
 #include "MVKFoundation.h"
+#include "MVKMetalIR.h"
 #include "mvk_datatypes.hpp"
 
 
@@ -190,8 +191,14 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
 
     cmdEncoder->_isIndexedDraw = false;
     {
-        mvkreplay::BindingTrace preparationTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::DrawPreparation);
-        preparationTrace.checkpoint(); preparationTrace.checkpoint();
+        const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+        mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint();
+        if (artifact && artifact->needsDrawData()) {
+            cmdEncoder->metalIR().prepareDraw(artifact,
+                mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
+        }
+        preparationTrace.checkpoint();
     }
 
 	MVKPiplineStages stages;
@@ -336,7 +343,8 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
-                    mvkreplay::BindingTrace drawTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::MetalDraw);
+                    mvkreplay::BindingTrace drawTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+                        mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::MetalDraw);
                     drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         cmdEncoder->noteReplayDraw(_vertexCount,instanceCount,false,true);
@@ -486,8 +494,15 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
     size_t idxSize = mvkMTLIndexTypeSizeInBytes((MTLIndexType)ibb.mtlIndexType);
     VkDeviceSize idxBuffOffset = ibb.offset + (_firstIndex * idxSize);
     {
-        mvkreplay::BindingTrace preparationTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::DrawPreparation);
-        preparationTrace.checkpoint(); preparationTrace.checkpoint();
+        const auto* artifact = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+        mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
+        preparationTrace.checkpoint();
+        if (artifact && artifact->needsDrawData()) {
+            cmdEncoder->metalIR().prepareDraw(artifact,
+                mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
+                    _vertexOffset, _firstInstance, ibb.mtlIndexType));
+        }
+        preparationTrace.checkpoint();
     }
 
     const MVKMTLBufferAllocation* vtxOutBuff = nullptr;
@@ -634,7 +649,8 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
                                                                 offset: tempDrawIDBuff->_offset
                                                                atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                     }
-                    mvkreplay::BindingTrace drawTrace(false,mvkreplay::bindingSamplingEnabled(),mvkreplay::BindingGroup::MetalDraw);
+                    mvkreplay::BindingTrace drawTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+                        mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::MetalDraw);
                     drawTrace.checkpoint();
                     if (mtlFeats.baseVertexInstanceDrawing) {
                         cmdEncoder->noteReplayDraw(_indexCount,instanceCount,true,true);
@@ -845,6 +861,9 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
             drawIDs[i] = i;
         }
     }
+    const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR, _drawCount, false)
+        : MVKMetalIRCommandEncoding::RuntimeBatch{};
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -901,6 +920,9 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
                 cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
             }
 
+            if (vertexIR && vertexIR->runtimeFlags) {
+                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlIndBuffOfst, 0);
+            }
             cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
 			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
@@ -1180,6 +1202,9 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
             drawIDs[i] = i;
         }
     }
+    const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
+    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR, _drawCount, true)
+        : MVKMetalIRCommandEncoding::RuntimeBatch{};
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -1248,7 +1273,10 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
                 cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
             }
 
-	        cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
+	        if (vertexIR && vertexIR->runtimeFlags) {
+                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlTempIndBuffOfst, uint16_t(ibb.mtlIndexType + 1));
+            }
+            cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
 			if ( !pipeline->hasValidMTLPipelineStates() ) { return; }	// Abort if this pipeline stage could not be compiled.
 
@@ -1347,7 +1375,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
                                                                     offset: tempDrawIDBuff->_offset + drawIdx * sizeof(uint32_t)
                                                                    atIndex: pipeline->getImplicitBuffers(kMVKShaderStageVertex).ids[MVKImplicitBuffer::DrawId]];
                         }
-                        cmdEncoder->noteReplayDraw();
+                        cmdEncoder->noteReplayDraw(0,0,true,false);
                         [cmdEncoder->_mtlRenderEncoder drawIndexedPrimitives: cmdEncoder->getMtlGraphics().getPrimitiveType()
                                                                    indexType: (MTLIndexType)ibb.mtlIndexType
                                                                  indexBuffer: ibb.mtlBuffer

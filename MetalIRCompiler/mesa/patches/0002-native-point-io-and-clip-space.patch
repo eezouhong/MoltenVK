@@ -1,0 +1,352 @@
+diff --git a/src/microsoft/compiler/dxil_signature.c b/src/microsoft/compiler/dxil_signature.c
+--- a/src/microsoft/compiler/dxil_signature.c
++++ b/src/microsoft/compiler/dxil_signature.c
+@@ -270,6 +270,14 @@
+ {
+    info->kind = DXIL_SEM_INVALID;
+    info->interpolation = get_interpolation(var);
++   if (var->name &&
++       (!strcmp(var->name, "melonx_native_point_size") ||
++        !strcmp(var->name, "melonx_native_point_coord"))) {
++      info->index = 0;
++      snprintf(info->name, 64, "%s", var->name);
++      info->kind = DXIL_SEM_ARBITRARY;
++      return;
++   }
+    switch (var->data.location) {
+ 
+    case VARYING_SLOT_POS:
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -536,6 +536,38 @@
+                                        &data);
+ }
+ 
++struct point_size_status {
++   bool saw_store;
++   bool all_one;
++};
++
++// Position normalization redirects output stores through temporaries. Record
++// this shader fact first; that transformation never changes point size.
++bool
++dxil_spirv_nir_has_unit_point_size(nir_shader *nir)
++{
++   bool saw_store = false;
++   bool all_one = true;
++   nir_foreach_function_impl(impl, nir) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            if (intr->intrinsic != nir_intrinsic_store_deref)
++               continue;
++            nir_variable *var = nir_intrinsic_get_var(intr, 0);
++            if (!var || var->data.mode != nir_var_shader_out || var->data.location != VARYING_SLOT_PSIZ)
++               continue;
++            saw_store = true;
++            all_one &= nir_src_is_const(intr->src[1]) && intr->src[1].ssa->bit_size == 32 &&
++                       nir_src_as_const_value(intr->src[1])[0].u32 == 0x3f800000;
++         }
++      }
++   }
++   return saw_store && all_one;
++}
++
+ static bool
+ discard_psiz_access(struct nir_builder *builder, nir_intrinsic_instr *intrin,
+                     void *cb_data)
+@@ -551,6 +583,14 @@
+ 
+    builder->cursor = nir_before_instr(&intrin->instr);
+ 
++   struct point_size_status *status = cb_data;
++   if (intrin->intrinsic == nir_intrinsic_store_deref) {
++      status->saw_store = true;
++      status->all_one &= nir_src_is_const(intrin->src[1]) &&
++                         intrin->src[1].ssa->bit_size == 32 &&
++                         nir_src_as_const_value(intrin->src[1])[0].u32 == 0x3f800000;
++   }
++
+    if (intrin->intrinsic == nir_intrinsic_load_deref)
+       nir_def_rewrite_uses(&intrin->def, nir_imm_float(builder, 1.0));
+ 
+@@ -559,8 +599,9 @@
+ }
+ 
+ static bool
+-dxil_spirv_nir_discard_point_size_var(nir_shader *shader)
+-{
++dxil_spirv_nir_discard_point_size_var(nir_shader *shader, bool *unit_point_size)
++{
++   *unit_point_size = false;
+    if (shader->info.stage != MESA_SHADER_VERTEX &&
+        shader->info.stage != MESA_SHADER_TESS_EVAL &&
+        shader->info.stage != MESA_SHADER_GEOMETRY)
+@@ -577,11 +618,14 @@
+    if (!psiz)
+       return false;
+ 
++   struct point_size_status status = {.all_one = true};
+    if (!nir_shader_intrinsics_pass(shader, discard_psiz_access,
+                                      nir_metadata_control_flow |
+                                      nir_metadata_loop_analysis,
+-                                     NULL))
+-      return false;
++                                     &status))
++      return false;
++
++   *unit_point_size = status.saw_store && status.all_one;
+ 
+    nir_remove_dead_derefs(shader);
+    return true;
+@@ -1001,7 +1045,7 @@
+       NIR_PASS(_, nir, nir_opt_access, &opt_access_options);
+    }
+ 
+-   NIR_PASS(_, nir, dxil_spirv_nir_discard_point_size_var);
++   NIR_PASS(_, nir, dxil_spirv_nir_discard_point_size_var, &metadata->unit_point_size);
+ 
+    NIR_PASS(_, nir, nir_remove_dead_variables,
+               nir_var_shader_in | nir_var_shader_out |
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.h
+@@ -33,6 +33,9 @@
+ 
+ void
+ dxil_spirv_nir_prep(nir_shader *nir);
++
++bool
++dxil_spirv_nir_has_unit_point_size(nir_shader *nir);
+ 
+ /* The pipeline will require runtime data if, and only if, any of the multiple reported
+  * runtime data required flags is true.
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+@@ -60,8 +60,71 @@
+    dxil_spirv_nir_lower_bindless(nir, &bindless_options);
+ }
+ 
+-bool
+-spirv_to_dxil(const uint32_t *words, size_t word_count,
++/* Bridge extension: transport native point I/O as explicitly named DXIL
++ * varyings. The consumer must restore their rasterizer semantics in AIR;
++ * ordinary D3D12 and Vulkan bridge entry points never enable this path. */
++static bool
++prepare_native_point_io(nir_shader *nir, uint32_t *native_io)
++{
++   if (nir->info.stage != MESA_SHADER_VERTEX &&
++       nir->info.stage != MESA_SHADER_FRAGMENT)
++      return true;
++
++   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
++      const struct nir_lower_sysvals_to_varyings_options options = {.point_coord = true};
++      NIR_PASS(_, nir, nir_lower_sysvals_to_varyings, &options);
++   }
++   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX
++      ? nir_var_shader_out : nir_var_shader_in;
++   unsigned builtin = nir->info.stage == MESA_SHADER_VERTEX
++      ? VARYING_SLOT_PSIZ : VARYING_SLOT_PNTC;
++   nir_variable *point = NULL;
++   uint64_t occupied = 0;
++   nir_foreach_variable_with_modes(var, nir, mode) {
++      if (var->data.location == builtin)
++         point = var;
++      else if (var->data.location >= VARYING_SLOT_VAR0 &&
++               var->data.location < VARYING_SLOT_VAR0 + 32) {
++         unsigned slots = glsl_count_attribute_slots(var->type, false);
++         if (slots > 32 - (var->data.location - VARYING_SLOT_VAR0))
++            return false;
++         for (unsigned i = 0; i < slots; ++i)
++            occupied |= BITFIELD64_BIT(var->data.location - VARYING_SLOT_VAR0 + i);
++      }
++   }
++   if (!point)
++      return true;
++   bool used = false;
++   nir_foreach_function_impl(impl, nir) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            nir_intrinsic_op op = mode == nir_var_shader_out
++               ? nir_intrinsic_store_deref : nir_intrinsic_load_deref;
++            if (intr->intrinsic == op && nir_intrinsic_get_var(intr, 0) == point)
++               used = true;
++         }
++      }
++   }
++   if (!used)
++      return true;
++   int slot = 31;
++   while (slot >= 0 && (occupied & BITFIELD64_BIT(slot)))
++      --slot;
++   if (slot < 0)
++      return false;
++   point->data.location = VARYING_SLOT_VAR0 + slot;
++   point->name = ralloc_strdup(point, nir->info.stage == MESA_SHADER_VERTEX
++      ? "melonx_native_point_size" : "melonx_native_point_coord");
++   *native_io = nir->info.stage == MESA_SHADER_VERTEX ? 1 : 2;
++   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
++   return true;
++}
++
++static bool
++spirv_to_dxil_impl(const uint32_t *words, size_t word_count,
+               struct dxil_spirv_specialization *specializations,
+               unsigned int num_specializations, dxil_spirv_shader_stage stage,
+               const char *entry_point_name,
+@@ -69,7 +132,8 @@
+               const struct dxil_spirv_debug_options *dgb_opts,
+               const struct dxil_spirv_runtime_conf *conf,
+               const struct dxil_spirv_logger *logger,
+-              struct dxil_spirv_object *out_dxil)
++              struct dxil_spirv_object *out_dxil,
++              bool clip_halfz, uint32_t *native_io)
+ {
+    if (stage == DXIL_SPIRV_SHADER_NONE || stage == DXIL_SPIRV_SHADER_KERNEL)
+       return false;
+@@ -115,8 +179,25 @@
+                        "Validate before feeding NIR to the DXIL compiler");
+ 
+    dxil_spirv_nir_prep(nir);
++   bool unit_point_size = dxil_spirv_nir_has_unit_point_size(nir);
++
++   if (native_io) *native_io = 0;
++   if (native_io && !prepare_native_point_io(nir, native_io)) {
++      logger->log(logger->priv, "no free varying for native point I/O");
++      ralloc_free(nir);
++      glsl_type_singleton_decref();
++      return false;
++   }
++
++   if (clip_halfz) {
++      /* Normalize component writes before the existing vec4 position pass. */
++      NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(nir), nir_var_shader_out);
++      NIR_PASS(_, nir, nir_lower_var_copies);
++      NIR_PASS(_, nir, nir_lower_clip_halfz);
++   }
+ 
+    dxil_spirv_nir_passes(nir, conf, &out_dxil->metadata);
++   out_dxil->metadata.unit_point_size |= unit_point_size;
+ 
+    maybe_lower_to_bindless(nir, conf);
+ 
+@@ -141,6 +222,56 @@
+ 
+    glsl_type_singleton_decref();
+    return true;
++}
++
++bool
++spirv_to_dxil(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil)
++{
++   return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
++                            stage, entry_point_name, validator_version_max,
++                            debug_options, conf, logger, out_dxil, false, NULL);
++}
++
++bool
++spirv_to_dxil_with_clip_space(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz)
++{
++   return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
++                            stage, entry_point_name, validator_version_max,
++                            debug_options, conf, logger, out_dxil, clip_halfz, NULL);
++}
++
++bool
++spirv_to_dxil_with_native_raster(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz, uint32_t *native_io)
++{
++   if (!native_io)
++      return false;
++   return spirv_to_dxil_impl(words, word_count, specializations, num_specializations,
++                            stage, entry_point_name, validator_version_max,
++                            debug_options, conf, logger, out_dxil, clip_halfz, native_io);
+ }
+ 
+ bool
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.def b/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.def
+@@ -1,5 +1,6 @@
+ EXPORTS
+     spirv_to_dxil
++    spirv_to_dxil_with_clip_space
+     spirv_to_dxil_link
+     spirv_to_dxil_free
+     spirv_to_dxil_get_version
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -80,6 +80,10 @@
+    // buffer, and therefore piping them to the runtime data buffer is extra
+    // complex.
+    bool needs_draw_sysvals;
++
++   // Metal can rasterize DXIL's native one-pixel points. Larger/programmed
++   // point sizes need expansion and must not be silently discarded.
++   bool unit_point_size;
+ };
+ 
+ struct dxil_spirv_object {
+@@ -255,6 +259,31 @@
+               const struct dxil_spirv_logger *logger,
+               struct dxil_spirv_object *out_dxil);
+ 
++// Local Vulkan bridge extension; preserves the original converter ABI.
++bool
++spirv_to_dxil_with_clip_space(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz);
++
++// Native Metal rasterizer I/O transport; requires an AIR adapter. native_io
++// reports bit 0 for point size and bit 1 for point coordinates.
++bool
++spirv_to_dxil_with_native_raster(const uint32_t *words, size_t word_count,
++              struct dxil_spirv_specialization *specializations,
++              unsigned int num_specializations, dxil_spirv_shader_stage stage,
++              const char *entry_point_name,
++              enum dxil_validator_version validator_version_max,
++              const struct dxil_spirv_debug_options *debug_options,
++              const struct dxil_spirv_runtime_conf *conf,
++              const struct dxil_spirv_logger *logger,
++              struct dxil_spirv_object *out_dxil, bool clip_halfz, uint32_t *native_io);
++
+ // One SPIR-V stage fed to spirv_to_dxil_link.
+ struct dxil_spirv_link_stage {
+    const uint32_t *words;

@@ -18,6 +18,7 @@
  */
 
 #include "MVKDescriptorSet.h"
+#include "MVKMetalIR.h"
 #include "MVKBuffer.h"
 #include "MVKCommandBuffer.h"
 #include "MVKCommandEncoderState.h"
@@ -27,6 +28,14 @@
 #include "MVKImage.h"
 #include "MVKOSExtensions.h"
 #include <sstream>
+
+template <bool MetalIR>
+static void writeDescriptorSetBinding(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const void*, MVKDescriptorUpdateSourceType,
+    size_t, uint32_t, uint32_t);
+static void copyDescriptorSetBinding(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const MVKDescriptorBinding*,
+    const MVKDescriptorSet*, id<MTLArgumentEncoder>, uint32_t, uint32_t, uint32_t);
 
 static constexpr uint32_t alignDescriptorOffset(uint32_t offset, uint32_t align) {
 	return (offset + align - 1) & ~(align - 1);
@@ -550,7 +559,11 @@ void MVKDescriptorBinding::populate(const VkDescriptorSetLayoutBinding& vk) {
 
 #pragma mark - MVKDescriptorSetLayout
 
-MVKDescriptorSetLayout::MVKDescriptorSetLayout(MVKDevice* device): MVKVulkanAPIDeviceObject(device) {}
+MVKDescriptorSetLayout::MVKDescriptorSetLayout(MVKDevice* device): MVKVulkanAPIDeviceObject(device) {
+    _metalIRStorage = device->isMetalIRShaderCompilerEnabled();
+    _writeBinding = _metalIRStorage ? &writeDescriptorSetBinding<true> : &writeDescriptorSetBinding<false>;
+    _copyBinding = _metalIRStorage ? &mvkCopyMetalIRDescriptors : &copyDescriptorSetBinding;
+}
 
 MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo) {
 	using Constructor = MVKInlineObjectConstructor<MVKDescriptorSetLayout>;
@@ -569,9 +582,9 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
 		if (canUseImmutableSamplers(bind.descriptorType) && bind.pImmutableSamplers)
 			numImmutableSamplers += bind.descriptorCount;
 		auto layout = pickGPULayout(bind.descriptorType, bind.descriptorCount, argBufMode, device);
-		if (needsAuxOffset(layout))
+		if (!device->isMetalIRShaderCompilerEnabled() && needsAuxOffset(layout))
 			numAuxOffsets++;
-		needsSizeBuf |= needsAuxBuf(layout);
+		needsSizeBuf |= !device->isMetalIRShaderCompilerEnabled() && needsAuxBuf(layout);
 		if (bind.descriptorCount > 0) {
 			if (flagList && mvkIsAnyFlagEnabled(flagList[i], VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT))
 				variableDesc = &bind;
@@ -741,6 +754,51 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
 					ret->_cpuVariableElementSize = 1;
 			}
 		}
+	}
+
+	// Immutable IR metadata is computed once, never by descriptor update loops.
+	if (!device->isMetalIRShaderCompilerEnabled()) return ret;
+	uint64_t irCount = 0, tableCounts[4] = {};
+	bool irEligible = (!hasAnyBindings || argBufMode == MVKArgumentBufferMode::Metal3) &&
+		!ret->isCPUAllocationVariable() && !ret->isGPUAllocationVariable() && !ret->dynamicOffsetCount(0);
+	for (auto& binding : ret->_bindings) {
+		binding.metalIRDenseOffset = irCount <= UINT32_MAX ? (uint32_t)irCount : UINT32_MAX;
+		irCount += binding.descriptorCount;
+		const uint32_t mask = mvkMetalIRDescriptorTableMask(binding.descriptorType);
+        if (binding.descriptorCount && !mask) irEligible = false;
+        for (uint32_t table = 0; table < 4; ++table) {
+            binding.metalIRTableOffsets[table] = mask & (1u << table) ? uint32_t(tableCounts[table]) : UINT32_MAX;
+            if (mask & (1u << table)) tableCounts[table] += binding.descriptorCount;
+        }
+	}
+	ret->_metalIRDescriptorCount = irCount <= UINT32_MAX ? (uint32_t)irCount : UINT32_MAX;
+	uint64_t tableEntries = 0;
+    for (uint32_t table = 0; table < 4; ++table) {
+        for (auto& binding : ret->_bindings)
+            if (binding.metalIRTableOffsets[table] != UINT32_MAX)
+                binding.metalIRTableOffsets[table] += uint32_t(tableEntries);
+        tableEntries += tableCounts[table];
+    }
+    uint64_t tableBytes = tableEntries * 24;
+	if (!irEligible || tableBytes > UINT32_MAX) {
+		ret->setConfigurationResult(ret->reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+		    "MetalIR descriptor layout is unsupported (descriptor kind, dynamic/variable layout or oversized storage); MSL fallback disabled."));
+		return ret;
+	}
+	ret->_metalIRTableBytes = static_cast<uint32_t>(tableBytes);
+	ret->_gpuSize = ret->_metalIRTableBytes;
+	ret->_gpuAuxBase = ret->_sizeBufSize = ret->_numAuxOffsets = 0;
+	ret->_gpuAlignment = std::max(ret->_gpuAlignment, uint32_t(alignof(uint64_t)));
+	if (tableBytes) {
+		const uint64_t rootEnd = ((tableBytes + 15) & ~uint64_t(15)) + MVKDescriptorSet::MetalIRRootBytes;
+		const uint32_t rootAlignment = std::max(std::max(ret->_gpuAlignment, 16u),
+			uint32_t(device->getPhysicalDevice()->getMetalFeatures()->mtlConstantBufferAlignment));
+		if (rootEnd + rootAlignment - 1 > UINT32_MAX) {
+			ret->setConfigurationResult(ret->reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+				"MetalIR descriptor root exceeds the allocation range."));
+			return ret;
+		}
+		ret->_gpuSize = static_cast<uint32_t>(rootEnd);
 	}
 
 	return ret;
@@ -1420,14 +1478,30 @@ static void writeDescriptorSetCPUBufferDispatch(
 	}
 }
 
+template <bool MetalIR>
 static void writeDescriptorSetBinding(
 	const MVKDescriptorSetLayout* layout,
 	const MVKDescriptorBinding* binding, const MVKDescriptorSet* set, id<MTLArgumentEncoder> enc,
 	const void* src, MVKDescriptorUpdateSourceType type, size_t stride,
 	uint32_t start, uint32_t count)
 {
+	if constexpr (MetalIR) {
+		if (start > binding->descriptorCount || count > binding->descriptorCount - start) {
+			const auto* end = layout->bindings().end();
+			while (count && binding < end) {
+				if (start >= binding->descriptorCount) { start -= binding->descriptorCount; ++binding; continue; }
+				uint32_t length = std::min(count, binding->descriptorCount - start);
+				writeDescriptorSetBinding<true>(layout, binding, set, enc, src, type, stride, start, length);
+				src = static_cast<const char*>(src) + length * stride;
+				count -= length; start = 0; ++binding;
+			}
+			assert(!count);
+			return;
+		}
+	}
+
 	mvkreplay::DescriptorRangeTimer replayTrace(mvkreplay::DescriptorUpdate);
-	char* cpuBuffer = set->cpuBuffer + binding->cpuOffset;
+	char* cpuBuffer = set->cpuBuffer ? set->cpuBuffer + binding->cpuOffset : nullptr;
 	auto* textureViewPool = layout->getDevice()->getMetal4TextureViewPool();
 	bool useMetal4TextureViewPool =
 		layout->argBufMode() == MVKArgumentBufferMode::Metal3 &&
@@ -1448,15 +1522,19 @@ static void writeDescriptorSetBinding(
 		pooledBindings = pooledBindingStorage.data();
 	}
 	writeDescriptorSetCPUBufferDispatch(layout, *binding, cpuBuffer, src, stride, type, start, count, pooledBindings);
-	switch (layout->argBufMode()) {
-		case MVKArgumentBufferMode::Off:
-			break; // No GPU buffer
-		case MVKArgumentBufferMode::ArgEncoder:
-			writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::ArgEncoder>(binding, set, src, stride, type, enc, start, count);
-			break;
-		case MVKArgumentBufferMode::Metal3:
-			writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::Metal3    >(binding, set, src, stride, type, enc, start, count, pooledBindings);
-			break;
+	if constexpr (MetalIR) {
+		mvkWriteMetalIRDescriptors(layout, binding, set, src, stride, start, count, pooledBindings);
+	} else {
+		switch (layout->argBufMode()) {
+			case MVKArgumentBufferMode::Off:
+				break; // No GPU buffer
+			case MVKArgumentBufferMode::ArgEncoder:
+				writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::ArgEncoder>(binding, set, src, stride, type, enc, start, count);
+				break;
+			case MVKArgumentBufferMode::Metal3:
+				writeDescriptorSetGPUBuffer<MVKArgumentBufferMode::Metal3    >(binding, set, src, stride, type, enc, start, count, pooledBindings);
+				break;
+		}
 	}
 }
 
@@ -1820,7 +1898,7 @@ void mvkUpdateDescriptorSets(uint32_t numWrites, const VkWriteDescriptorSet* pDe
 				[enc setArgumentBuffer:set->gpuBufferObject offset:set->gpuBufferOffset];
 			}
 		}
-		writeDescriptorSetBinding(layout, binding, set, enc, src, type, stride, write.dstArrayElement, write.descriptorCount);
+		layout->descriptorWriter()(layout, binding, set, enc, src, type, stride, write.dstArrayElement, write.descriptorCount);
 	}
 	for (const auto& copy : MVKArrayRef(pDescriptorCopies, numCopies)) {
 		MVKDescriptorSet* srcSet = reinterpret_cast<MVKDescriptorSet*>(copy.srcSet);
@@ -1854,7 +1932,7 @@ void mvkUpdateDescriptorSets(uint32_t numWrites, const VkWriteDescriptorSet* pDe
 				}
 			}
 		}
-		copyDescriptorSetBinding(dstLayout, srcBinding, srcSet, srcEnc, dstBinding, dstSet, dstEnc, copy.srcArrayElement, copy.dstArrayElement, copy.descriptorCount);
+		dstLayout->descriptorCopier()(dstLayout, srcBinding, srcSet, srcEnc, dstBinding, dstSet, dstEnc, copy.srcArrayElement, copy.dstArrayElement, copy.descriptorCount);
 	}
 }
 
@@ -1895,7 +1973,7 @@ void mvkUpdateDescriptorSetWithTemplate(VkDescriptorSet set, VkDescriptorUpdateT
 
 		const MVKDescriptorBinding* binding = layout->getBinding(pEntry->dstBinding);
 		MVKDescriptorUpdateSourceType type = getDescriptorUpdateSourceType(pEntry->descriptorType);
-		writeDescriptorSetBinding(layout, binding, dstSet, enc, pCurData, type, pEntry->stride, pEntry->dstArrayElement, pEntry->descriptorCount);
+		layout->descriptorWriter()(layout, binding, dstSet, enc, pCurData, type, pEntry->stride, pEntry->dstArrayElement, pEntry->descriptorCount);
 	}
 }
 
@@ -2002,6 +2080,7 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 	MVKArrayRef pools(pCreateInfo->pPoolSizes, pCreateInfo->poolSizeCount);
 	MVKArgumentBufferMode argBufMode = pickArgumentBufferMode(device);
 	const MVKPhysicalDeviceArgumentBufferSizes& sizes = device->getPhysicalDevice()->getArgumentBufferSizes();
+	const bool metalIR = device->isMetalIRShaderCompilerEnabled();
 	uint32_t gpuAlign = std::max(std::max<uint32_t>(sizes.texture.align, sizes.sampler.align), std::max<uint32_t>(sizes.pointer.align, 1));
 	uint32_t cpuAlign = alignof(id);
 	uint32_t gpuSize = 0;
@@ -2020,9 +2099,9 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 		MVKDescriptorCPULayout cpu = pickCPULayout(pool.type, 1, argBufMode, device);
 		numElem += descriptorGPUBindingCount(gpu) * pool.descriptorCount;
 		cpuSize += alignDescriptorOffset(descriptorCPUSize(cpu), cpuAlign) * pool.descriptorCount;
-		gpuSize += alignDescriptorOffset(maxGPUSize(gpu, sizes), gpuAlign) * pool.descriptorCount;
-		numAuxOffset += needsAuxOffset(gpu) ? pool.descriptorCount : 0;
-		usesAuxBuffer |= gpu == MVKDescriptorGPULayout::BufferAuxSize;
+		gpuSize += (metalIR ? __builtin_popcount(mvkMetalIRDescriptorTableMask(pool.type)) * 24 : alignDescriptorOffset(maxGPUSize(gpu, sizes), gpuAlign)) * pool.descriptorCount;
+		numAuxOffset += !metalIR && needsAuxOffset(gpu) ? pool.descriptorCount : 0;
+		usesAuxBuffer |= !metalIR && gpu == MVKDescriptorGPULayout::BufferAuxSize;
 	}
 
 	if (numAuxOffset) {
@@ -2031,7 +2110,7 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 	}
 
 	uint32_t dataAlign = gpuAlign;
-	if (inlineUniformSize) {
+	if (inlineUniformSize && !metalIR) {
 		auto* info = mvkFindStructInChain<VkDescriptorPoolInlineUniformBlockCreateInfo>(pCreateInfo, VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO);
 		if (info) {
 			if (argBufMode == MVKArgumentBufferMode::Off || mayDisableArgumentBuffers(device))
@@ -2060,8 +2139,25 @@ MVKDescriptorPool* MVKDescriptorPool::Create(MVKDevice* device, const VkDescript
 	bool hostOnly = mvkIsAnyFlagEnabled(pCreateInfo->flags, VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_EXT) && argBufMode != MVKArgumentBufferMode::ArgEncoder;
 
 	// Apply Metal constant buffer offset alignment padding for descriptor sets
+	if (metalIR) {
+		gpuAlign = std::max(gpuAlign, 16u);
+		dataAlign = std::max(dataAlign, gpuAlign);
+	}
 	const uint32_t mtlCbufAlign = (uint32_t)device->getPhysicalDevice()->getMetalFeatures()->mtlConstantBufferAlignment;
 	const uint32_t cbufAlign = std::max(dataAlign, hostOnly || argBufMode == MVKArgumentBufferMode::Off ? 1u : mtlCbufAlign);
+	if (metalIR && gpuSize) {
+		const uint64_t rootCapacity = uint64_t(gpuSize) +
+			uint64_t(pCreateInfo->maxSets) * (MVKDescriptorSet::MetalIRRootBytes + 30);
+		const uint64_t paddingCapacity = uint64_t(pCreateInfo->maxSets) *
+			(std::max(gpuAlign, cbufAlign) - gpuAlign) + 16384;
+		if (rootCapacity + paddingCapacity > UINT32_MAX) {
+			MVKDescriptorPool* invalid = Constructor::Create(std::tuple{}, device);
+			invalid->setConfigurationResult(invalid->reportError(VK_ERROR_OUT_OF_DEVICE_MEMORY,
+				"MetalIR descriptor root capacity exceeds the pool allocator range."));
+			return invalid;
+		}
+		gpuSize = static_cast<uint32_t>(rootCapacity);
+	}
 	gpuSize = calcGroupSizeWithPadding(gpuSize, pCreateInfo->maxSets, gpuAlign, cbufAlign);
 	gpuAlign = cbufAlign;
 
@@ -2226,6 +2322,21 @@ VkResult MVKDescriptorPool::initDescriptorSet(MVKDescriptorSetLayout* mvkDSL, ui
 		memset(set->cpuBuffer, 0, cpuSize);
 	if (set->gpuBuffer)
 		memset(set->gpuBuffer, 0, gpuSize);
+
+	if (mvkDSL->isMetalIRStorage()) {
+		mvkInitializeMetalIRDescriptors(mvkDSL, set);
+		assert(!mvkDSL->numAuxOffsets());
+		set->metalIRTableAddress = set->gpuBufferObject ? _gpuBufferGPUAddress + set->gpuBufferOffset : 0;
+		const uint32_t rootOffset = set->metalIRRootOffset();
+		if (rootOffset != UINT32_MAX) {
+			// Only a single used set with no push/runtime parameters selects this
+			// root. Unused root slots may alias the same valid table allocation.
+			auto* root = reinterpret_cast<uint64_t*>(set->gpuBuffer + rootOffset - set->gpuBufferOffset);
+			std::fill_n(root, kMVKMaxDescriptorSetCount * 2, _gpuBufferGPUAddress + set->gpuBufferOffset);
+			root[kMVKMaxDescriptorSetCount * 2] = 0; // Stable unused push pointer.
+		}
+		return VK_SUCCESS;
+	}
 
 	if (mvkDSL->numAuxOffsets() || mvkDSL->immutableSamplers().size() != 0) {
 		// Need to write aux buffer pointers and immutable samplers to GPU buffer

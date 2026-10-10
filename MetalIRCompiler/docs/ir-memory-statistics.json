@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "fieldCount": 37,
+  "fields": [
+    {
+      "index": 0,
+      "name": "schemaVersion"
+    },
+    {
+      "index": 1,
+      "name": "flags"
+    },
+    {
+      "index": 2,
+      "name": "cacheMaxArtifacts"
+    },
+    {
+      "index": 3,
+      "name": "cacheMaxMetallibBytes"
+    },
+    {
+      "index": 4,
+      "name": "cacheMetadataEntries"
+    },
+    {
+      "index": 5,
+      "name": "cacheRetainedArtifacts"
+    },
+    {
+      "index": 6,
+      "name": "cacheRetainedMetallibBytes"
+    },
+    {
+      "index": 7,
+      "name": "cacheHits"
+    },
+    {
+      "index": 8,
+      "name": "cacheMisses"
+    },
+    {
+      "index": 9,
+      "name": "cacheWaits"
+    },
+    {
+      "index": 10,
+      "name": "cacheEvictions"
+    },
+    {
+      "index": 11,
+      "name": "liveLibraries"
+    },
+    {
+      "index": 12,
+      "name": "liveMetallibBytes"
+    },
+    {
+      "index": 13,
+      "name": "librariesCreated"
+    },
+    {
+      "index": 14,
+      "name": "librariesDestroyed"
+    },
+    {
+      "index": 15,
+      "name": "liveFunctions"
+    },
+    {
+      "index": 16,
+      "name": "functionsCreated"
+    },
+    {
+      "index": 17,
+      "name": "functionsDestroyed"
+    },
+    {
+      "index": 18,
+      "name": "diskEnabled"
+    },
+    {
+      "index": 19,
+      "name": "diskIndexedBytes"
+    },
+    {
+      "index": 20,
+      "name": "diskEntries"
+    },
+    {
+      "index": 21,
+      "name": "diskQueuedBytes"
+    },
+    {
+      "index": 22,
+      "name": "diskQueuedCount"
+    },
+    {
+      "index": 23,
+      "name": "diskLookupCount"
+    },
+    {
+      "index": 24,
+      "name": "diskLookupNs"
+    },
+    {
+      "index": 25,
+      "name": "diskFileHits"
+    },
+    {
+      "index": 26,
+      "name": "diskFileHitReadNs"
+    },
+    {
+      "index": 27,
+      "name": "diskFileHitMetallibBytes"
+    },
+    {
+      "index": 28,
+      "name": "diskDroppedWrites"
+    },
+    {
+      "index": 29,
+      "name": "diskFailedWrites"
+    },
+    {
+      "index": 30,
+      "name": "diskCompletedWrites"
+    },
+    {
+      "index": 31,
+      "name": "diskWrittenBytes"
+    },
+    {
+      "index": 32,
+      "name": "metalDeviceAllocatedBytes"
+    },
+    {
+      "index": 33,
+      "name": "nativeMonotonicNs"
+    },
+    {
+      "index": 34,
+      "name": "diskSuccessfulRestores"
+    },
+    {
+      "index": 35,
+      "name": "diskSuccessfulRestoreNs"
+    },
+    {
+      "index": 36,
+      "name": "diskSuccessfulRestoreMetallibBytes"
+    }
+  ],
+  "flags": {
+    "1": "API supported",
+    "2": "counters currently enabled",
+    "4": "lifetime tracking complete from first artifact"
+  },
+  "scope": {
+    "libraries": "IR artifact-owned references, not every underlying driver object; releasing an owner does not prove physical reclaim",
+    "metallibBytes": "serialized compiler output bytes, not Metal-private library allocation",
+    "diskRestore": "successful file validation plus Metal library/function/reflection reconstruction; file hits separately include rejected Metal data",
+    "deviceAllocated": "MTLDevice.currentAllocatedSize, overlaps application resources; do not sum with Vulkan requested bytes",
+    "snapshots": "approximate concurrent atomic/locked reads; idle snapshots can validate owned-reference balance"
+  },
+  "unavailable": {
+    "physicalLibraryBytes": null
+  },
+  "sampling": "app emits low-frequency MELONX_IR_MEMORY_STATS; native API itself is read-only",
+  "lifetime": "device cumulative counters; zero live values after release are valid, missing API/coverage must remain explicit"
+}

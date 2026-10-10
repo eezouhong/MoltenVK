@@ -16,7 +16,7 @@ transfer commands before consumption.
 Build only (no GPU execution), using the selected Xcode 27 developer directory:
 
 ```sh
-cmake -S MetalIRCompiler/tests/replay -B "$REPLAY_BUILD" \
+cmake -S Tests/MetalIRReplay -B "$REPLAY_BUILD" \
   -DVULKAN_HEADERS="$VULKAN_HEADERS_INCLUDE" \
   -DMOLTENVK_LIBRARY="$MOLTENVK_DYLIB"
 cmake --build "$REPLAY_BUILD" --parallel 2
@@ -27,7 +27,7 @@ Debug Tool queue; do not start the replay directly:
 
 ```sh
 python3 "$DEBUG_TOOL" queue exec --label "Metal IR system values" --priority 100 -- \
-  python3 MetalIRCompiler/tests/replay/run.py --build "$REPLAY_BUILD" \
+  python3 Tests/MetalIRReplay/run.py --build "$REPLAY_BUILD" \
     --native "$MOLTENVK_DYLIB" --plugin "$METAL_IR_PLUGIN" --output "$REPLAY_RESULTS"
 ```
 

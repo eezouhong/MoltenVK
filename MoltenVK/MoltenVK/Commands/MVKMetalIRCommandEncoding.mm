@@ -1,4 +1,4 @@
-#include "MVKReplayTrace.h"
+#include "MVKReplayIRTrace.h"
 #include "MVKMetalIRCommandEncoding.h"
 #include "MVKCommandBuffer.h"
 #include "MVKMetalIR.h"

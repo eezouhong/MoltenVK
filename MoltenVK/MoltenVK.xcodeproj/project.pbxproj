@@ -529,6 +529,7 @@
 		571DCFCC1958B9838DEC7610 /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		28166A5A4C95AFD9A986BE2D /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		6E245FE96BD5768CF157B1C9 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		A6C829138286E0012E59549F /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		227D3BB8F1FBDDF4B2EB79CD /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		70996EA19552B07842A4892A /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		18927B09A0CE783B469DD2D8 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -539,6 +540,7 @@
 		9217871C86BD72C9E0519469 /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		21DE86FFF2731AD6E20776F8 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		F8523A13C81FBD96828C0641 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		C1F42318024CDEAFB6B2D9F5 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		FF152395A0C765D5A8D728E8 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		BA6DD1A348BB0DCC31542E7D /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		BC4D2394EF08C4C932CCC742 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -549,6 +551,7 @@
 		566BFC29489D832C58DABEA3 /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		A26637C750920E9CAF4E903E /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		35260502AAE636B4B7AF01A1 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		E7363C769141B9FA0A280CD5 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		05E4D2E5B6A6D80EA93A14A3 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		4D642DABA741716DC30BAD5F /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		49203A199CDEAD92C721B2B7 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -559,6 +562,7 @@
 		736381CF174A94780F8791ED /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		BE51F79E8D7D14606CCF0E5A /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		9513F729976C0A5AFE6415D2 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		1E548E0A0B0AD5D3B0589F0B /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		462EF2D05579EAB65391AC60 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		97C66EDC675CB18270B15243 /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		0A305DFA82369CD12EFA54F9 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -569,6 +573,7 @@
 		2F944DA60A16FD25E115357B /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		C13CCFF49158BA5CDC459916 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		EE96D44C8EB428866BA79111 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		0BBE73BA3B16F279F1F42F3C /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		30C4F631002410BFDF00C7B0 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		D9A9C7EF5DBB09E5CEFAF067 /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		47AECDACA819EE557FC03A9F /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -579,6 +584,7 @@
 		73B350F2C44ED2DE934B7351 /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		313DA35B3EAD4E8A04CDC12C /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		4BD6465D39D3ACA6ED1F3BD9 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		845D1359147DC3163DAC3029 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		F56400F8D2880180F7CB23FC /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		573F47A7093612D003871839 /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		56640287F82873E38CAE6125 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -589,6 +595,7 @@
 		F307046A72C8CF479EC21477 /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		2E1A235769B3CA8D62B448F0 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		813E58E4176BBBFCE7DAA629 /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		4B174142407F566CB5156211 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		B94A9CE8B8C8249F6358C750 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		2AB36129F639EFDBAE9164E4 /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		893915123E98E73D548131FF /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -599,6 +606,7 @@
 		7F66C8E58F20816C87E6F4EB /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		509BD453D8B4BB60BFD9E66C /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		E4E1A5FA7966AA2D6E33379A /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		836E89BEDFAF74B38DD5BD43 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		FD8F679A926D856FFD37DD85 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		6447BAAE54B850ED2E2DA628 /* MVKReplayBindingTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 777E07279898755B16B65757 /* MVKReplayBindingTrace.h */; };
 		E36280ADE7ECFA86DF567F19 /* MVKReplayConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */; };
@@ -609,6 +617,7 @@
 		A1B59BA72394C77181F00D0C /* MVKReplayGPUStages.h in Headers */ = {isa = PBXBuildFile; fileRef = 424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */; };
 		F3E739784D26A2283048D502 /* MVKReplayStubs.h in Headers */ = {isa = PBXBuildFile; fileRef = 93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */; };
 		DC31C8B97960996F1E82CE0C /* MVKReplayTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = C3B4703963711959F7002350 /* MVKReplayTrace.h */; };
+		977EA522BC139C3DB5D16DA7 /* MVKReplayIRTrace.h in Headers */ = {isa = PBXBuildFile; fileRef = 385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */; };
 		42DF095C4688157FB190E621 /* MVKReplayGPUStages.mm in Sources */ = {isa = PBXBuildFile; fileRef = ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */; };
 		B87DB2B54B4FEB8A39B36836 /* MVKMetalIRCommandEncoding.h in Headers */ = {isa = PBXBuildFile; fileRef = 9272484341E5DAA49453B1B0 /* MVKMetalIRCommandEncoding.h */; };
 		05491DA76F6DA168023D2F43 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
@@ -972,6 +981,7 @@
 		FAFA08838E5A30970867E3F7 /* MVKReplayGPUStageData.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayGPUStageData.h; sourceTree = "<group>"; };
 		424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayGPUStages.h; sourceTree = "<group>"; };
 		C3B4703963711959F7002350 /* MVKReplayTrace.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayTrace.h; sourceTree = "<group>"; };
+		385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKReplayIRTrace.h; sourceTree = "<group>"; };
 		9272484341E5DAA49453B1B0 /* MVKMetalIRCommandEncoding.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRCommandEncoding.h; sourceTree = "<group>"; };
 		37BB91DBAE29A100D0752CDF /* MVKMetalIRCommandEncoding.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRCommandEncoding.mm; sourceTree = "<group>"; };
 		2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRResourceBinding.h; sourceTree = "<group>"; };
@@ -1159,6 +1169,7 @@
 				FAFA08838E5A30970867E3F7 /* MVKReplayGPUStageData.h */,
 				424151C615A30C9CB03F6F46 /* MVKReplayGPUStages.h */,
 				C3B4703963711959F7002350 /* MVKReplayTrace.h */,
+				385FC3C55A5A32C53A5E69A9 /* MVKReplayIRTrace.h */,
 				93DF873AC76AA674382D5E94 /* MVKReplayStubs.h */,
 				82ECA38D4693A498A1D1025D /* MVKReplayConfig.h */,
 				ED27E76F5E1946478DE48447 /* MVKReplayGPUStages.mm */,
@@ -1379,6 +1390,7 @@
 				F307046A72C8CF479EC21477 /* MVKReplayGPUStages.h in Headers */,
 				2E1A235769B3CA8D62B448F0 /* MVKReplayStubs.h in Headers */,
 				813E58E4176BBBFCE7DAA629 /* MVKReplayTrace.h in Headers */,
+				4B174142407F566CB5156211 /* MVKReplayIRTrace.h in Headers */,
 
 				2FEA0A4124902F9F00EEF3AD /* MVKExtensions.h in Headers */,
 				2FEA0A4224902F9F00EEF3AD /* vk_mvk_moltenvk.h in Headers */,
@@ -1476,6 +1488,7 @@
 				571DCFCC1958B9838DEC7610 /* MVKReplayGPUStages.h in Headers */,
 				28166A5A4C95AFD9A986BE2D /* MVKReplayStubs.h in Headers */,
 				6E245FE96BD5768CF157B1C9 /* MVKReplayTrace.h in Headers */,
+				A6C829138286E0012E59549F /* MVKReplayIRTrace.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1502,6 +1515,7 @@
 				A1B59BA72394C77181F00D0C /* MVKReplayGPUStages.h in Headers */,
 				F3E739784D26A2283048D502 /* MVKReplayStubs.h in Headers */,
 				DC31C8B97960996F1E82CE0C /* MVKReplayTrace.h in Headers */,
+				977EA522BC139C3DB5D16DA7 /* MVKReplayIRTrace.h in Headers */,
 				A909F65F213B190700FCD6BE /* MVKExtensions.h in Headers */,
 				A94FB7B41C7DFB4800632CA3 /* vk_mvk_moltenvk.h in Headers */,
 				A987B669289AFB8A00F933C8 /* MVKDeviceFeatureStructs.def in Headers */,
@@ -1598,6 +1612,7 @@
 				9217871C86BD72C9E0519469 /* MVKReplayGPUStages.h in Headers */,
 				21DE86FFF2731AD6E20776F8 /* MVKReplayStubs.h in Headers */,
 				F8523A13C81FBD96828C0641 /* MVKReplayTrace.h in Headers */,
+				C1F42318024CDEAFB6B2D9F5 /* MVKReplayIRTrace.h in Headers */,
 				A909F660213B190700FCD6BE /* MVKExtensions.h in Headers */,
 				A94FB7B51C7DFB4800632CA3 /* vk_mvk_moltenvk.h in Headers */,
 				A987B66B289AFB8C00F933C8 /* MVKDeviceFeatureStructs.def in Headers */,
@@ -1694,6 +1709,7 @@
 				566BFC29489D832C58DABEA3 /* MVKReplayGPUStages.h in Headers */,
 				A26637C750920E9CAF4E903E /* MVKReplayStubs.h in Headers */,
 				35260502AAE636B4B7AF01A1 /* MVKReplayTrace.h in Headers */,
+				E7363C769141B9FA0A280CD5 /* MVKReplayIRTrace.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1720,6 +1736,7 @@
 				7F66C8E58F20816C87E6F4EB /* MVKReplayGPUStages.h in Headers */,
 				509BD453D8B4BB60BFD9E66C /* MVKReplayStubs.h in Headers */,
 				E4E1A5FA7966AA2D6E33379A /* MVKReplayTrace.h in Headers */,
+				836E89BEDFAF74B38DD5BD43 /* MVKReplayIRTrace.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1746,6 +1763,7 @@
 				73B350F2C44ED2DE934B7351 /* MVKReplayGPUStages.h in Headers */,
 				313DA35B3EAD4E8A04CDC12C /* MVKReplayStubs.h in Headers */,
 				4BD6465D39D3ACA6ED1F3BD9 /* MVKReplayTrace.h in Headers */,
+				845D1359147DC3163DAC3029 /* MVKReplayIRTrace.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1772,6 +1790,7 @@
 				2F944DA60A16FD25E115357B /* MVKReplayGPUStages.h in Headers */,
 				C13CCFF49158BA5CDC459916 /* MVKReplayStubs.h in Headers */,
 				EE96D44C8EB428866BA79111 /* MVKReplayTrace.h in Headers */,
+				0BBE73BA3B16F279F1F42F3C /* MVKReplayIRTrace.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1798,6 +1817,7 @@
 				736381CF174A94780F8791ED /* MVKReplayGPUStages.h in Headers */,
 				BE51F79E8D7D14606CCF0E5A /* MVKReplayStubs.h in Headers */,
 				9513F729976C0A5AFE6415D2 /* MVKReplayTrace.h in Headers */,
+				1E548E0A0B0AD5D3B0589F0B /* MVKReplayIRTrace.h in Headers */,
 				DCFD7EE42A45BC6E007BBBF7 /* MVKExtensions.h in Headers */,
 				DCFD7EE52A45BC6E007BBBF7 /* vk_mvk_moltenvk.h in Headers */,
 				DCFD7EE62A45BC6E007BBBF7 /* MVKDeviceFeatureStructs.def in Headers */,

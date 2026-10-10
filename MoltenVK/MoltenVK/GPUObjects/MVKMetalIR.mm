@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <malloc/malloc.h>
 #include "MVKSPIRVMathFlags.h"
 #include "mvkGitRevDerived.h"
@@ -125,7 +126,7 @@ struct DeviceArtifacts {
     std::atomic<uint64_t> diskLookupCount{0}, diskLookupNs{0}, diskRestoreNs{0}, diskRestoreBytes{0};
     std::atomic<uint64_t> successfulDiskRestores{0}, successfulDiskRestoreNs{0}, successfulDiskRestoreBytes{0};
     std::shared_ptr<MVKMetalIRLifetimeCounters> lifetime = std::make_shared<MVKMetalIRLifetimeCounters>();
-    DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
+    DeviceArtifacts():cache(retainedCount(),retainedBytes()) {
         lifetime->complete = telemetryEnabled();
         const char* directory=getenv("MELONX_METAL_IR_CACHE");
         if(directory&&*directory) {
@@ -134,8 +135,20 @@ struct DeviceArtifacts {
         }
     }
     static size_t retainedCount() {
+        if (keepAllDiagnostic()) return std::numeric_limits<size_t>::max();
         const char* v=getenv("MELONX_METAL_IR_MEMORY_CACHE");
         return v&&strcmp(v,"0")==0?0:64;
+    }
+    static size_t retainedBytes() {
+        return keepAllDiagnostic() ? std::numeric_limits<size_t>::max() : 8*1024*1024;
+    }
+    static bool keepAllDiagnostic() {
+#if MVK_METAL_IR_CACHE_DIAGNOSTICS
+        const char* value = getenv("MELONX_METAL_IR_DIAGNOSTIC_KEEP_ALL");
+        return value && strcmp(value, "1") == 0;
+#else
+        return false;
+#endif
     }
 };
 std::mutex devicesLock;

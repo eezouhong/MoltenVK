@@ -455,7 +455,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         if (artifact) {
             artifact->metadata = std::make_shared<const MVKMetalIRMetadata>(static_cast<const MVKMetalIRMetadata&>(*artifact));
         }
-        if(!artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR stage %u rejected: %s",execution,result.error[0]?result.error:"unsupported interface or library");
+        if(!artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR,"MetalIR stage %u rejected: %s; shader=%016zx, status=%u, runtime_flags=0x%x, entry=%s",execution,result.error[0]?result.error:"unsupported interface or library",module->getKey().codeHash,result.status,result.runtimeFlags,result.entry);
     } catch(...) {if(fromDisk)free(result.metallib);else plugin().release(&result);throw;}
     // Capture status before the compiler's release callback clears its result.
     DeviceArtifacts::Cache::Result cached{artifact,result.metallibSize,!artifact&&result.status==1};

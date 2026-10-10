@@ -412,6 +412,18 @@ A1仍待用户合入原始native #24：按实际RCmerge改pin、ABI9、匹配com
 
 A1正式RCmerge发布匹配仍未完成；这是用户授权的候选包安装，不替代A4/A5或最终发布验收。
 
+## Build355 手机黑屏与 iOS AIR 版本修复（2026-10-09）
+
+用户提供XC3 2.2.1和BOTW 1.6.0的Build355诊断包，两者明确选择IR并出现ErrorFeatureNotPresent/shader artifact拒绝。正常退出和持续frame计数只证明进程/提交循环仍工作，不能证明画面正确。XC3另有rasterizerDiscard pipeline拒绝，但BOTW没有这条记录仍全黑，不能用它单独解释共性。
+
+经用户要求开始设备诊断后，首次在原iPhone15ProMax/iOS27上跑三组固定输入：常量全屏三角形、VS只读SSBO、FS只读SSBO。MSL每组256/256像素精确符合CPU定义的green/magenta；IR三组都在PSO创建前拒绝。DEBUG日志给出native raster adapter: unsupported MSC AIR or language version。用户要求此后只安装，不擅自启动/切前台/停止；遵守该约束。用户后来仅授权一次启动并保持前台，再跑同一组，MSL仍3组通过、IR仍3组拒绝，App留开未自动停止，单次授权已用完。
+
+纯CPU控制使用同一MSC3.1.1、合成VS和iOS17 target，也复现AIR2.6/MSL3.1被拒绝，无App、后台或GPU因素。原adapter只接受macOS26 producer的AIR2.8/MSL4.0。修复仅接受这两组真实已验证的版本pair，混合/未知pair继续拒绝，bitstream/interface/ranges/hash/public-reflection检查保留。实际iOS与Mac未适配产物的CPU回归均通过，四种混合/未知版本均明确拒绝；可复用入口为tests/raster_adapter_versions.cpp。原详细拒绝信息只在DEBUG，现源码将失败阶段原因、shader hash/status/flags放入ERROR，同时保留旧消息前缀；Build358仍用fe36 native，未声称它已包含该原生日志增补。
+
+同一修复的clean Mac compiler、既有fe36/c2ca native在共享队列1888执行native-absolute-ids：MSL/IR各960/960独立输出行通过，验证层开启；实际VS runtime flags0。没有再跑游戏性能路线。所需旧iOS LLVM库已清理，故从保留且核验的LLVM17.0.6源码归档重建三项静态依赖，复用未变的Mesa/MSC，再从修复源重新链接ABI9 iOS framework。
+
+Build358完成签名、静态包校验及实际iPhone安装成功，**只安装、未启动**。私有pixel probe和启动hook已移除。compiler SHA为84e1ccd300aa8a7fbd8e11f4af26e289dacfc3b309d5a8365de7c033d3e2da4c，已嵌入字节/UUID核验（去除签名影响后的各非debug section逐字节一致）。此结果修复了已复现的拒绝路径，但修复后的手机像素/两款游戏画面尚待用户手动启动确认，不宣布黑屏已全部解决。实际游戏shader字节未在诊断包中，未假装完成固定游戏输入oracle；所有失败/前台控制和合成输入保留在私有handoff。
+
 ## 用户统一验收的事项
 
 - 复审已撤销 binding ≤0.1 ms 分项门槛；+0.2871 ms 只保留作历史诊断。总 encode 条件通过，GPU union证据保留；A4六轮已补齐，长卡顿下降但FPS/default-MSL方向有不利结果，A5的80%归属未满足，交用户统一验收。

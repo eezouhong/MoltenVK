@@ -274,9 +274,19 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
             if (length!=8 || sizeSeen) return fail("invalid metallib size tag");
             write<uint64_t>(output,cursor+6,bitcode.size());sizeSeen=true;
         } else if (tag(data,size,cursor,"VERS")) {
-            if (length!=8 || read<uint16_t>(data,cursor+6)!=2 || read<uint16_t>(data,cursor+8)!=8 ||
-                read<uint16_t>(data,cursor+10)!=4 || read<uint16_t>(data,cursor+12)!=0)
-                return fail("unsupported MSC AIR or language version");
+            if (length!=8) return fail("unsupported MSC version tag length");
+            uint16_t airMajor=read<uint16_t>(data,cursor+6), airMinor=read<uint16_t>(data,cursor+8);
+            uint16_t languageMajor=read<uint16_t>(data,cursor+10), languageMinor=read<uint16_t>(data,cursor+12);
+            // MSC 3.1.1 emits AIR 2.6 / MSL 3.1 for the iOS 17 target,
+            // and AIR 2.8 / MSL 4.0 for the macOS 26 target. Retag only these
+            // verified pairs; the bitstream/interface checks remain strict.
+            bool iosVersion=airMajor==2 && airMinor==6 && languageMajor==3 && languageMinor==1;
+            bool macVersion=airMajor==2 && airMinor==8 && languageMajor==4 && languageMinor==0;
+            if (!iosVersion && !macVersion) {
+                error="unsupported MSC AIR or language version: AIR "+std::to_string(airMajor)+"."+std::to_string(airMinor)+
+                    ", language "+std::to_string(languageMajor)+"."+std::to_string(languageMinor);
+                return false;
+            }
             versionSeen=true;
         }
         cursor+=6+length;

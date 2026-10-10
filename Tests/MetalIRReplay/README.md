@@ -4,6 +4,11 @@ These sources package the existing execution fixtures. Expected rows come from
 Vulkan command arguments, independently of the MSL or IR compiler output. They
 contain no captured game shaders or assets.
 
+`run_submission_parity.py` compares command-buffer and encoder counts, with an
+independent output oracle. The IR runtime byte field includes direct/root/push
+parameter copies and is reported separately; it is not required to equal MSL's
+zero bytes. The IR extension CPU test checks its mode gating and byte accounting.
+
 Coverage: direct/indexed draws, negative base vertex, nonzero first instance,
 multi-draw IDs, GPU-written indirect arguments, triangle fan conversion, compute
 dispatch/base/indirect, shader switching, disk restore, missing compiler rejection,

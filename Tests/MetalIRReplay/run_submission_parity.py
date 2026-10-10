@@ -60,10 +60,18 @@ def main():
                 # Every fixture submits exactly one VkCommandBuffer. Require the
                 # native count too, so equal extra submits cannot pass unnoticed.
                 valid &= values[0] == 1 and values[4] == 1 and values[5] == values[6] == values[19] == values[21] == 0
-                valid &= values[14] == values[17] == 0
+                valid &= values[14] == 0
+                # Field 17 now counts actual copied IR payload, including
+                # direct/root/push updates (runtimeParameterBytes), rather than
+                # only an indirect temporary allocation. It is not a shared
+                # submission-count invariant. MSL must still have no IR bytes.
+                if route == 'msl':
+                    valid &= values[17] == 0
             observed = dict(zip(('commandBuffers', 'renderEncoders', 'blitEncoders', 'computeEncoders', 'passBreaks'),
                                 [values[i] for i in (4, 10, 11, 12, 13)])) if values else None
-            result = dict(case=label, valid=bool(valid), exitCode=process.returncode, counts=observed, oracle=oracle)
+            result = dict(case=label, valid=bool(valid), exitCode=process.returncode,
+                          counts=observed, runtimeParameterBytes=values[17] if values else None,
+                          oracle=oracle)
             results.append(result)
             (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
             print(json.dumps(result), flush=True)

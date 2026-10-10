@@ -1,3 +1,4 @@
+#include "MVKReplayBindingTrace.h"
 #include "MVKReplayGPUStages.h"
 #include "MVKReplayTrace.h"
 /*
@@ -47,6 +48,7 @@ VkResult MVKCmdDispatch::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::ComputeDispatch);
 	MTLRegion mtlThreadgroupCount = MTLRegionMake3D(_baseGroupX, _baseGroupY, _baseGroupZ, _groupCountX, _groupCountY, _groupCountZ);
 	auto* pipeline = cmdEncoder->getComputePipeline();
 	const auto* artifact = pipeline->getStageResources().metalIR.get();
@@ -83,6 +85,7 @@ VkResult MVKCmdDispatchIndirect::setContent(MVKCommandBuffer* cmdBuff, VkBuffer 
 }
 
 void MVKCmdDispatchIndirect::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::ComputeDispatch);
     mvkreplay::indirectInvocation(1,true);
     if (const auto* artifact = cmdEncoder->getComputePipeline()->getStageResources().metalIR.get()) {
         cmdEncoder->metalIR().prepareIndirectDispatch(artifact, _mtlIndirectBuffer, _mtlIndirectBufferOffset);

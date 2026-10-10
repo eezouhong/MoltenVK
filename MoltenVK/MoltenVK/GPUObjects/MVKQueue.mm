@@ -480,6 +480,7 @@ MVKQueueSubmission::~MVKQueueSubmission() {
 #pragma mark MVKQueueCommandBufferSubmission
 
 VkResult MVKQueueCommandBufferSubmission::execute() {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueueExecute);
 
 	_queue->_submissionCaptureScope->beginScope();
 
@@ -529,6 +530,7 @@ void MVKQueueCommandBufferSubmission::setActiveMTLCommandBuffer(id<MTLCommandBuf
 // any semaphores. We have delayed signalling the semaphores as long as possible to
 // allow as much filling of the MTLCommandBuffer as possible before forcing a wait.
 VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool signalCompletion) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueueCommit);
 
 	// If using inline semaphore waiting, do so now.
 	// When prefilled command buffers are used, multiple commits will happen because native semaphore

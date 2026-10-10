@@ -45,7 +45,7 @@ inline bool descriptorTimingEnabled() {
 }
 inline bool descriptorSamplingEnabled() {
     static bool value=[] {const char* p=getenv("MELONX_REPLAY_DESCRIPTOR_TIMING");return p&&!strcmp(p,"sampled");}();
-    return value;
+    return value || chainSamplingEnabled();
 }
 inline uint64_t nanoseconds(clockid_t clock,bool& valid) {
     timespec time{};valid=clock_gettime(clock,&time)==0;

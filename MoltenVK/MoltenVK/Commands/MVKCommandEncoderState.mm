@@ -582,6 +582,7 @@ static void executeBindOps(id<MTLCommandEncoder> encoder,
                            MVKStageResourceBindings& bindings,
                            const MVKResourceBinder& RESTRICT binder) {
 	mvkreplay::Timer replayTrace(mvkreplay::DescriptorBinding);
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::DescriptorBinding);
 	bool didUseResource = false;
 	for (const MVKDescriptorBindOperation& op : ops) {
 		MVKDescriptorSet* set = common._descriptorSets[op.set];

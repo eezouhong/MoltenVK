@@ -9,7 +9,7 @@
 
 namespace mvkreplay {
 // Each group has MSL/IR counters. Parts: preparation, descriptor script, remaining binding.
-enum class BindingGroup : unsigned { Resources, DrawPreparation, MetalDraw, Residency, Count };
+enum class BindingGroup : unsigned { Resources, DrawPreparation, MetalDraw, Residency, EncoderBatch, RenderEncoder, ComputeEncoder, BlitEncoder, BarrierEncoding, QueryEncoding, QueueExecute, QueueCommit, DescriptorBinding, IRRootBinding, ParameterCopy, IndirectParameters, ComputeDispatch, TransferEncoding, Count };
 constexpr unsigned bindingCounterCount = unsigned(BindingGroup::Count) * 2;
 struct BindingSample {
     uint64_t calls = 0, samples = 0, wallNs = 0, cpuNs = 0, unavailable = 0;
@@ -20,7 +20,7 @@ inline bool bindingSamplingEnabled() {
         const char* p = getenv("MELONX_REPLAY_BINDING_SAMPLING");
         return p && !strcmp(p, "1");
     }();
-    return value;
+    return value || chainSamplingEnabled();
 }
 struct BindingCounters {
     std::atomic<uint64_t> values[8]{};
@@ -109,6 +109,14 @@ public:
     BindingTrace(const BindingTrace&) = delete;
     BindingTrace& operator=(const BindingTrace&) = delete;
 };
+// Whole native method samples. Nested groups are inclusive and not additive.
+class NativePhaseTrace {
+    BindingTrace trace;
+public:
+    explicit NativePhaseTrace(BindingGroup group) : trace(false, bindingSamplingEnabled(), group) {
+        trace.checkpoint(); trace.checkpoint();
+    }
+};
 inline uint32_t bindingSnapshot(BindingSample* output, uint32_t capacity) {
     if (!bindingSamplingEnabled() || !output || capacity < bindingCounterCount) return 0;
     // Local synchronous replay gets exact completed counts. Other active
@@ -130,6 +138,8 @@ inline std::string bindingSamplesJSON(uint64_t now, const BindingSample (&sample
     line << "MELONX_BINDING_TOTALS {\"v\":" << (calibration ? 2 : 1) << ",\"monotonicNs\":" << now
          << ",\"inverseProbability\":" << DescriptorSampler::inverseProbability
          << ",\"maxPendingCallsPerThread\":255";
+    line << ",\"groupNames\":[\"Resources\",\"DrawPreparation\",\"MetalDraw\",\"Residency\",\"EncoderBatch\",\"RenderEncoder\",\"ComputeEncoder\",\"BlitEncoder\",\"BarrierEncoding\",\"QueryEncoding\",\"QueueExecute\",\"QueueCommit\",\"DescriptorBinding\",\"IRRootBinding\",\"ParameterCopy\",\"IndirectParameters\",\"ComputeDispatch\",\"TransferEncoding\"]";
+    line << ",\"scope\":\"raw_sampled_inclusive;groups_0_to_3_MSL_IR;groups_4_plus_all_paths_in_even_slot;not_additive\"";
     auto table = [&](const char* name, const BindingSample* records) {
         line << ",\"" << name << "\":[";
         for (unsigned i = 0; i < bindingCounterCount; ++i) {

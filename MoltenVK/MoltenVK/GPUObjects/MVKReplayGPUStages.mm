@@ -11,7 +11,7 @@
 namespace mvkreplay {
 static bool stagesEnabled() {
     static const bool requested=[] { const char* p=getenv("MELONX_REPLAY_GPU_STAGES"); return p&&!strcmp(p,"1"); }();
-    return requested && mode()==Mode::Coarse;
+    return (requested || chainSamplingEnabled()) && mode()==Mode::Coarse;
 }
 static GPUStageClock clockPair(id<MTLDevice> device) {
     bool validA,validB;uint64_t a=nanoseconds(CLOCK_MONOTONIC,validA);

@@ -444,6 +444,7 @@ void MVKCommandEncoder::beginEncoding(id<MTLCommandBuffer> mtlCmdBuff, MVKComman
 
 // Multithread autorelease prefill style uses a dedicated autorelease pool when encoding each command.
 void MVKCommandEncoder::encodeCommands(MVKCommand* command) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::EncoderBatch);
 	mvkreplay::Timer replayTrace(mvkreplay::MetalCommandEncoding);
 	if (_prefillStyle == MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS_STYLE_IMMEDIATE_ENCODING) {
 		@autoreleasepool {
@@ -734,6 +735,7 @@ void MVKCommandEncoder::setBarrier(uint64_t sourceStageMask, uint64_t destStageM
 
 
 void MVKCommandEncoder::encodeBarrierWaits(MVKCommandUse use) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::BarrierEncoding);
 	if (_mtlRenderEncoder) {
 		[_mtlRenderEncoder insertDebugSignpost:@"Encoding waits"];
 		barrierWait(kMVKBarrierStageVertex, _mtlRenderEncoder, MTLRenderStageVertex);
@@ -754,6 +756,7 @@ void MVKCommandEncoder::encodeBarrierWaits(MVKCommandUse use) {
 }
 
 void MVKCommandEncoder::encodeBarrierUpdates() {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::BarrierEncoding);
 	if (_mtlRenderEncoder) {
 		barrierUpdate(kMVKBarrierStageVertex, _mtlRenderEncoder, MTLRenderStageVertex);
 		barrierUpdate(kMVKBarrierStageFragment, _mtlRenderEncoder, MTLRenderStageFragment);
@@ -777,6 +780,7 @@ void MVKCommandEncoder::encodeBarrierUpdates() {
 
 // Creates _mtlRenderEncoder and marks cached render state as dirty so it will be set into the _mtlRenderEncoder.
 void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::RenderEncoder);
 
     endCurrentMetalEncoding();
 
@@ -1054,6 +1058,7 @@ void MVKCommandEncoder::clearRenderArea(MVKCommandUse cmdUse) {
 }
 
 void MVKCommandEncoder::beginMetalComputeEncoding(MVKCommandUse cmdUse) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::ComputeEncoder);
 	getState().beginComputeEncoding();
 }
 
@@ -1103,6 +1108,7 @@ void MVKCommandEncoder::endMetalRenderEncoding() {
 }
 
 void MVKCommandEncoder::endCurrentMetalEncoding() {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::RenderEncoder);
 	endMetalRenderEncoding();
 	encodeBarrierUpdates();
 
@@ -1171,6 +1177,7 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
 }
 
 id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmdUse) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::BlitEncoder);
 	bool needWaits = false;
 	if ( !_mtlBlitEncoder ) {
 		needWaits = true;
@@ -1265,6 +1272,7 @@ const MVKMTLBufferAllocation* MVKCommandEncoder::copyToTempMTLBufferAllocation(c
 // encoder is currently in use, creating a temporary BLIT encoder if no encoder is currently active.
 // We only encode the GPU sample if the platform allows encoding at the associated pipeline point.
 void MVKCommandEncoder::encodeGPUCounterSample(MVKGPUCounterQueryPool* mvkQryPool, uint32_t sampleIndex, MVKCounterSamplingFlags samplingPoints){
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
 	if (_mtlRenderEncoder) {
 		if (mvkIsAnyFlagEnabled(samplingPoints, MVK_COUNTER_SAMPLING_AT_DRAW)) {
 			[_mtlRenderEncoder sampleCountersInBuffer: mvkQryPool->getMTLCounterBuffer() atSampleIndex: sampleIndex withBarrier: YES];

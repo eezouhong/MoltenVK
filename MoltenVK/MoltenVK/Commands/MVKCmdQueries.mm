@@ -1,3 +1,4 @@
+#include "MVKReplayBindingTrace.h"
 /*
  * MVKCmdQueries.mm
  *
@@ -52,6 +53,7 @@ VkResult MVKCmdBeginQuery::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdBeginQuery::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
     // In a multiview render pass, multiple queries are produced, one for each view.
     // Therefore, when encoding, we must offset the query by the number of views already
     // drawn in all previous Metal passes.
@@ -66,6 +68,7 @@ void MVKCmdBeginQuery::encode(MVKCommandEncoder* cmdEncoder) {
 #pragma mark MVKCmdEndQuery
 
 void MVKCmdEndQuery::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
     uint32_t query = _query;
     if (cmdEncoder->getMultiviewPassIndex() > 0)
         query += cmdEncoder->getSubpass()->getViewCountUpToMetalPass(cmdEncoder->getMultiviewPassIndex() - 1);
@@ -91,6 +94,7 @@ VkResult MVKCmdWriteTimestamp::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdWriteTimestamp::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
     uint32_t query = _query;
     if (cmdEncoder->getMultiviewPassIndex() > 0)
         query += cmdEncoder->getSubpass()->getViewCountUpToMetalPass(cmdEncoder->getMultiviewPassIndex() - 1);
@@ -114,6 +118,7 @@ VkResult MVKCmdResetQueryPool::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdResetQueryPool::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
     cmdEncoder->resetQueries(_queryPool, _query, _queryCount);
     _queryPool->resetResults(_query, _queryCount, cmdEncoder);
 }
@@ -143,6 +148,7 @@ VkResult MVKCmdCopyQueryPoolResults::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdCopyQueryPoolResults::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::QueryEncoding);
     // What happens now depends on whether or not I was added before or after the query ended.
     if (!_queryPool->areQueriesDeviceAvailable(_query, _queryCount) && mvkIsAnyFlagEnabled(_flags, VK_QUERY_RESULT_WAIT_BIT)) {
         // Defer this until the queries will be done.

@@ -191,12 +191,13 @@ uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacit
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
     // The probe runs outside a game. Return a token for exact restoration;
     // never leave detailed timers enabled for subsequent game sessions.
-    if ((flags & ~7u) || (flags & 6u) == 6u) return UINT32_MAX;
+    if ((flags & ~15u) || (flags & 6u) == 6u) return UINT32_MAX;
     const auto nextMode = flags & 2u ? mvkreplay::Mode::Detailed :
                           flags & 4u ? mvkreplay::Mode::Coarse : mvkreplay::Mode::Off;
     const auto oldMode = mvkreplay::setMode(nextMode);
+    const bool oldSampling = mvkreplay::setChainSampling(flags & 8u);
     const bool oldTelemetry = telemetryStorage().exchange(flags & 1u,std::memory_order_relaxed);
-    return (oldTelemetry ? 1u : 0u) |
+    return (oldSampling ? 8u : 0u) | (oldTelemetry ? 1u : 0u) |
            (oldMode == mvkreplay::Mode::Detailed ? 2u : oldMode == mvkreplay::Mode::Coarse ? 4u : 0u);
 }
 

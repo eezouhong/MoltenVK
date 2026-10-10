@@ -21,6 +21,7 @@ inline void mvkBindMetalIRResources(id<MTLCommandEncoder> encoder,
                                mvkreplay::BindingTrace& bindingTrace,
                                const EncodeResidency& encodeResidency) {
 	mvkreplay::Timer replayTrace(mvkreplay::IRRootBinding);
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::IRRootBinding);
 	const auto& artifact = *resources.metalIR;
 	auto& cached = bindings.metalIRArguments;
 	MVKMetalSharedCommandEncoderState& shared = mvkEncoder.getState().mtlShared();

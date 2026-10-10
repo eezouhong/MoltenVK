@@ -22,7 +22,7 @@ public:
     explicit constexpr DescriptorSampler(uint32_t) noexcept {}
     constexpr bool next() noexcept { return false; }
 };
-enum class BindingGroup : unsigned { Resources, DrawPreparation, MetalDraw, Residency, Count };
+enum class BindingGroup : unsigned { Resources, DrawPreparation, MetalDraw, Residency, EncoderBatch, RenderEncoder, ComputeEncoder, BlitEncoder, BarrierEncoding, QueryEncoding, QueueExecute, QueueCommit, DescriptorBinding, IRRootBinding, ParameterCopy, IndirectParameters, ComputeDispatch, TransferEncoding, Count };
 constexpr unsigned bindingCounterCount=unsigned(BindingGroup::Count)*2;
 struct BindingSample {
     uint64_t calls=0,samples=0,wallNs=0,cpuNs=0,unavailable=0;
@@ -56,6 +56,10 @@ class BindingTrace {
 public:
     explicit constexpr BindingTrace(bool,bool=false,BindingGroup=BindingGroup::Resources) noexcept {}
     constexpr void checkpoint() noexcept {}
+};
+class NativePhaseTrace {
+public:
+    explicit constexpr NativePhaseTrace(BindingGroup) noexcept {}
 };
 struct SubmissionSample {
     uint64_t buffers,gpuNs,unavailable,errors,indirectBatches,indirectDraws,

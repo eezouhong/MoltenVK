@@ -14,6 +14,7 @@ void MVKMetalIRCommandEncoding::reset() {
 
 MVKMetalIRCommandEncoding::BufferBinding MVKMetalIRCommandEncoding::copyBytes(const void* bytes, NSUInteger length) {
 	mvkreplay::Timer trace(mvkreplay::ParameterCopy);
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::ParameterCopy);
 	assert(length);
 	auto& arena = _arena;
 	// Preserve the allocator's power-of-two size and alignment contract. Each
@@ -79,6 +80,7 @@ void MVKMetalIRCommandEncoding::prepareDraw(const MVKMetalIRMetadata* artifact, 
 MVKMetalIRCommandEncoding::RuntimeBatch MVKMetalIRCommandEncoding::prepareIndirectDraws(
     const MVKMetalIRMetadata* artifact, uint32_t count, bool indexed) {
     mvkreplay::Timer trace(mvkreplay::IndirectParameters);
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::IndirectParameters);
     if (artifact && count) mvkreplay::indirectRuntime(count, 0, false, false);
     return {artifact && count, indexed, artifact ? artifact->runtimeFlags : 0};
 }

@@ -1,3 +1,4 @@
+#include "MVKReplayBindingTrace.h"
 /*
  * MVKCmdTransfer.mm
  *
@@ -136,6 +137,7 @@ inline VkResult MVKCmdCopyImage<N>::validate(MVKCommandBuffer* cmdBuff, const Vk
 
 template <size_t N>
 void MVKCmdCopyImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse commandUse) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
     MVKPixelFormats* pixFmts = cmdEncoder->getPixelFormats();
     uint32_t copyCnt = (uint32_t)_vkImageCopies.size();
     VkBufferImageCopy vkSrcCopies[copyCnt];
@@ -482,6 +484,7 @@ void MVKCmdBlitImage<N>::populateVertices(MVKVertexPosTex* vertices, const VkIma
 
 template <size_t N>
 void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse commandUse) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 
 	auto& mtlFeats = cmdEncoder->getMetalFeatures();
 	size_t vkIBCnt = _vkImageBlits.size();
@@ -811,6 +814,7 @@ inline VkResult MVKCmdResolveImage<N>::validate(MVKCommandBuffer* cmdBuff, const
 
 template <size_t N>
 void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 
 	auto& mtlFeats = cmdEncoder->getMetalFeatures();
 	size_t vkIRCnt = _vkImageResolves.size();
@@ -1022,6 +1026,7 @@ VkResult MVKCmdCopyBuffer<N>::setContent(MVKCommandBuffer* cmdBuff,
 
 template <size_t N>
 void MVKCmdCopyBuffer<N>::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 	id<MTLBuffer> srcMTLBuff = _srcBuffer->getMTLBuffer();
 	NSUInteger srcMTLBuffOffset = _srcBuffer->getMTLBufferOffset();
 
@@ -1138,6 +1143,7 @@ inline VkResult MVKCmdBufferImageCopy<N>::validate(MVKCommandBuffer *cmdBuff) {
     
 template <size_t N>
 void MVKCmdBufferImageCopy<N>::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
     id<MTLBuffer> mtlBuffer = _buffer->getMTLBuffer();
     if ( !mtlBuffer ) { return; }
 
@@ -1389,6 +1395,7 @@ uint32_t MVKCmdClearAttachments<N>::populateVertices(MVKCommandEncoder* cmdEncod
 
 template <size_t N>
 void MVKCmdClearAttachments<N>::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 
 	uint32_t vtxCnt = getVertexCount(cmdEncoder);
 	simd::float4 vertices[vtxCnt];
@@ -1540,6 +1547,7 @@ VkResult MVKCmdClearImage<N>::setContent(MVKCommandBuffer* cmdBuff,
 
 template <size_t N>
 void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 	bool isDS = isDepthStencilClear();
 	NSString* mtlRendEncName = (isDS
 								? mvkMTLRenderCommandEncoderLabel(kMVKCommandUseClearDepthStencilImage)
@@ -1726,6 +1734,7 @@ VkResult MVKCmdFillBuffer::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdFillBuffer::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 	if (_wordCount == 0) { return; }
 
 	id<MTLBuffer> dstMTLBuff = _dstBuffer->getMTLBuffer();
@@ -1786,6 +1795,7 @@ VkResult MVKCmdUpdateBuffer::setContent(MVKCommandBuffer* cmdBuff,
 }
 
 void MVKCmdUpdateBuffer::encode(MVKCommandEncoder* cmdEncoder) {
+	mvkreplay::NativePhaseTrace chainTrace(mvkreplay::BindingGroup::TransferEncoding);
 
     id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(kMVKCommandUseUpdateBuffer);
 

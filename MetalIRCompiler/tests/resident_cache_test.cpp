@@ -7,6 +7,17 @@ struct Artifact { unsigned value; };
 using Cache = mvkir::ResidentCache<Artifact>;
 
 int main() {
+    // Read-only statistics must preserve actual budget and ownership. Eviction
+    // drops cache ownership, while an active constructing caller remains valid.
+    Cache bounded(2, 8);
+    auto item = [&](const char* key) {
+        return bounded.get(key, [] { return Cache::Result{std::make_shared<Artifact>(Artifact{1}), 4, false}; });
+    };
+    auto held = item("one"); item("two"); item("three");
+    auto stats = bounded.stats();
+    assert(stats.maxObjects == 2 && stats.maxBytes == 8);
+    assert(stats.retained == 2 && stats.retainedBytes == 8 && stats.evictions == 1);
+    assert(item("one") == held && bounded.stats().hits == 1);
     // Exceed a tiny metadata cap while no LRU holds the artifacts. All owners
     // must continue sharing their original library instead of recompiling it.
     Cache live(0, 0, 2);

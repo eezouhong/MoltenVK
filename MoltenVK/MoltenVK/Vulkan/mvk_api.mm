@@ -189,6 +189,15 @@ MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags
     return mvkMetalIRSetProbeDiagnostics(flags);
 }
 
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkSetMetalIRTelemetryEnabledMVK(uint32_t enabled) {
+    return mvkMetalIRSetTelemetryEnabled(enabled);
+}
+
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCacheStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity) {
+    return device ? mvkMetalIRCacheStatistics(MVKDevice::getMVKDevice(device), output, capacity) : 0;
+}
+
 extern "C" MVK_PUBLIC_VULKAN_SYMBOL uint64_t vkTrimMetalIRCompilerMemoryMVK(void) {
     return mvkMetalIRRelieveCompilerMemory();
 }

@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <malloc/malloc.h>
 #include "MVKSPIRVMathFlags.h"
 #include "mvkGitRevDerived.h"
@@ -24,7 +25,25 @@ bool mvkMetalIREnabled() {
     const char* value = getenv("MELONX_EXPERIMENTAL_METAL_IR");
     return value && strcmp(value, "1") == 0;
 }
-MVKMetalIRArtifact::~MVKMetalIRArtifact(){[function release];[library release];}
+struct MVKMetalIRLifetimeCounters {
+    std::atomic<uint64_t> liveLibraries{0}, liveMetallibBytes{0}, librariesCreated{0}, librariesDestroyed{0};
+    std::atomic<uint64_t> liveFunctions{0}, functionsCreated{0}, functionsDestroyed{0};
+    std::atomic<bool> complete{false};
+};
+
+MVKMetalIRArtifact::~MVKMetalIRArtifact() {
+    [function release];
+    [library release];
+    if (lifetimeCounters) {
+        --lifetimeCounters->liveLibraries;
+        lifetimeCounters->liveMetallibBytes -= trackedMetallibBytes;
+        ++lifetimeCounters->librariesDestroyed;
+        if (trackedFunction) {
+            --lifetimeCounters->liveFunctions;
+            ++lifetimeCounters->functionsDestroyed;
+        }
+    }
+}
 
 namespace {
 mvkir::CompilerLimit& compilerLimit() {
@@ -104,7 +123,11 @@ struct DeviceArtifacts {
     std::string diskDirectory;
     std::mutex diskConfigurationLock;
     std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0},rejected{0},psoNs{0};
-    DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
+    std::atomic<uint64_t> diskLookupCount{0}, diskLookupNs{0}, diskRestoreNs{0}, diskRestoreBytes{0};
+    std::atomic<uint64_t> successfulDiskRestores{0}, successfulDiskRestoreNs{0}, successfulDiskRestoreBytes{0};
+    std::shared_ptr<MVKMetalIRLifetimeCounters> lifetime = std::make_shared<MVKMetalIRLifetimeCounters>();
+    DeviceArtifacts():cache(retainedCount(),retainedBytes()) {
+        lifetime->complete = telemetryEnabled();
         const char* directory=getenv("MELONX_METAL_IR_CACHE");
         if(directory&&*directory) {
             diskDirectory=directory;
@@ -112,8 +135,20 @@ struct DeviceArtifacts {
         }
     }
     static size_t retainedCount() {
+        if (keepAllDiagnostic()) return std::numeric_limits<size_t>::max();
         const char* v=getenv("MELONX_METAL_IR_MEMORY_CACHE");
         return v&&strcmp(v,"0")==0?0:64;
+    }
+    static size_t retainedBytes() {
+        return keepAllDiagnostic() ? std::numeric_limits<size_t>::max() : 8*1024*1024;
+    }
+    static bool keepAllDiagnostic() {
+#if MVK_METAL_IR_CACHE_DIAGNOSTICS
+        const char* value = getenv("MELONX_METAL_IR_DIAGNOSTIC_KEEP_ALL");
+        return value && strcmp(value, "1") == 0;
+#else
+        return false;
+#endif
     }
 };
 std::mutex devicesLock;
@@ -198,6 +233,54 @@ uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
     const bool oldTelemetry = telemetryStorage().exchange(flags & 1u,std::memory_order_relaxed);
     return (oldTelemetry ? 1u : 0u) |
            (oldMode == mvkreplay::Mode::Detailed ? 2u : oldMode == mvkreplay::Mode::Coarse ? 4u : 0u);
+}
+
+uint32_t mvkMetalIRSetTelemetryEnabled(uint32_t enabled) {
+    if (enabled > 1) return UINT32_MAX;
+    return telemetryStorage().exchange(enabled != 0, std::memory_order_relaxed) ? 1 : 0;
+}
+
+uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
+    constexpr uint32_t fields = 37;
+    if (!device || !output || capacity < fields) return 0;
+    std::fill(output, output + fields, 0);
+    output[0] = 1;
+    output[1] = 1u | (telemetryEnabled() ? 2u : 0u);
+    std::shared_ptr<DeviceArtifacts> state;
+    {
+        std::lock_guard<std::mutex> lock(devicesLock);
+        auto found = devices.find(device);
+        if (found != devices.end()) state = found->second;
+    }
+    if (state) {
+        const auto cache = state->cache.stats();
+        const auto life = state->lifetime;
+        if (life->complete.load()) output[1] |= 4u;
+        output[2] = cache.maxObjects; output[3] = cache.maxBytes;
+        output[4] = cache.entries; output[5] = cache.retained; output[6] = cache.retainedBytes;
+        output[7] = cache.hits; output[8] = cache.misses; output[9] = cache.waits; output[10] = cache.evictions;
+        output[11] = life->liveLibraries.load(); output[12] = life->liveMetallibBytes.load();
+        output[13] = life->librariesCreated.load(); output[14] = life->librariesDestroyed.load();
+        output[15] = life->liveFunctions.load(); output[16] = life->functionsCreated.load();
+        output[17] = life->functionsDestroyed.load();
+        if (auto disk = std::atomic_load(&state->disk)) {
+            output[18] = disk->enabled() ? 1 : 0;
+            const auto stats = disk->statistics();
+            output[19] = stats.indexedBytes; output[20] = stats.entries;
+            output[21] = stats.pendingBytes; output[22] = stats.pendingCount;
+            output[28] = stats.droppedWrites; output[29] = stats.failedWrites;
+            output[30] = stats.completedWrites; output[31] = stats.writtenBytes;
+        }
+        output[23] = state->diskLookupCount.load(); output[24] = state->diskLookupNs.load();
+        output[25] = state->diskHits.load(); output[26] = state->diskRestoreNs.load();
+        output[27] = state->diskRestoreBytes.load();
+        output[34] = state->successfulDiskRestores.load();
+        output[35] = state->successfulDiskRestoreNs.load();
+        output[36] = state->successfulDiskRestoreBytes.load();
+    }
+    if (@available(macOS 10.15, iOS 13.0, *)) output[32] = device->getPhysicalDevice()->getMTLDevice().currentAllocatedSize;
+    output[33] = std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now().time_since_epoch()).count();
+    return fields;
 }
 
 uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
@@ -361,9 +444,20 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     } libraryBytes;
     auto disk=std::atomic_load(&state->disk);
     mvkir::DiskCache::Reflection cachedReflection;
-    bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
     bool telemetry=telemetryEnabled();
-    if(telemetry&&fromDisk)++state->diskHits;
+    if (!telemetry) state->lifetime->complete = false;
+    auto diskStarted = telemetry && disk ? IRClock::now() : IRClock::time_point{};
+    bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
+    if (telemetry && disk) {
+        ++state->diskLookupCount;
+        const auto duration = elapsedNs(diskStarted);
+        state->diskLookupNs += duration;
+        if (fromDisk) {
+            ++state->diskHits;
+            state->diskRestoreNs += duration;
+            state->diskRestoreBytes += result.metallibSize;
+        }
+    }
     try {
       for(int attempt=0;attempt<2;++attempt) {
         if(telemetry&&!fromDisk)++state->compilerCalls;
@@ -393,10 +487,22 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             if(!libraryBytes.data)throw std::bad_alloc();
             result.metallib=nullptr; // dispatch_data owns this malloc allocation.
             { mvkreplay::Timer trace(mvkreplay::IRLibrary); artifact->library=[owner->getMTLDevice() newLibraryWithData:libraryBytes.data error:&error]; }
+            if (artifact->library && telemetry) {
+                artifact->lifetimeCounters = state->lifetime;
+                artifact->trackedMetallibBytes = result.metallibSize;
+                ++state->lifetime->liveLibraries;
+                state->lifetime->liveMetallibBytes += result.metallibSize;
+                ++state->lifetime->librariesCreated;
+            }
             if(artifact->library) { mvkreplay::Timer trace(mvkreplay::IRFunction); artifact->function=[artifact->library newFunctionWithName:@(result.entry)]; }
             if(telemetry)state->libraryNs+=elapsedNs(libraryStart);
             MTLFunctionType expectedType=execution==0?MTLFunctionTypeVertex:execution==4?MTLFunctionTypeFragment:MTLFunctionTypeKernel;
             if(artifact->function&&artifact->function.functionType!=expectedType){[artifact->function release];artifact->function=nil;}
+            if (artifact->function && artifact->lifetimeCounters) {
+                artifact->trackedFunction = true;
+                ++state->lifetime->liveFunctions;
+                ++state->lifetime->functionsCreated;
+            }
             if(!artifact->function){artifact.reset();owner->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,"MetalIR library rejected: %s",error.localizedDescription.UTF8String?:"missing entry");}
             else {
                 artifact->setCount=request.setCount;artifact->pushConstantSize=request.pushConstantSize;
@@ -430,6 +536,11 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
                 if(telemetry)state->reflectionNs+=elapsedNs(reflectionStart);
                 if(artifact)owner->reportMessage(MVK_CONFIG_LOG_LEVEL_DEBUG,"MetalIR %s stage %u: Mesa %.3f ms, converter %.3f ms, raster adapter %.3f ms, active sets 0x%llx, math mode %u, push bytes %u/%u, runtime flags 0x%x",fromDisk?"restored":"compiled",execution,result.mesaMs,result.converterMs,result.rasterAdapterMs,(unsigned long long)artifact->usedSets,request.mathMode,artifact->usesPushConstants?artifact->pushConstantSize:0u,artifact->pushConstantSize,artifact->runtimeFlags);
             }
+        }
+        if (artifact && fromDisk && telemetry) {
+            ++state->successfulDiskRestores;
+            state->successfulDiskRestoreNs += elapsedNs(diskStarted);
+            state->successfulDiskRestoreBytes += result.metallibSize;
         }
         if(!artifact&&fromDisk){
             disk->invalidate(key);free(result.metallib);result={};fromDisk=false;continue;

@@ -6,7 +6,7 @@ MeloNX 首次遇到 shader 时，MSL 源码编译会阻塞 pipeline 准备。这
 
 ## 当前交付状态（2026-10-09）
 
-最新复审已撤销 **binding ≤0.1 ms** 分项门槛：分组采样用于归因，不能代替总成本验收。后续只按总编码线程 CPU（≤2%）、GPU union 和动态 guest 帧间隔评估性能，不再为 binding 跑实验。历史 +0.2871 ms 测量和用户当时接受该值的决定继续保留，不改写旧数据。两个功能 PR 保持 Draft，默认维护 RC pin 的更新及手机验收留待该最终决定。
+最新复审已撤销 **binding ≤0.1 ms** 分项门槛：分组采样用于归因，不能代替总成本验收。后续只按总编码线程 CPU（≤2%）、GPU union 和动态 guest 帧间隔评估性能，不再为 binding 跑实验。历史 +0.2871 ms 测量和用户当时接受该值的决定继续保留，不改写旧数据。两个功能 PR 保持 Draft。维护RC pin的独立升级A2已合入#297；IR最终发布组合仍待A1。A4六轮及A5曲线已完成，完整结果与未达到的标准见下方follow-up，手机未操作。
 
 最新保留实现把固定 IR descriptor table 的 136 B 只读 root 放在各 allocation 尾部，只有单 used-set、没有实际 push/runtime 参数的 stage 使用。UNIT_POINT_SIZE 等 raster annotation 不请求 root payload。普通 root bytes 路线保持完整 ABI；GPU→bytes 切换强制刷新地址和 ABI。IR 复用无 auxiliary offsets 的 union slot 保存 allocation 地址，MSL auxiliary pointer 与 64 B descriptor-set stride 保持原状；pool 包含 root/对齐容量并提前拒绝越界。没有采用慢的多 set 快照实验。私有 proof/pool 日志已从产品代码移除。
 
@@ -337,9 +337,72 @@ Mesa `0007` 的回归覆盖包括 `native-absolute-ids`（60 个 direct/indexed 
 
 `drawBinding()` 加上有效性契约注释：只有 metadata 带 DRAW_PARAMETERS 时才可消费 `_draw`，其他 shader 可以保留缓存值，不能从这个值推断 flag。消费方已有同一 flag guard，没有修改编码行为。额外 MSL combined-image/sampler validation 异常已建 [issue #294](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/issues/294) 独立跟踪；native 仓库关闭了 Issues，因此放在项目仓库，不阻塞 #285。
 
+## A2–A7 follow-up：独立 PR 合入与六轮路线结果（2026-10-09）
+
+[本次复审](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/285#pullrequestreview-5475450495)要求的6次新路线已完成，再加原905冷对照，共8个180秒窗口。所有窗口同一冻结存档/路线hash，40/40段matching ACK，计划hold/offset一致、lateness≤1s；F24、handler、controller和实际进程正常exit0，没有强停或为有利结果重跑。原907导航误判发生在测量前并保留，改进导航后使用fresh913/914；被用户暂停取消的907 IR从未运行，不计产品崩溃。
+
+用户授权review后，[#295 skills](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/295)、[#296 native-memory sampler](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/296)、[#297 RC6 pin](https://github.com/eezouhong/MeloNX-pending-access-sync-gate/pull/297)、[Debug Tool #26 navigation](https://github.com/eezouhong/ryujinx-ios-host-debug/pull/26)均已合入。#295修掉参考文档残留binding gate，两个skill validator和分析器输入夹具通过。#296与master线程CPU遥测兼容，35/35 CPU测试通过、logging-OFF build通过；完整light12678B，thread groups单独395B。第一次34/35因旧测试读取活跃日志的FileShare竞态失败，修复读写共享及完整换行后通过，失败保留。#297版本检查、8ec88055 Release OFF/native SHA/默认replay导出0及906短冒烟核对通过。导航ruff及完整308tests（1 skipped，0 failed）通过。远端CI因账单未启动，未当作通过。
+
+### A4：主指标来自 guest fence_ready
+
+| 180秒窗口 | guest FPS | p95/p99 ms | >100ms 次/秒合计 | >250ms 次 | >500ms 次/秒合计 | max ms | pipeline累计秒 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| master cold① 905 | 19.7594 | 109.8/348.7 | 196/47.203s | 58 | 13/10.355s | 1694.6 | 39.463 |
+| IR cold① 905 | 25.1690 | 51.1/102.2 | 49/8.123s | 4 | 0/0.000s | 325.3 | 9.011 |
+| master warm 913 | 21.3524 | 71.1/299.7 | 139/35.271s | 47 | 12/9.028s | 1544.5 | 33.098 |
+| IR warm 914 | 21.7418 | 51.4/185.7 | 83/18.457s | 26 | 3/1.767s | 624.3 | 1.087 |
+| 候选默认MSL cold 908 | 18.4365 | 119.8/318.6 | 202/45.946s | 53 | 11/10.095s | 1749.0 | 34.533 |
+| 候选默认MSL warm 909 | 23.6011 | 51.3/150.5 | 66/13.724s | 19 | 1/0.591s | 591.4 | 5.405 |
+| IR cold② 910（先） | 22.3299 | 51.4/100.0 | 41/6.229s | 3 | 0/0.000s | 371.9 | 4.693 |
+| master cold② 910（后） | 22.5742 | 51.3/128.9 | 64/17.958s | 26 | 5/5.502s | 1955.9 | 28.858 |
+
+两次cold的>100ms间隔总时长均下降：47.203→8.123s（−82.8%）、17.958→6.229s（−65.3%）；>500ms分别13→0、5→0，warm12→3。动态长卡顿方向一致。但反序cold的guest FPS为master22.5742、IR22.3299（IR约−1.1%），没有重复证明FPS上升；warm默认MSL23.6011也优于IR21.7418。候选默认MSL cold18.4365低于两个master cold19.7594/22.5742，p95更高，不能宣布默认用户无回退。A4运行完成，不是所有性能主张无条件PASS；未达到的方向交用户统一验收，不补有利重跑。
+
+FPS=窗口fence_ready数量/实际180.015–180.034s，p95/p99用窗口内相邻guest时间戳；边界删失间隔不计。pipelineCreateMs是次要累计elapsed，不是前台阻塞CPU；每秒采样FPS仅参考。两次cold顺序相反，但系统Metal cache未清，实际游戏进度/终点/pipeline数量不同。原905 managed09d/558b，新baseline0b49包含共同A5遥测；新candidate为公开组合7e108（产品e18+独立遥测），native仍9a09/c2ca（codefe36），compiler仍release17/absoluteID0007/ABI9。master warm之后暂停，剩余候选增加admission快照，实际adapter身份/patch单独保留；没有伪造prepare metadata。当前master已更新pin8ec，晚于这组冻结基线，不能把本表说成最新master的新配对。
+
+工具版本没有显式固定/记录DOTNET_GCgen0size，原905另有GC分析指出host为6MiB、手机32MiB；本组保留原设置，没有在最后一轮中改变量，也不把host数字外推手机。输入ACK不证明native键盘消费时刻或绝对连续ZL。完整聚合身份、各阈值时长及采样参考分布见[A4 evidence](evidence/a4-routes-20261009.json)。
+
+### A5：按时间对齐的内存分项
+
+每个sample在已有writer上采task-only TASK_VM_INFO和default/all malloc zones，不走guest VM mapping锁、不强制GC。新6路均有相同核心sampler；原905没有该native sampler。下表是整个路线各列中位数的IR−master（MiB），不同记账视图重叠，中位数也不能相加成物理分解。
+
+| 分项差值MiB | warm | 反序cold |
+|---|---:|---:|
+| process footprint | -285.74 | -144.71 |
+| footprint−Vulkan requested代理 | -223.14 | -52.35 |
+| Metal−Vulkan requested代理 | +15.16 | +20.75 |
+| 当前managed heap | +13.97 | -154.28 |
+| 上次GC heap（有滞后） | -216.30 | -141.03 |
+| 上次GC committed | -218.89 | -140.11 |
+| all malloc zones live | -81.90 | -64.40 |
+| all malloc zones reserved | -66.92 | -48.02 |
+| task internal | -169.62 | -240.77 |
+| task compressed | -115.65 | +207.70 |
+
+| 对齐时段·IR−master MiB | footprint | 非资源代理 | managed heap | all-zone live | internal | compressed |
+|---|---:|---:|---:|---:|---:|---:|
+| warm 0-30s | -22.06 | +367.41 | -86.53 | -59.06 | +257.05 | -274.83 |
+| warm 75-105s | -386.94 | -345.92 | -61.92 | -82.21 | -1024.86 | +758.11 |
+| warm 150-181s | -369.59 | -200.02 | -48.16 | -91.78 | +324.30 | -566.84 |
+| cold 0-30s | +25.87 | +380.25 | -73.61 | -60.08 | -153.96 | +370.31 |
+| cold 75-105s | -109.70 | -117.38 | +231.12 | -64.24 | -290.88 | +179.33 |
+| cold 150-181s | -302.73 | -378.59 | -135.15 | -63.27 | -155.74 | -300.07 |
+
+![warm memory accounting](evidence/a5-warm-20261009.png)
+
+![reverse cold memory accounting](evidence/a5-cold-reverse-20261009.png)
+
+新pair没有重现固定+260MiB的IR footprint/编译器堆；warm/cold all-zone live反而低81.90/64.40MiB。早期非资源代理仍高367/380MiB，之后转负；同时Vulkan资源进度、GC后堆、resident/compressed记账变化。它支持时序/工作量混杂显著，不能单凭这些列证明“GC造成了全部差异”或“编译器堆没有还回去”。默认zone包含在all-zone，无法从两者识别Mesa/LLVM/MSC的独立owner。
+
+IR admission末值warm/cold分别batches1687/1070、reliefs41/33，active/waiting0、peak2/limit2。路线内各观察到6次relief计数增长；跨约1s采样间隔footprint变化warm −25.22～+27.36MiB、cold −78.13～+11.06MiB，all-zone reserved在这12个间隔变化均0。说明quiet relief触发，**不证明物理回收量**；已有独立200-stage fixture返回释放字节0也继续保留。采样不是relief专用原子前后快照，不能把同时发生的GC/其它分配归于它。
+
+[Apple XNU footprint公式](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c#L1143)还包括alternate accounting、IOKit、purgeable和page table；公开TASK_VM_INFO没有独立IOKit字段，device=0不是IOKit零。采样保留IOKit−1；footprint−(internal+compressed)中位仍约1733–1862MiB，不能硬拼80%物理owner归属。**A5的80%归属完成标准尚未满足**，不据此改编译器zone/pressure policy或默认开启IR。用户已允许达不到时披露交统一验收，按固定六轮停止新实验。完整时间bands/relief观察及native sampler来源见[A4 evidence](evidence/a4-routes-20261009.json)、[A5 summary](evidence/a5-memory-summary-20261009.json)。
+
+A1仍待用户合入原始native #24：按实际RCmerge改pin、ABI9、匹配compiler/framework/native重建、validateapp与短无fallbacksmoke。此前558b的unsigned preview包不能冒充最新e18/遥测组合的发布匹配。两个功能PR仍Draft，未操作手机。全部独立PR验证、临时env清理及所有失败记录在私有handoff；已按用户磁盘要求移除退役build/旧导航图片和大日志，保留必要输入、hash、失败摘要与最终oracle，未归档巨型环境。
+
 ## 用户统一验收的事项
 
-- 复审已撤销 binding ≤0.1 ms 分项门槛；+0.2871 ms 只保留作历史诊断。总 encode 条件通过，GPU union 与动态 guest 卡顿指标按复审继续补对照；所有不利候选保留。
+- 复审已撤销 binding ≤0.1 ms 分项门槛；+0.2871 ms 只保留作历史诊断。总 encode 条件通过，GPU union证据保留；A4六轮已补齐，长卡顿下降但FPS/default-MSL方向有不利结果，A5的80%归属未满足，交用户统一验收。
 - 同一实际 smoke draw/input 的 MSL/IR-strict/IR-fast 没有重现烟雾消失；微小像素差仍披露，不声称位级等价。
 - 源码、主机验证、ABI9 compiler 与最新 master-merged managed runtime 的 NativeAOT/iOS preview package 校验均已准备，身份和范围见上述记录。默认清单应在 native #24 经用户验收合入维护 RC 后，更新到实际 merge revision，并补维护 RC 的 MSL 回归；没有提前把默认清单改成新功能分支。
 - 最新完整远端 CI 无法执行：native 仓库 Actions 禁用，产品 hosted CI 有账单限制。旧全平台成功 CI 不代表新代码已通过；本地 Mac/iOS build 与定向 GPU 证据单独记录。

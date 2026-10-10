@@ -6,7 +6,7 @@ MeloNX 首次遇到 shader 时，MSL 源码编译会阻塞 pipeline 准备。这
 
 ## 当前交付状态（2026-10-09）
 
-最新复审已撤销 **binding ≤0.1 ms** 分项门槛：分组采样用于归因，不能代替总成本验收。后续只按总编码线程 CPU（≤2%）、GPU union 和动态 guest 帧间隔评估性能，不再为 binding 跑实验。历史 +0.2871 ms 测量和用户当时接受该值的决定继续保留，不改写旧数据。两个功能 PR 保持 Draft。维护RC pin的独立升级A2已合入#297；IR最终发布组合仍待A1。A4六轮及A5曲线已完成，完整结果与未达到的标准见下方follow-up，手机未操作。
+最新复审已撤销 **binding ≤0.1 ms** 分项门槛：分组采样用于归因，不能代替总成本验收。后续只按总编码线程 CPU（≤2%）、GPU union 和动态 guest 帧间隔评估性能，不再为 binding 跑实验。历史 +0.2871 ms 测量和用户当时接受该值的决定继续保留，不改写旧数据。两个功能 PR 保持 Draft。维护RC pin的独立升级A2已合入#297；IR最终发布组合仍待A1。A4六轮及A5曲线已完成，完整结果与未达到的标准见下方follow-up；随后已按用户要求成功安装Build355，尚无游戏设备验收。
 
 最新保留实现把固定 IR descriptor table 的 136 B 只读 root 放在各 allocation 尾部，只有单 used-set、没有实际 push/runtime 参数的 stage 使用。UNIT_POINT_SIZE 等 raster annotation 不请求 root payload。普通 root bytes 路线保持完整 ABI；GPU→bytes 切换强制刷新地址和 ABI。IR 复用无 auxiliary offsets 的 union slot 保存 allocation 地址，MSL auxiliary pointer 与 64 B descriptor-set stride 保持原状；pool 包含 root/对齐容量并提前拒绝越界。没有采用慢的多 set 快照实验。私有 proof/pool 日志已从产品代码移除。
 
@@ -399,6 +399,18 @@ IR admission末值warm/cold分别batches1687/1070、reliefs41/33，active/waitin
 [Apple XNU footprint公式](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c#L1143)还包括alternate accounting、IOKit、purgeable和page table；公开TASK_VM_INFO没有独立IOKit字段，device=0不是IOKit零。采样保留IOKit−1；footprint−(internal+compressed)中位仍约1733–1862MiB，不能硬拼80%物理owner归属。**A5的80%归属完成标准尚未满足**，不据此改编译器zone/pressure policy或默认开启IR。用户已允许达不到时披露交统一验收，按固定六轮停止新实验。完整时间bands/relief观察及native sampler来源见[A4 evidence](evidence/a4-routes-20261009.json)、[A5 summary](evidence/a5-memory-summary-20261009.json)。
 
 A1仍待用户合入原始native #24：按实际RCmerge改pin、ABI9、匹配compiler/framework/native重建、validateapp与短无fallbacksmoke。此前558b的unsigned preview包不能冒充最新e18/遥测组合的发布匹配。两个功能PR仍Draft，未操作手机。全部独立PR验证、临时env清理及所有失败记录在私有handoff；已按用户磁盘要求移除退役build/旧导航图片和大日志，保留必要输入、hash、失败摘要与最终oracle，未归档巨型环境。
+
+## 用户授权的手机测试安装（2026-10-09，Build355）
+
+用户要求“装我手机我试试”后，在Hong’s iPhone（iOS27.0）成功覆盖安装独立测试身份com.kyle.MeloNXTest.WFWL4K2ZPL，安装器exit0/SUCCEEDED确认。没有卸载、清空容器或代用户启动游戏。本次只证明签名包可安装，不证明IR动态加载、游戏正确性、FPS、内存或jetsam已验收；此前“手机未操作”指授权前的主机阶段。
+
+本次从公开组合7e108重建NativeAOT，保留fe36 native及release17/absoluteID0007/ABI9编译器。签名导致原始文件SHA不同；AOT/native/compiler/MSC的UUID及25/29/13/14个非debug section的每字节hash均与核验源相同。静态完整签名、ABI导出/可选加载边界和依赖/许可证校验通过。
+
+首次351安装因framework元数据读取失败拒绝；补InfoDictionaryVersion的352、补平台标识的353仍同样拒绝，未把这两项宣称根因。354仅构建未安装。CoreFoundation独立受控检查发现：同一framework保留Resources目录时CFBundleGetInfoDictionary为0个字段，去掉目录或在Resources内复制Info后均能读到14个字段。自制framework混用了flat iOS Info位置与Mac式Resources层级。修复源生成器的iOS flat notices、Mac Resources/Info布局，并在产品嵌入时将三份许可证从旧Resources移动到framework根目录后签名；Build355真实安装成功，许可证仍完整，未改compiler/native代码字节。
+
+包校验现在拒绝残留Resources的iOS compiler framework。设备build cache将被gitignore排除的framework Info.plist以及实际embed/install脚本纳入App内容key：元数据/脚本变化会重建App，并复用不变NativeAOT。14个cache测试及现有install-cache smoke测试通过，包含真实gitignored metadata变化与embed-script变化用例。完整失败与安装/签名身份留在私有handoff，没有提交手机识别码、签名profile或完整App。
+
+A1正式RCmerge发布匹配仍未完成；这是用户授权的候选包安装，不替代A4/A5或最终发布验收。
 
 ## 用户统一验收的事项
 

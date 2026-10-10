@@ -30,13 +30,18 @@ def framework(directory, platform):
     path.mkdir(parents=True)
     info = {'CFBundleExecutable': 'MeloNXMetalIR', 'CFBundleIdentifier': 'org.melonx.experimental.metalir',
             'CFBundleName': 'MeloNXMetalIR', 'CFBundlePackageType': 'FMWK',
+            'CFBundleInfoDictionaryVersion': '6.0',
+            'CFBundleDevelopmentRegion': 'en', 'CFBundleSignature': '????',
+            'NSPrincipalClass': '',
             'CFBundleVersion': '1', 'CFBundleShortVersionString': '1.0',
             'CFBundleSupportedPlatforms': [platform]}
     if platform == 'iPhoneOS':
         info['MinimumOSVersion'] = '17.0'
+        info['DTPlatformName'] = 'iphoneos'
     else:
         info['LSMinimumSystemVersion'] = '26.0'
-    (path / 'Info.plist').write_bytes(plistlib.dumps(info))
+        info['DTPlatformName'] = 'macosx'
+    (path / 'Info.plist').write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_BINARY))
     return path
 
 
@@ -120,8 +125,10 @@ def main():
     run(['xcrun', 'install_name_tool', '-id', '@rpath/MeloNXMetalIR.framework/MeloNXMetalIR', mac / 'MeloNXMetalIR'])
     run(['codesign', '--force', '--sign', '-', mac / 'MeloNXMetalIR'])
     for slice in [ios, mac]:
-        notices = slice / 'Resources'
-        notices.mkdir()
+        notices = slice if slice == ios else slice / 'Resources'
+        if notices != slice:
+            notices.mkdir()
+            shutil.copyfile(slice / 'Info.plist', notices / 'Info.plist')
         for name in ['LICENSE.txt', 'Acknowledgements.rtf']:
             shutil.copyfile(args.msc_dir / 'include/metal_irconverter' / name, notices / ('MSC-' + name))
         shutil.copyfile(ROOT / 'src/air/LICENSE.TXT', notices / 'LLVM-LICENSE.TXT')

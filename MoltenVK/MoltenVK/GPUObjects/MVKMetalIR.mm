@@ -337,13 +337,13 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     if (!module || !stage) return reject("missing shader stage");
     if (owner->shouldFailOnPipelineCompileRequired()) return reject("pipeline compilation required", VK_PIPELINE_COMPILE_REQUIRED);
     if (!plugin().compile || !plugin().release) return reject("compiler plugin unavailable or ABI incompatible", VK_ERROR_INITIALIZATION_FAILED);
-    if(stage->pSpecializationInfo&&stage->pSpecializationInfo->mapEntryCount)return reject("specialization constants unsupported");
-    if(stage->stage!=VK_SHADER_STAGE_VERTEX_BIT&&stage->stage!=VK_SHADER_STAGE_FRAGMENT_BIT&&stage->stage!=VK_SHADER_STAGE_COMPUTE_BIT)return reject("shader stage unsupported");
+    const auto& capabilities = owner->getDevice()->shaderBackend().capabilities();
+    if(!capabilities.supportsSpecialization(stage->pSpecializationInfo ? stage->pSpecializationInfo->mapEntryCount : 0))return reject("specialization constants unsupported");
+    if(!capabilities.supportsStageClass(stage->stage==VK_SHADER_STAGE_VERTEX_BIT||stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT||stage->stage==VK_SHADER_STAGE_COMPUTE_BIT))return reject("shader stage unsupported");
     const auto compileConfig=mvkShaderCompileConfig();
     const char* stages=compileConfig.stages;
     if(stages&&((strcmp(stages,"graphics")==0&&stage->stage==VK_SHADER_STAGE_COMPUTE_BIT)||
                 (strcmp(stages,"compute")==0&&stage->stage!=VK_SHADER_STAGE_COMPUTE_BIT)))return reject("stage filter excludes the requested IR shader");
-    const auto& capabilities = owner->getDevice()->shaderBackend().capabilities();
     if(!capabilities.supportsDescriptorSets(layout->getDescriptorSetCount()))return reject("descriptor set count exceeds IR ABI");
     std::vector<MVKMetalIRBinding> bindings;std::vector<uint32_t> sizes;
     for(uint32_t set=0;set<layout->getDescriptorSetCount();++set) {

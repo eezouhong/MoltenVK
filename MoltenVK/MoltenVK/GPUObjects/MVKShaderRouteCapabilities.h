@@ -5,6 +5,8 @@
 // this policy must not implicitly change advertised features or add fallback.
 struct MVKShaderRouteCapabilities {
     bool metalIR = false;
+    bool supportsSpecialization(uint32_t entries) const { return !metalIR || entries == 0; }
+    bool supportsStageClass(bool vertexFragmentCompute) const { return !metalIR || vertexFragmentCompute; }
     bool supportsPushDescriptors() const { return !metalIR; }
     bool supportsStages(bool tessellation, bool mesh) const { return !metalIR || (!tessellation && !mesh); }
     bool supportsGraphics(bool tessellation, bool mesh, bool discard, bool multiview) const {

@@ -783,8 +783,8 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
     }
     uint64_t tableBytes = tableEntries * 24;
 	if (!irEligible || tableBytes > UINT32_MAX) {
-        // A later compilation may reject this layout again; only the terminal attempt counts.
-        mvkMetalIRRecordPipelineRejection(device, "descriptor_layout_capability", false);
+        // Creation fails and the API destroys this layout; this is a terminal rejection.
+        mvkMetalIRRecordPipelineRejection(device, "descriptor_layout_capability");
 		ret->setConfigurationResult(ret->reportError(VK_ERROR_FEATURE_NOT_PRESENT,
 		    "MetalIR descriptor layout is unsupported (descriptor kind, dynamic/variable layout or oversized storage); MSL fallback disabled."));
 		return ret;

@@ -16,11 +16,10 @@ struct MVKMetal4TextureViewBinding;
 
 bool mvkMetalIREnabled();
 bool mvkMetalIRCompilerAvailable();
-// Terminal pipeline-preflight attempts share legacy statistics field 7 with shader rejections.
-// Layout diagnostics may precede a shader attempt and must not count twice.
-void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason, bool countTerminalAttempt = true);
+// Legacy field 7 counts terminal shader, pipeline-preflight and descriptor-layout rejections.
+void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason);
 // Seven cumulative counters: compiles, disk hits, Mesa, MSC, raster adapter,
-// library/function load, reflection. Capacity >=8 adds rejected shaders as
+// library/function load, reflection. Capacity >=8 adds terminal rejections as
 // field7; capacity >=9 adds PSO creation wall nanoseconds as field8. Seven-field
 // callers retain their original return/count contract.
 // Durations are nanoseconds; opt-in only.

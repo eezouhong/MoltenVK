@@ -170,9 +170,9 @@ bool mvkMetalIRCompilerAvailable() {
     return plugin().compile && plugin().release;
 }
 
-void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason, bool countTerminalAttempt) {
+void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason) {
     if (!device || !device->isMetalIRShaderCompilerEnabled()) return;
-    if (countTerminalAttempt && telemetryEnabled()) {
+    if (telemetryEnabled()) {
         try { ++deviceArtifacts(device)->rejected; } catch (...) {}
     }
     fprintf(stderr, "MELONX_IR_PIPELINE_REJECT reason=%s; advertised features preserved, automatic MSL fallback disabled\n", reason);

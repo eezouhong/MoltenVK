@@ -13,7 +13,7 @@ if a.baseline_native:files.append(a.baseline_native)
 env={k:v for k,v in os.environ.items() if not k.startswith(('MELONX_','MVK_CONFIG_','DYLD_','MTL_'))}
 env.update(MELONX_EXPERIMENTAL_METAL_IR='1',MELONX_METAL_IR_PLUGIN=str(a.plugin.resolve()),MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS='1',MVK_CONFIG_METAL4_COMPILER='0',MVK_CONFIG_LOG_LEVEL='4',MTL_ENABLE_DEBUG_LAYER='1',MTL_SHADER_VALIDATION='1',DYLD_PRINT_LIBRARIES='1')
 results=[]
-cases=[('layout-candidate',a.native,'layout-only',0),('discard-candidate',a.native,None,1)]
+cases=[('layout-candidate',a.native,'layout-only',1),('discard-candidate',a.native,None,1)]
 if a.baseline_native:cases.insert(0,('layout-baseline',a.baseline_native,'layout-only',1))
 for label,native,mode,expected in cases:
  command=[str(a.build/'rejection_probe'),str(a.build/'runtime.vert.spv'),str(a.build/'runtime.frag.spv')]

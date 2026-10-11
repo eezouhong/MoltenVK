@@ -12,7 +12,7 @@ Generic compiler code, Metal binding and the original point support are part of#
 
 A1–A4 are separate commits after the unchanged consolidation:
 
-- Field7 of the legacy basic compiler statistics now explicitly means terminal shader-compilation/pipeline-preflight rejection attempts. Descriptor-layout diagnostics are logged but do not increment it; a later attempt is counted once. It is not a distinct-defect count. ABI9, the legacy7/8/9 array capacities and#27's version1 37-field memory/cache schema remain unchanged.
+- Field7 of the legacy basic compiler statistics means terminal shader-compilation, pipeline-preflight or descriptor-layout creation rejections. A failed layout is destroyed and returned as a null handle, so it cannot be reused for a later shader attempt. Layout creation failures are counted once. It is not a distinct-defect count. ABI9, the legacy7/8/9 array capacities and#27's version1 37-field memory/cache schema remain unchanged.
 - Reasons now distinguish tessellation, mesh, rasterizer discard, multiview, vertex binding and sample shading. Support predicates/results and advertised features remain unchanged.
 - Physical-device feature queries document why no logical-device backend exists yet.
 - The stateless route/residency facade is constructed before logical-device helpers, after the existing lost-device early exit. Its accessor asserts initialization. Stage dispatch, encoded-memory ownership and teardown remain as before.
@@ -26,3 +26,7 @@ Budgets/policies remain IR64/8MiB, MSL512 and their distinct existing implementa
 ## Validation
 
 Current focused validation is recorded in the final PR body after execution. Historical stage checks remain described in PHASE2–5 reports; those do not claim new device acceptance. Current compiler sources match the previously verified pre-XC3 host/iOS compiler, and integration pins reference this PR's exact source commit. iPad60+minute TOTK acceptance and remote CI remain pending (native Actions disabled; product billing/spending-limit). No device action or game run is needed to consolidate this source review.
+
+## REVIEW-355-38 correction
+
+The earlier A1 premise was incorrect: `vkCreateDescriptorSetLayout` destroys a rejected layout and returns an error/null handle, so no later compilation can reuse it. The follow-up restores layout rejection count1 and removes the optional suppression parameter. The earlier count0 result remains in private historical evidence and is superseded. The compiler framework remains the pre-XC3 variant without Mesa patch0008; its source/binary hash is unchanged by this native counter fix.

@@ -30,6 +30,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 	if (tryMetalIR && pCreateInfo->pMultisampleState && !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
         pCreateInfo->pMultisampleState->minSampleShading)) tryMetalIR = false;
 	if (!tryMetalIR) {
+        mvkMetalIRRecordPipelineRejection(getDevice(), "graphics_route_capability");
         setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
             "MetalIR graphics pipeline rejected: topology=%u, polygon=%u, discard=%u, view_mask=0x%x, sample_shading=%u, min_sample_shading=%.3f, vertex_binding=%u, vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
             pCreateInfo->pInputAssemblyState ? pCreateInfo->pInputAssemblyState->topology : UINT32_MAX,

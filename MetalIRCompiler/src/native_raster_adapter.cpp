@@ -11,12 +11,14 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SHA256.h>
 #include <llvm/Support/raw_ostream.h>
 #include <cstring>
 #include <limits>
 #include <map>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 
@@ -49,6 +51,9 @@ class RasterBitstream {
     uint32_t execution,requiredIO;
     bool globalNamesInStringTable=false;
     unsigned stringBlocks=0;uint32_t changed=0;
+    int functionOrdinal=-1;
+    using RecordFilter=std::function<void(unsigned,unsigned,int,llvm::SmallVectorImpl<uint64_t>&)>;
+    RecordFilter filter;
 
     std::string rewriteStrings(llvm::SmallVectorImpl<uint64_t>& values,llvm::StringRef blob) {
         using namespace llvm;
@@ -94,7 +99,22 @@ class RasterBitstream {
         while(!reader.AtEndOfStream()) {
             auto entry=checked(reader.advance());
             if(entry.Kind==BitstreamEntry::Error)throw std::runtime_error("invalid AIR bitstream");
-            if(entry.Kind==BitstreamEntry::EndBlock) {if(root)throw std::runtime_error("unexpected AIR root end");return;}
+            if(entry.Kind==BitstreamEntry::EndBlock) {
+                if(root)throw std::runtime_error("unexpected AIR root end");
+                // A filter may append complete unabbreviated records. These
+                // are used for new types, avoiding forbidden forward refs.
+                if(filter) {
+                    SmallVector<uint64_t,16> added;filter(id,0,functionOrdinal,added);
+                    size_t cursor=0;
+                    while(cursor<added.size()) {
+                        if(added.size()-cursor<2||added[cursor+1]>added.size()-cursor-2)
+                            throw std::runtime_error("invalid AIR appended record");
+                        unsigned code=added[cursor++];size_t count=added[cursor++];
+                        writer.EmitRecord(code,ArrayRef<uint64_t>(added.data()+cursor,count));cursor+=count;
+                    }
+                }
+                return;
+            }
             if(entry.Kind==BitstreamEntry::SubBlock) {
                 if(entry.ID==bitc::BLOCKINFO_BLOCK_ID) {
                     auto info=checked(reader.ReadBlockInfoBlock());if(!info)throw std::runtime_error("AIR blockinfo missing");
@@ -103,6 +123,7 @@ class RasterBitstream {
                     // Optional summary contains byte offsets into the old file.
                     checked(reader.SkipBlock());
                 } else {
+                    if(entry.ID==bitc::FUNCTION_BLOCK_ID)++functionOrdinal;
                     checked(reader.EnterSubBlock(entry.ID));writer.EnterSubblock(entry.ID,6);
                     block(entry.ID,false,depth+1);writer.ExitBlock();
                 }
@@ -125,8 +146,9 @@ class RasterBitstream {
             if(id==bitc::MODULE_BLOCK_ID&&code==bitc::MODULE_CODE_VSTOFFSET)continue;
             if(id==bitc::METADATA_BLOCK_ID&&(code==bitc::METADATA_INDEX_OFFSET||code==bitc::METADATA_INDEX))continue;
             std::string replacement;
-            if(id==bitc::METADATA_BLOCK_ID&&code==bitc::METADATA_STRINGS) {replacement=rewriteStrings(values,blob);blob=replacement;}
-            if(id==bitc::METADATA_BLOCK_ID&&(code==bitc::METADATA_NODE||code==bitc::METADATA_DISTINCT_NODE))rewriteNode(values);
+            if(requiredIO && id==bitc::METADATA_BLOCK_ID&&code==bitc::METADATA_STRINGS) {replacement=rewriteStrings(values,blob);blob=replacement;}
+            if(requiredIO && id==bitc::METADATA_BLOCK_ID&&(code==bitc::METADATA_NODE||code==bitc::METADATA_DISTINCT_NODE))rewriteNode(values);
+            if(filter)filter(id,code,functionOrdinal,values);
             if(id==bitc::VALUE_SYMTAB_BLOCK_ID&&code==bitc::VST_CODE_FNENTRY) {
                 if(globalNamesInStringTable&&values.size()==2&&!hasBlob)continue;
                 if(values.size()<2||(!hasBlob&&values.size()<3))throw std::runtime_error("invalid AIR function name record");
@@ -144,14 +166,158 @@ class RasterBitstream {
         if(!root)throw std::runtime_error("truncated AIR block");
     }
 public:
-    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage,uint32_t required)
-        :reader(source),writer(output),execution(stage),requiredIO(required) {}
+    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage,uint32_t required,RecordFilter records={})
+        :reader(source),writer(output),execution(stage),requiredIO(required),filter(std::move(records)) {}
     void run() {
         if(checked(reader.Read(32))!=0xdec04342)throw std::runtime_error("invalid AIR magic");
         writer.Emit(0xdec04342,32);block(0,true);writer.FlushToWord();
         if(changed!=requiredIO)throw std::runtime_error("AIR native raster nodes missing or unexpected");
     }
 };
+
+// Preserve MSC's typed pointers and every instruction/value ID. Return has no
+// result ID, so dropping its operand cannot renumber subsequent instructions.
+// Restrict the edit to the uniquely named, uncalled AIR vertex entry.
+struct DiscardPlan {
+    struct Record { unsigned code; std::vector<uint64_t> values; };
+    std::vector<Record> types,metadata;
+    struct FunctionRecord { uint64_t value,type; int definition; };
+    std::vector<FunctionRecord> functions;
+    uint64_t globals=0; unsigned version=0; int definitions=0;
+    std::string metadataName;
+    uint64_t stage=UINT64_MAX,output=UINT64_MAX,functionType=UINT64_MAX,voidType=UINT64_MAX;
+    uint64_t functionValue=UINT64_MAX,functionMetadata=UINT64_MAX,functionRecordType=UINT64_MAX;
+    uint64_t metadataPointerType=UINT64_MAX;
+    int definition=-1;
+
+    void scan(unsigned block,unsigned code,int,llvm::SmallVectorImpl<uint64_t>& values) {
+        using namespace llvm;
+        if(!code)return;
+        if(block==bitc::TYPE_BLOCK_ID_NEW) {
+            if(code==bitc::TYPE_CODE_NUMENTRY||code==bitc::TYPE_CODE_STRUCT_NAME)return;
+            if(code==bitc::TYPE_CODE_VOID)voidType=types.size();
+            types.push_back({code,{values.begin(),values.end()}});
+        }
+        if(block==bitc::MODULE_BLOCK_ID) {
+            if(code==bitc::MODULE_CODE_VERSION) {
+                if(values.size()!=1)throw std::runtime_error("invalid AIR module version");
+                version=values[0];
+            }
+            if(code==bitc::MODULE_CODE_FUNCTION) {
+                unsigned prefix=version>=2?2:0;
+                if(values.size()<prefix+3)throw std::runtime_error("truncated AIR function record");
+                bool prototype=values[prefix+2];
+                functions.push_back({globals++,values[prefix],prototype?-1:definitions++});
+            } else if(code==bitc::MODULE_CODE_GLOBALVAR||code==bitc::MODULE_CODE_ALIAS||
+                      code==bitc::MODULE_CODE_ALIAS_OLD||code==bitc::MODULE_CODE_IFUNC)++globals;
+        }
+        if(block!=bitc::METADATA_BLOCK_ID)return;
+        if(code==bitc::METADATA_NAME) {metadataName.assign(values.begin(),values.end());return;}
+        if(code==bitc::METADATA_NAMED_NODE) {
+            if(metadataName=="air.vertex") {
+                if(values.size()!=1||stage!=UINT64_MAX)throw std::runtime_error("ambiguous AIR vertex entry");
+                stage=values[0];
+            }
+            metadataName.clear();return;
+        }
+        if(code==bitc::METADATA_STRINGS) {
+            if(values.size()!=2||values[0]>65536)throw std::runtime_error("invalid AIR metadata strings");
+            metadata.resize(metadata.size()+values[0]);return;
+        }
+        if(code==bitc::METADATA_KIND||code==bitc::METADATA_ATTACHMENT||
+           code==bitc::METADATA_GLOBAL_DECL_ATTACHMENT)return;
+        if(code!=bitc::METADATA_VALUE&&code!=bitc::METADATA_NODE&&
+           code!=bitc::METADATA_DISTINCT_NODE&&code!=bitc::METADATA_STRING_OLD)
+            throw std::runtime_error("unsupported AIR discard metadata record "+std::to_string(code));
+        metadata.push_back({code,{values.begin(),values.end()}});
+    }
+    void finish() {
+        using namespace llvm;
+        auto node=[&](uint64_t id)->const Record& {
+            if(id>=metadata.size())throw std::runtime_error("invalid AIR discard metadata reference");
+            return metadata[id];
+        };
+        const auto& entry=node(stage);
+        if(entry.code!=bitc::METADATA_NODE||entry.values.size()!=3||!entry.values[0]||!entry.values[1])
+            throw std::runtime_error("unsupported AIR discard entry metadata");
+        output=entry.values[1]-1;functionMetadata=entry.values[0]-1;
+        const auto& fn=node(functionMetadata);
+        if(fn.code!=bitc::METADATA_VALUE||fn.values.size()!=2||node(output).code!=bitc::METADATA_NODE)
+            throw std::runtime_error("unsupported AIR discard function or outputs");
+        functionValue=fn.values[1];metadataPointerType=fn.values[0];
+        for(const auto& f:functions)if(f.value==functionValue) {functionType=f.type;definition=f.definition;}
+        functionRecordType=functionType;
+        if(functionType>=types.size()||definition<0||voidType==UINT64_MAX)
+            throw std::runtime_error("AIR discard function definition/void type missing");
+        if(types[functionType].code==bitc::TYPE_CODE_POINTER)functionType=types[functionType].values.at(0);
+        if(functionType>=types.size()||types[functionType].code!=bitc::TYPE_CODE_FUNCTION)
+            throw std::runtime_error("unsupported AIR discard function type");
+        if(metadataPointerType>=types.size()||types[metadataPointerType].code!=bitc::TYPE_CODE_POINTER||
+           types[metadataPointerType].values.size()!=2||types[metadataPointerType].values[0]!=functionType)
+            throw std::runtime_error("unsupported AIR discard metadata pointer type");
+        unsigned users=0;
+        for(const auto& f:functions) {
+            auto t=f.type;if(t>=types.size())throw std::runtime_error("invalid AIR function type");
+            if(types[t].code==bitc::TYPE_CODE_POINTER)t=types[t].values.at(0);
+            users+=t==functionType;
+        }
+        if(users!=1)throw std::runtime_error("shared AIR discard function type");
+        // Mutating a shared/uniqued node would change another interface too.
+        unsigned references=0;
+        for(const auto& m:metadata)if(m.code==bitc::METADATA_NODE||m.code==bitc::METADATA_DISTINCT_NODE)
+            references+=std::count(m.values.begin(),m.values.end(),output+1);
+        // An already-empty output group may be uniqued with other empty nodes;
+        // clearing it again changes nothing. Nonempty shared groups are unsafe.
+        if(references!=1&&!node(output).values.empty())throw std::runtime_error("shared AIR raster output metadata");
+    }
+    unsigned nextMetadata=0,returns=0;uint64_t nextGlobal=0;
+    void rewrite(unsigned block,unsigned code,int ordinal,llvm::SmallVectorImpl<uint64_t>& values) {
+        using namespace llvm;
+        if(block==bitc::TYPE_BLOCK_ID_NEW) {
+            if(code==bitc::TYPE_CODE_NUMENTRY)values[0]+=2;
+            if(code==0) {
+                auto fn=types[functionType].values;fn.at(1)=voidType;
+                values.append({bitc::TYPE_CODE_FUNCTION,fn.size()});values.append(fn.begin(),fn.end());
+                auto ptr=types[metadataPointerType].values;ptr[0]=types.size();
+                values.append({bitc::TYPE_CODE_POINTER,ptr.size()});values.append(ptr.begin(),ptr.end());
+            }
+        }
+        if(block==bitc::MODULE_BLOCK_ID) {
+            if(code==bitc::MODULE_CODE_FUNCTION) {
+                if(nextGlobal++==functionValue)values[version>=2?2:0]=
+                    types.size()+(types[functionRecordType].code==bitc::TYPE_CODE_POINTER?1:0);
+            } else if(code==bitc::MODULE_CODE_GLOBALVAR||code==bitc::MODULE_CODE_ALIAS||
+                      code==bitc::MODULE_CODE_ALIAS_OLD||code==bitc::MODULE_CODE_IFUNC)++nextGlobal;
+        }
+        if(block==bitc::METADATA_BLOCK_ID) {
+            if(code==bitc::METADATA_STRINGS)nextMetadata+=values[0];
+            else if(code==bitc::METADATA_VALUE||code==bitc::METADATA_NODE||
+                    code==bitc::METADATA_DISTINCT_NODE||code==bitc::METADATA_STRING_OLD) {
+                if(nextMetadata==functionMetadata)values[0]=types.size()+1;
+                if(nextMetadata++==output)values.clear();
+            }
+        }
+        if(block==bitc::FUNCTION_BLOCK_ID&&ordinal==definition&&code==bitc::FUNC_CODE_INST_RET) {
+            values.clear();++returns;
+        }
+    }
+};
+
+llvm::Function* discardEntry(llvm::Module& module,bool transformed,std::string& error) {
+    using namespace llvm;
+    auto* named=module.getNamedMetadata("air.vertex");
+    if(!named||named->getNumOperands()!=1) {error="AIR discard vertex entry unavailable";return nullptr;}
+    auto* stage=named->getOperand(0);
+    if(stage->getNumOperands()!=3) {error="AIR discard interface unsupported";return nullptr;}
+    auto* md=dyn_cast<ConstantAsMetadata>(stage->getOperand(0));
+    auto* function=md?dyn_cast<Function>(md->getValue()):nullptr;
+    auto* outputs=dyn_cast<MDNode>(stage->getOperand(1));
+    if(!function||function->isDeclaration()||!function->use_empty()||!outputs||
+       (transformed&&(!function->getReturnType()->isVoidTy()||outputs->getNumOperands()))) {
+        error="AIR discard entry/outputs invalid or entry referenced";return nullptr;
+    }
+    return function;
+}
 bool compatibleMemory(llvm::AttributeList attributes) {
     for (unsigned index:attributes.indexes())
         for (llvm::Attribute attr:attributes.getAttributes(index))
@@ -212,12 +378,12 @@ bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::stri
 }
 }
 
-bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
-                          uint32_t requiredIO,std::vector<uint8_t>& output,std::string& error) {
+static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
+                        uint32_t requiredIO,bool discard,std::vector<uint8_t>& output,std::string& error) {
     using namespace llvm;
     output.clear();error.clear();
     auto fail=[&](const char* message){error=message;return false;};
-    if (!bytes || size<88 || size>64*1024*1024 || !requiredIO ||
+    if (!bytes || size<88 || size>64*1024*1024 || (!requiredIO&&!discard) ||
         (execution!=0 && execution!=4) || (requiredIO & ~(execution==0?(PointSize|VertexID|InstanceID):PointCoordinates)))
         return fail("invalid native raster adapter input");
     auto* data=(const uint8_t*)bytes;
@@ -232,7 +398,8 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
     LLVMContext context;
     auto module=parseBitcodeFile(MemoryBufferRef(StringRef((const char*)data+bitcodeOffset,bitcodeSize),"MetalIR raster adapter"),context);
     if (!module) {error=toString(module.takeError());return false;}
-    if (!retag(**module,execution,requiredIO,error)) return false;
+    if(discard) {if(!discardEntry(**module,false,error))return false;}
+    else if (!retag(**module,execution,requiredIO,error)) return false;
     SmallVector<char,0> serialized;
     // Read the original wrapper directly, not the pointer-upgraded LLVM Module.
     if(bitcodeSize<20)return fail("truncated AIR wrapper");
@@ -240,11 +407,24 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
     if(read<uint32_t>(data,bitcodeOffset)!=0x0b17c0de||payloadOffset<20||payloadOffset>bitcodeSize||payloadSize>bitcodeSize-payloadOffset)
         return fail("unsupported AIR bitcode wrapper");
     try {
-        RasterBitstream transform(ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize),serialized,execution,requiredIO);
+        auto source=ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize);
+        DiscardPlan plan;
+        if(discard) {
+            SmallVector<char,0> ignored;
+            RasterBitstream scan(source,ignored,execution,0,[&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){plan.scan(b,c,f,v);});
+            scan.run();plan.finish();
+        }
+        RasterBitstream transform(source,serialized,execution,requiredIO,
+            discard?std::function<void(unsigned,unsigned,int,SmallVectorImpl<uint64_t>&)>([&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){plan.rewrite(b,c,f,v);}):nullptr);
         transform.run();
         LLVMContext validation;
         auto verified=parseBitcodeFile(MemoryBufferRef(StringRef(serialized.data(),serialized.size()),"retagged AIR"),validation);
         if(!verified){error=toString(verified.takeError());return false;}
+        if(discard) {
+            if(!plan.returns||!discardEntry(**verified,true,error))return false;
+            std::string diagnostic;raw_string_ostream stream(diagnostic);
+            if(verifyModule(**verified,&stream)) {error="invalid discarded AIR: "+stream.str();return false;}
+        }
     } catch(const std::exception& failure) {error=failure.what();return false;}
     std::vector<uint8_t> bitcode;
     if (serialized.size()<4) return fail("empty AIR serialization");
@@ -346,5 +526,12 @@ bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,
         if(attributes!=nativeIDs)return fail("native vertex attribute metadata missing");
     }
     return true;
+}
+bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,uint32_t requiredIO,
+                          std::vector<uint8_t>& output,std::string& error) {
+    return adaptRaster(bytes,size,execution,requiredIO,false,output,error);
+}
+bool discardVertexOutputs(const void* bytes,size_t size,std::vector<uint8_t>& output,std::string& error) {
+    return adaptRaster(bytes,size,0,0,true,output,error);
 }
 }

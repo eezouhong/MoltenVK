@@ -73,6 +73,9 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     *result={};result->abiVersion=MVK_METAL_IR_ABI_VERSION;result->status=1;
     memset(result->vertexAttributes,255,sizeof(result->vertexAttributes));
     if(request->executionModel!=0&&request->executionModel!=4&&request->executionModel!=5){result->status=1;return 1;}
+    if((request->runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED)&&request->executionModel!=0) {
+        snprintf(result->error,sizeof(result->error),"rasterization-disabled compilation requires a vertex stage");return 1;
+    }
     if(request->wordCount<5||request->setCount>8||request->mathMode>MVK_METAL_IR_MATH_RELAXED)return 1;
     std::vector<uint32_t> words(request->words,request->words+request->wordCount);
     std::unordered_map<uint32_t,uint32_t> sets,bindings;
@@ -236,6 +239,18 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                                 if(nativeRasterIO&melonx::air::PointSize)result->runtimeFlags|=MVK_METAL_IR_NATIVE_POINT_SIZE;
                                 if(nativeRasterIO&melonx::air::PointCoordinates)result->runtimeFlags|=MVK_METAL_IR_NATIVE_POINT_COORDINATES;
                             } else {status=2;snprintf(result->error,sizeof(result->error),"native raster adapter allocation failed");}
+                        }
+                        if(status==0&&(request->runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED)) {
+                            std::vector<uint8_t> adapted;std::string error;
+                            start=std::chrono::steady_clock::now();
+                            bool valid=request->executionModel==0&&melonx::air::discardVertexOutputs(result->metallib,result->metallibSize,adapted,error);
+                            result->rasterAdapterMs+=elapsed(start);
+                            if(!valid) {status=1;snprintf(result->error,sizeof(result->error),"discard vertex adapter: %s",error.c_str());}
+                            else if(void* bytes=malloc(adapted.size())) {
+                                memcpy(bytes,adapted.data(),adapted.size());free(result->metallib);
+                                result->metallib=bytes;result->metallibSize=adapted.size();
+                                result->runtimeFlags|=MVK_METAL_IR_VOID_VERTEX;
+                            } else {status=2;snprintf(result->error,sizeof(result->error),"discard vertex adapter allocation failed");}
                         }
                     }
                     if(actualStage==IRShaderStageCompute) {

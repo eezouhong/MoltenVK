@@ -460,7 +460,12 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         }
         bool validResult=result.abiVersion==MVK_METAL_IR_ABI_VERSION&&result.entry[0]&&
             memchr(result.entry,0,sizeof(result.entry))&&result.metallib&&result.metallibSize&&result.metallibSize<=64*1024*1024;
-        validResult&=!(result.runtimeFlags&~(MVK_METAL_IR_RUNTIME_DATA|MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_COORDINATES|MVK_METAL_IR_DRAW_BASES|MVK_METAL_IR_DISPATCH_GROUPS));
+        validResult&=!(result.runtimeFlags&~(MVK_METAL_IR_RUNTIME_DATA|MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_COORDINATES|MVK_METAL_IR_DRAW_BASES|MVK_METAL_IR_DISPATCH_GROUPS|MVK_METAL_IR_VOID_VERTEX));
+        validResult&=bool(result.runtimeFlags&MVK_METAL_IR_VOID_VERTEX)==bool(request.runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED);
+        if(compileStatus==0 && (request.runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED) &&
+           !(result.runtimeFlags&MVK_METAL_IR_VOID_VERTEX))
+            snprintf(result.error,sizeof(result.error),"compiler lacks the rasterization-disabled vertex variant; update the ABI 9 compiler plugin");
+        validResult&=execution==0||!(result.runtimeFlags&MVK_METAL_IR_VOID_VERTEX);
         validResult&=execution==0||!(result.runtimeFlags&(MVK_METAL_IR_DRAW_PARAMETERS|MVK_METAL_IR_UNIT_POINT_SIZE|MVK_METAL_IR_NATIVE_POINT_SIZE));
         validResult&=execution==4||!(result.runtimeFlags&MVK_METAL_IR_NATIVE_POINT_COORDINATES);
         validResult&=execution==0||!(result.runtimeFlags&MVK_METAL_IR_DRAW_BASES);

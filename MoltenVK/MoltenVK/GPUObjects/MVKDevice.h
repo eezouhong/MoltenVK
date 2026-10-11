@@ -762,7 +762,7 @@ public:
 
 	/** Shader compiler choice is fixed for this device; IR never retries with MSL. */
 	bool isMetalIRShaderCompilerEnabled() const { return _metalIRShaderCompilerEnabled; }
-	MVKShaderBackend& shaderBackend() const { return *_shaderBackend; }
+	MVKShaderBackend& shaderBackend() const { assert(_shaderBackend); return *_shaderBackend; }
 
 	/** Returns whether the unified Metal 4 compiler path is active. */
 	bool isMetal4CompilerEnabled() const { return _metal4CompilerService != nullptr; }

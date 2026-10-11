@@ -5709,6 +5709,10 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 		return;
 	}
 
+	// Stateless route/residency facade must exist before any logical-device helper initialization.
+	_metalIRShaderCompilerEnabled = mvkMetalIREnabled();
+	_shaderBackend = MVKShaderBackend::create(_metalIRShaderCompilerEnabled);
+
 	initPhysicalDevice(physicalDevice, pCreateInfo);
 	initPerformanceTracking();
 	enableExtensions(pCreateInfo);
@@ -5750,8 +5754,6 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 			   _physicalDevice->_isUsingMetalArgumentBuffers ? (_physicalDevice->_metalFeatures.needsArgumentBufferEncoders
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
-	_metalIRShaderCompilerEnabled = mvkMetalIREnabled();
-	_shaderBackend = MVKShaderBackend::create(_metalIRShaderCompilerEnabled);
 	reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Shader compiler selected: %s (automatic MSL fallback disabled)",
 	              mvkShaderRouteConfig().selected == MVKShaderCompilerRoute::Unavailable ? "unavailable (requested Metal IR)" :
 	              _metalIRShaderCompilerEnabled ? "Metal IR" : "MSL");

@@ -16,6 +16,7 @@ struct MVKMetal4TextureViewBinding;
 
 bool mvkMetalIREnabled();
 bool mvkMetalIRCompilerAvailable();
+void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason);
 // Seven cumulative counters: compiles, disk hits, Mesa, MSC, raster adapter,
 // library/function load, reflection. Capacity >=8 adds rejected shaders as
 // field7; capacity >=9 adds PSO creation wall nanoseconds as field8. Seven-field

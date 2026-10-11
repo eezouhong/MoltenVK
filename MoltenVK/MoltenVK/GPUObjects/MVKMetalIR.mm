@@ -170,6 +170,14 @@ bool mvkMetalIRCompilerAvailable() {
     return plugin().compile && plugin().release;
 }
 
+void mvkMetalIRRecordPipelineRejection(MVKDevice* device, const char* reason) {
+    if (!device || !device->isMetalIRShaderCompilerEnabled()) return;
+    if (telemetryEnabled()) {
+        try { ++deviceArtifacts(device)->rejected; } catch (...) {}
+    }
+    fprintf(stderr, "MELONX_IR_PIPELINE_REJECT reason=%s; advertised features preserved, automatic MSL fallback disabled\n", reason);
+}
+
 VkResult mvkMetalIRConfigureCache(MVKDevice* device,const char* directory,uint64_t maxBytes) {
     if(!device||!device->isMetalIRShaderCompilerEnabled()||!directory||!*directory)return VK_ERROR_INITIALIZATION_FAILED;
     try {

@@ -3138,6 +3138,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 	// before that path can compile a guest shader with the MSL compiler.
 	if (!device->shaderBackend().capabilities().supportsStages(pTessCtlSS || pTessEvalSS, _isMeshPipeline)) {
 		_hasValidMTLPipelineStates = false;
+        mvkMetalIRRecordPipelineRejection(device, "tessellation_or_mesh_stage");
 		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
 			"MetalIR tessellation/mesh shader stages are unsupported; MSL fallback disabled."));
 		return;

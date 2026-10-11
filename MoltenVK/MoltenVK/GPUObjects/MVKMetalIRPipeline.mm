@@ -50,6 +50,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
         auto vertexIR = getDevice()->shaderBackend().compileStage({this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions, {}}).artifactOwner;
 		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
             !capabilities.supportsPointSize(vertexIR->runtimeFlags)) {
+            mvkMetalIRRecordPipelineRejection(getDevice(), "point_size_semantics");
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
                 "MetalIR point pipeline has no native point size or proven one-pixel default: vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
 				_vertexModule->getKey().codeHash, _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
@@ -60,6 +61,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 				pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
 				uint32_t index = getMetalBufferIndexForVertexAttributeBinding(binding.binding);
 				if (!capabilities.supportsRuntimeVertexBinding(index)) {
+                    mvkMetalIRRecordPipelineRejection(getDevice(), "runtime_vertex_binding");
 					setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "MetalIR runtime draw buffer conflicts with vertex binding; MSL fallback disabled."));
 					vertexIR.reset(); break;
 				}
@@ -68,6 +70,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
         auto fragmentIR = vertexIR && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
         if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
             !capabilities.supportsPointCoordinates(fragmentIR->runtimeFlags)) {
+            mvkMetalIRRecordPipelineRejection(getDevice(), "point_coordinate_semantics");
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
                 "MetalIR point coordinates have no native rasterizer input; MSL fallback disabled."));
 			return false;

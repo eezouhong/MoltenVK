@@ -54,6 +54,7 @@ VkResult MVKCommandPool::allocateCommandBuffers(const VkCommandBufferAllocateInf
 		MVKCommandBuffer* mvkCmdBuff = _commandBufferPool.acquireObject();
 		mvkCmdBuff->init(pAllocateInfo);
 		_allocatedCommandBuffers.insert(mvkCmdBuff);
+        mvkCmdBuff->prepareVkHandleForAllocation();
         pCmdBuffer[cbIdx] = mvkCmdBuff->getVkCommandBuffer();
 
 		// Command buffers start out in a VK_NOT_READY config result

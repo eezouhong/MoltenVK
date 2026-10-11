@@ -145,3 +145,21 @@ foreach(SHADER discard_producer.vert discard_positionless.vert discard_consumer.
 endforeach()
 add_custom_target(discard_shaders ALL DEPENDS ${DISCARD_SHADERS})
 add_dependencies(discard_probe discard_shaders)
+
+# This probe requires the actual Vulkan Loader instead of direct MoltenVK entrypoints.
+set(VULKAN_LOADER_LIBRARY "" CACHE FILEPATH "Optional macOS Vulkan Loader for dispatch-lifetime regression")
+if(APPLE AND EXISTS "${VULKAN_LOADER_LIBRARY}")
+    enable_language(OBJCXX)
+    add_executable(loader_handle_probe loader_handle_probe.mm)
+    target_compile_features(loader_handle_probe PRIVATE cxx_std_17)
+    target_compile_options(loader_handle_probe PRIVATE -fno-rtti)
+    target_include_directories(loader_handle_probe PRIVATE "${VULKAN_HEADERS}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../Common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/GPUObjects"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/Utility"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/OS"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/API"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/Vulkan")
+    target_link_libraries(loader_handle_probe PRIVATE "${VULKAN_LOADER_LIBRARY}" "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+endif()

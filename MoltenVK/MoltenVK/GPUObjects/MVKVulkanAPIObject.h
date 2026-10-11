@@ -88,26 +88,27 @@ protected:
 /** Abstract class that represents a dispatchable opaque Vulkan API handle object. */
 class MVKDispatchableVulkanAPIObject : public MVKVulkanAPIObject {
 
-    typedef struct {
+    struct MVKDispatchableObjectICDRef {
         VK_LOADER_DATA loaderData;
         MVKDispatchableVulkanAPIObject* mvkObject;
-    } MVKDispatchableObjectICDRef;
+        explicit MVKDispatchableObjectICDRef(MVKDispatchableVulkanAPIObject* object)
+            : loaderData{}, mvkObject(object) { set_loader_magic_value(this); }
+    };
 
 public:
 
     /**
      * Returns a reference to this object suitable for use as a dispatchable Vulkan API handle.
 	 *
-	 * Establishes the loader magic number every time, in case the loader
-	 * overwrote it for some reason before passing the object back,
-	 * particularly in pooled objects that the loader might consider freed.
+	 * The loader owns the first word after a handle is returned. Repeated
+	 * getters must preserve that dispatch pointer for the live allocation.
 	 *
 	 * This is the compliment of the getDispatchableObject() function.
      */
-    void* getVkHandle() override {
-		set_loader_magic_value(&_icdRef);
-		return &_icdRef;
-	}
+    void* getVkHandle() override { return &_icdRef; }
+
+    /** Recycled dispatchable objects start a new loader allocation lifetime. */
+    void prepareVkHandleForAllocation() { set_loader_magic_value(&_icdRef); }
 
     /**
      * Retrieves the MVKDispatchableVulkanAPIObject instance referenced by the dispatchable Vulkan handle.
@@ -119,6 +120,6 @@ public:
     }
 
 protected:
-    MVKDispatchableObjectICDRef _icdRef = { 0, this };
+    MVKDispatchableObjectICDRef _icdRef{ this };
 
 };

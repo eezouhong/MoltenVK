@@ -586,7 +586,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMetalIRCacheMVK(
     VkDevice device, const char* directory, uint64_t maxBytes);
 
 /** Opt-in read-only compiler counters. Seven-field callers remain compatible;
- * capacity >=8 includes rejected shader count in field7; >=9 adds PSO wall
+ * capacity >=8 includes terminal rejection attempts in field7 (shader compilation
+ * or pipeline preflight; descriptor-layout diagnostics alone do not increment it); >=9 adds PSO wall
  * nanoseconds in field8. See MVKMetalIR.h. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerStatisticsMVK(
     VkDevice device, uint64_t* output, uint32_t capacity);

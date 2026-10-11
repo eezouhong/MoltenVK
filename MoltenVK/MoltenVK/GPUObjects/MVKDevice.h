@@ -38,6 +38,7 @@
 class MVKInstance;
 class MVKDevice;
 class MVKMetal4CompilerService;
+class MVKShaderBackend;
 class MVKMetal4TextureViewPool;
 class MVKShaderLibraryRepository;
 class MVKQueue;
@@ -761,6 +762,7 @@ public:
 
 	/** Shader compiler choice is fixed for this device; IR never retries with MSL. */
 	bool isMetalIRShaderCompilerEnabled() const { return _metalIRShaderCompilerEnabled; }
+	MVKShaderBackend& shaderBackend() const { return *_shaderBackend; }
 
 	/** Returns whether the unified Metal 4 compiler path is active. */
 	bool isMetal4CompilerEnabled() const { return _metal4CompilerService != nullptr; }
@@ -1189,6 +1191,7 @@ protected:
 	MVKPerformanceStatistics _performanceStats;
     MVKCommandResourceFactory* _commandResourceFactory = nullptr;
 	bool _metalIRShaderCompilerEnabled = false;
+	MVKShaderBackend* _shaderBackend = nullptr;
 	MVKMetal4CompilerService* _metal4CompilerService = nullptr;
 	MVKMetal4TextureViewPool* _metal4TextureViewPool = nullptr;
 	MVKShaderLibraryRepository* _shaderLibraryRepository = nullptr;

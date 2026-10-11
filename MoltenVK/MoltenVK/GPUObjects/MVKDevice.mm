@@ -28,6 +28,7 @@
 #include "MVKShaderMathPolicy.h"
 #include "MVKMetalIR.h"
 #include "MVKShaderRouteConfig.h"
+#include "MVKShaderBackend.h"
 #include "MVKPipeline.h"
 #include "MVKFramebuffer.h"
 #include "MVKRenderPass.h"
@@ -5748,6 +5749,7 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
 	_metalIRShaderCompilerEnabled = mvkMetalIREnabled();
+	_shaderBackend = MVKShaderBackend::create(_metalIRShaderCompilerEnabled);
 	reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Shader compiler selected: %s (automatic MSL fallback disabled)",
 	              mvkShaderRouteConfig().selected == MVKShaderCompilerRoute::Unavailable ? "unavailable (requested Metal IR)" :
 	              _metalIRShaderCompilerEnabled ? "Metal IR" : "MSL");
@@ -6125,6 +6127,7 @@ MVKDevice::~MVKDevice() {
 	delete _metal4TextureViewPool;
 	delete _shaderLibraryRepository;
 	mvkMetalIRDestroyDevice(this);
+	delete _shaderBackend;
 	delete _metal4CompilerService;
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 

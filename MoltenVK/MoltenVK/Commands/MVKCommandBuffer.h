@@ -28,6 +28,7 @@
 #include "MVKQueryPool.h"
 #include "MVKSmallVector.h"
 #include "MVKMetalIRCommandEncoding.h"
+#include "MVKShaderCommandHooks.h"
 #include "MVKReplayDrawWork.h"
 #include <unordered_map>
 
@@ -451,6 +452,7 @@ public:
 
 	/** IR-only immutable parameters, owned by this command buffer. */
 	MVKMetalIRCommandEncoding& metalIR() { return _metalIRCommands; }
+	MVKShaderCommandHooks shaderCommands() { return MVKShaderCommandHooks(_metalIRCommands); }
 
     /** Returns the command encoding pool. */
     MVKCommandEncodingPool* getCommandEncodingPool();

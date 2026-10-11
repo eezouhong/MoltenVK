@@ -195,7 +195,7 @@ void MVKCmdDraw::encode(MVKCommandEncoder* cmdEncoder) {
         mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
         preparationTrace.checkpoint();
         if (artifact && artifact->needsDrawData()) {
-            cmdEncoder->metalIR().prepareDraw(artifact,
+            cmdEncoder->shaderCommands().prepareDraw(artifact,
                 mvkir::makeDraw(_vertexCount, _instanceCount, _firstVertex, _firstInstance));
         }
         preparationTrace.checkpoint();
@@ -498,7 +498,7 @@ void MVKCmdDrawIndexed::encode(MVKCommandEncoder* cmdEncoder) {
         mvkreplay::BindingTrace preparationTrace(bool(artifact), mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::DrawPreparation);
         preparationTrace.checkpoint();
         if (artifact && artifact->needsDrawData()) {
-            cmdEncoder->metalIR().prepareDraw(artifact,
+            cmdEncoder->shaderCommands().prepareDraw(artifact,
                 mvkir::makeIndexedDraw(_indexCount, _instanceCount, (uint32_t)idxBuffOffset,
                     _vertexOffset, _firstInstance, ibb.mtlIndexType));
         }
@@ -862,8 +862,8 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
         }
     }
     const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
-    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR, _drawCount, false)
-        : MVKMetalIRCommandEncoding::RuntimeBatch{};
+    auto runtimeBatch = vertexIR ? cmdEncoder->shaderCommands().prepareIndirectDraws(vertexIR, _drawCount, false)
+        : MVKShaderCommandHooks::IndirectBatch{};
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -921,7 +921,7 @@ void MVKCmdDrawIndirect::encode(MVKCommandEncoder* cmdEncoder) {
             }
 
             if (vertexIR && vertexIR->runtimeFlags) {
-                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlIndBuffOfst, 0);
+                cmdEncoder->shaderCommands().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlIndBuffOfst, 0);
             }
             cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 
@@ -1203,8 +1203,8 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
         }
     }
     const auto* vertexIR = pipeline->getStageResources(kMVKShaderStageVertex).metalIR.get();
-    auto runtimeBatch = vertexIR ? cmdEncoder->metalIR().prepareIndirectDraws(vertexIR, _drawCount, true)
-        : MVKMetalIRCommandEncoding::RuntimeBatch{};
+    auto runtimeBatch = vertexIR ? cmdEncoder->shaderCommands().prepareIndirectDraws(vertexIR, _drawCount, true)
+        : MVKShaderCommandHooks::IndirectBatch{};
     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
         for (uint32_t s : stages) {
             auto stage = MVKGraphicsStage(s);
@@ -1274,7 +1274,7 @@ void MVKCmdDrawIndexedIndirect::encode(MVKCommandEncoder* cmdEncoder, const MVKI
             }
 
 	        if (vertexIR && vertexIR->runtimeFlags) {
-                cmdEncoder->metalIR().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlTempIndBuffOfst, uint16_t(ibb.mtlIndexType + 1));
+                cmdEncoder->shaderCommands().selectIndirectDraw(runtimeBatch, drawIdx, mtlIndBuff, mtlTempIndBuffOfst, uint16_t(ibb.mtlIndexType + 1));
             }
             cmdEncoder->finalizeDrawState(stage);	// Ensure all updated state has been submitted to Metal
 

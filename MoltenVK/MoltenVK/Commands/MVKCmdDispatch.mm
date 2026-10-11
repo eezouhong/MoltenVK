@@ -53,7 +53,7 @@ void MVKCmdDispatch::encode(MVKCommandEncoder* cmdEncoder) {
 	if (artifact) {
 		mvkir::ComputeData runtime{{_groupCountX, _groupCountY, _groupCountZ}, 0,
 			{_baseGroupX, _baseGroupY, _baseGroupZ}};
-		cmdEncoder->metalIR().prepareDispatch(artifact, runtime);
+		cmdEncoder->shaderCommands().prepareDispatch(artifact, runtime);
 	}
 	cmdEncoder->finalizeDispatchState();	// Ensure all updated state has been submitted to Metal
 	id<MTLComputeCommandEncoder> mtlEncoder = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDispatch);
@@ -85,7 +85,7 @@ VkResult MVKCmdDispatchIndirect::setContent(MVKCommandBuffer* cmdBuff, VkBuffer 
 void MVKCmdDispatchIndirect::encode(MVKCommandEncoder* cmdEncoder) {
     mvkreplay::indirectInvocation(1,true);
     if (const auto* artifact = cmdEncoder->getComputePipeline()->getStageResources().metalIR.get()) {
-        cmdEncoder->metalIR().prepareIndirectDispatch(artifact, _mtlIndirectBuffer, _mtlIndirectBufferOffset);
+        cmdEncoder->shaderCommands().prepareIndirectDispatch(artifact, _mtlIndirectBuffer, _mtlIndirectBufferOffset);
     }
     cmdEncoder->finalizeDispatchState(); // Ensure all updated state has been submitted to Metal
 #if MVK_REPLAY_TRACE

@@ -1,3 +1,4 @@
+#include "MVKShaderBackend.h"
 #include "MVKPipeline.h"
 #include "MVKMetalIR.h"
 #include "MVKShaderModule.h"
@@ -46,7 +47,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 			(shaderConfig.options.shouldFixupClipSpace ? MVK_METAL_IR_CLIP_HALF_Z : 0);
         uint32_t rasterOptions = getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint
             ? MVK_METAL_IR_RENDERING_POINTS : 0;
-        auto vertexIR = mvkCompileMetalIR(this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions);
+        auto vertexIR = getDevice()->shaderBackend().compileStage({this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions, {}}).artifactOwner;
 		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
             !(vertexIR->runtimeFlags & (MVK_METAL_IR_UNIT_POINT_SIZE | MVK_METAL_IR_NATIVE_POINT_SIZE))) {
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
@@ -64,7 +65,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 				}
 			}
 		}
-        auto fragmentIR = vertexIR && pFragmentSS ? mvkCompileMetalIR(this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions) : nullptr;
+        auto fragmentIR = vertexIR && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
         if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
             !(fragmentIR->runtimeFlags & MVK_METAL_IR_NATIVE_POINT_COORDINATES)) {
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,

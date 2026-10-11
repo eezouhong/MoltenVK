@@ -1,3 +1,4 @@
+#include "MVKShaderBackend.h"
 #include "MVKReplayTrace.h"
 #include "MVKReplayGPUStages.h"
 /*
@@ -3135,8 +3136,7 @@ MVKGraphicsPipeline::MVKGraphicsPipeline(MVKDevice* device,
 
 	// Tessellation has a separate Metal construction path below. Reject it here,
 	// before that path can compile a guest shader with the MSL compiler.
-	if (device->isMetalIRShaderCompilerEnabled() &&
-		(pTessCtlSS || pTessEvalSS || _isMeshPipeline)) {
+	if (!device->shaderBackend().capabilities().supportsStages(pTessCtlSS || pTessEvalSS, _isMeshPipeline)) {
 		_hasValidMTLPipelineStates = false;
 		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
 			"MetalIR tessellation/mesh shader stages are unsupported; MSL fallback disabled."));
@@ -3611,19 +3611,15 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	}
 
 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
-	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
-		if (addMetalIRShadersToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pFragmentSS,
-		                               getRenderingCreateInfo(pCreateInfo)->viewMask)) return plDesc;
-		[plDesc release]; return nil;
-	}
-	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
+	bool compiled = getDevice()->shaderBackend().addGraphicsStages([&]() -> bool {
+	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return false; }
 
 	// Vertex input
 	// This needs to happen before compiling the fragment shader, or we'll lose information on vertex attributes.
-	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) { return nil; }
+	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) { return false; }
 
 	// Fragment shader - only add if rasterization is enabled
-	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
+	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return false; }
 
 	// Output
 	addFragmentOutputToPipeline(plDesc, pCreateInfo);
@@ -3633,7 +3629,13 @@ MTLRenderPipelineDescriptor* MVKGraphicsPipeline::newMTLRenderPipelineDescriptor
 	// The best we can do at this point is set the pipeline name from the layout.
 	setMetalObjectLabel(plDesc, ((MVKPipelineLayout*)pCreateInfo->layout)->getDebugName());
 
-	return plDesc;
+	return true;
+    }, [&]() -> bool {
+        if (addMetalIRShadersToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pFragmentSS,
+                                       getRenderingCreateInfo(pCreateInfo)->viewMask)) return true;
+        [plDesc release]; return false;
+    });
+    return compiled ? plDesc : nil;
 }
 
 static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfiguration& dst, const MVKOnePerEnumEntry<uint8_t, MVKImplicitBuffer>& src);
@@ -4836,10 +4838,8 @@ MVKMTLFunction MVKGraphicsPipeline::getMTLFunction(SPIRVToMSLConversionConfigura
 												   VkPipelineCreationFeedback* pStageFB,
 												   MVKShaderModule* pShaderModule,
 												   const char* pStageName) {
-	MVKMTLFunction func = pShaderModule->getMTLFunction(&shaderConfig,
-													    pShaderStage->pSpecializationInfo,
-													    this,
-													    pStageFB);
+	MVKMTLFunction func = getDevice()->shaderBackend().compileStage({this, _layout, pShaderModule, pShaderStage, 0, 0,
+        [&] { return pShaderModule->getMTLFunction(&shaderConfig, pShaderStage->pSpecializationInfo, this, pStageFB); }}).function;
 	if ( !func.getMTLFunction() ) {
 		if (shouldFailOnPipelineCompileRequired()) {
 			setConfigurationResult(VK_PIPELINE_COMPILE_REQUIRED);
@@ -4990,17 +4990,7 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
     if ( !mvkAreAllFlagsEnabled(pSS->stage, VK_SHADER_STAGE_COMPUTE_BIT) ) { return MVKMTLFunctionNull; }
 
 	if (!_module) _module = getOrCreateShaderModule(_device, pSS, _ownsModule);
-	if (getDevice()->isMetalIRShaderCompilerEnabled()) {
-		auto artifact = mvkCompileMetalIR(this, _layout, _module, pSS, 0,
-			_allowsDispatchBase ? MVK_METAL_IR_ALLOW_DISPATCH_BASE : 0);
-		if (artifact) {
-			_stageResources.metalIR = artifact->metadata;
-			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources);
-			return MVKMTLFunction(artifact->function, {}, MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2]));
-		}
-        return MVKMTLFunctionNull;
-	}
-
+    return getDevice()->shaderBackend().computeFunction([&]() -> MVKMTLFunction {
 	warnIfUnsupportedRobustnessEnabled(this, pSS);
 
 	auto& mtlFeats = getMetalFeatures();
@@ -5046,7 +5036,7 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
 	shaderConfig.options.mslOptions.indirect_params_buffer_index = _stageResources.implicitBuffers.ids[MVKImplicitBuffer::DispatchBase];
 	shaderConfig.options.mslOptions.replace_recursive_inputs = mvkOSVersionIsAtLeast(14.0, 17.0, 1.0);
 
-    MVKMTLFunction func = _module->getMTLFunction(&shaderConfig, pSS->pSpecializationInfo, this, pStageFB);
+    MVKMTLFunction func = getDevice()->shaderBackend().compileStage({this, _layout, _module, pSS, 0, 0, [&] { return _module->getMTLFunction(&shaderConfig, pSS->pSpecializationInfo, this, pStageFB); }}).function;
 	if ( !func.getMTLFunction() ) {
 		if (shouldFailOnPipelineCompileRequired()) {
 			setConfigurationResult(VK_PIPELINE_COMPILE_REQUIRED);
@@ -5059,6 +5049,17 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
 	_layout->populateBindOperations(_stageResources.bindScript, shaderConfig, spv::ExecutionModelGLCompute);
 
 	return func;
+    }, [&]() -> MVKMTLFunction {
+		auto compiled = getDevice()->shaderBackend().compileStage({this, _layout, _module, pSS, 0,
+            _allowsDispatchBase ? MVK_METAL_IR_ALLOW_DISPATCH_BASE : 0, {}});
+        auto artifact = compiled.artifactOwner;
+		if (artifact) {
+			_stageResources.metalIR = artifact->metadata;
+			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources);
+			return compiled.function;
+		}
+        return MVKMTLFunctionNull;
+    });
 }
 
 uint32_t MVKComputePipeline::getImplicitBufferIndex(uint32_t bufferIndexOffset) {

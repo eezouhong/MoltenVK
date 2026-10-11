@@ -561,8 +561,8 @@ void MVKDescriptorBinding::populate(const VkDescriptorSetLayoutBinding& vk) {
 
 MVKDescriptorSetLayout::MVKDescriptorSetLayout(MVKDevice* device): MVKVulkanAPIDeviceObject(device) {
     _metalIRStorage = device->isMetalIRShaderCompilerEnabled();
-    _writeBinding = _metalIRStorage ? &writeDescriptorSetBinding<true> : &writeDescriptorSetBinding<false>;
-    _copyBinding = _metalIRStorage ? &mvkCopyMetalIRDescriptors : &copyDescriptorSetBinding;
+    _descriptorStrategy = { _metalIRStorage ? &writeDescriptorSetBinding<true> : &writeDescriptorSetBinding<false>,
+                            _metalIRStorage ? &mvkCopyMetalIRDescriptors : &copyDescriptorSetBinding };
 }
 
 MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo) {

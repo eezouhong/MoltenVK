@@ -363,8 +363,9 @@ public:
 	using CopyBinding = void (*)(const MVKDescriptorSetLayout*, const MVKDescriptorBinding*,
 	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, const MVKDescriptorBinding*,
 	    const MVKDescriptorSet*, id<MTLArgumentEncoder>, uint32_t, uint32_t, uint32_t);
-	WriteBinding descriptorWriter() const { return _writeBinding; }
-	CopyBinding descriptorCopier() const { return _copyBinding; }
+	struct DescriptorStrategy { WriteBinding write = nullptr; CopyBinding copy = nullptr; };
+	WriteBinding descriptorWriter() const { return _descriptorStrategy.write; }
+	CopyBinding descriptorCopier() const { return _descriptorStrategy.copy; }
 
 	/** Returns the offset of the aux buffers in the GPU buffer.  For variable descriptor sets with argument encoders, returns zero; you must get the actual value from the encoder in that case. */
 	uint32_t gpuAuxBase(uint32_t numVariable = 0) const { return _gpuAuxBase + (isMainGPUBufferVariable() ? numVariable * _gpuVariableElementSize : 0); }
@@ -447,8 +448,7 @@ private:
 	uint32_t _metalIRDescriptorCount = 0;
 	uint32_t _metalIRTableBytes = 0;
 	bool _metalIRStorage = false;
-	WriteBinding _writeBinding = nullptr;
-	CopyBinding _copyBinding = nullptr;
+	DescriptorStrategy _descriptorStrategy;
 	/** If using variable descriptors, the size of each variable element in the gpu buffer. */
 	uint32_t _gpuVariableElementSize = 0;
 	/** The total number of buffers using dynamic offsets, minus any variable descriptors. */

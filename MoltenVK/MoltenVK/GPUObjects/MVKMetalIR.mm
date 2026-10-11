@@ -1,5 +1,6 @@
 #include "MVKReplayTrace.h"
 #include "MVKMetalIR.h"
+#include "MVKShaderRouteConfig.h"
 #include "MVKMetalIRCache.h"
 #include "MVKMetalIRResidentCache.h"
 #include "MVKMetalIRCompilerLimit.h"
@@ -21,20 +22,13 @@
 #include "mvkGitRevDerived.h"
 
 bool mvkMetalIREnabled() {
-    const char* value = getenv("MELONX_EXPERIMENTAL_METAL_IR");
-    return value && strcmp(value, "1") == 0;
+    return mvkShaderRouteConfig().usesIRPath();
 }
 MVKMetalIRArtifact::~MVKMetalIRArtifact(){[function release];[library release];}
 
 namespace {
 mvkir::CompilerLimit& compilerLimit() {
-    static mvkir::CompilerLimit limit([] {
-        const char* value=getenv("MELONX_METAL_IR_COMPILE_WORKERS");
-        if (!value || !*value) return 2u;
-        char* end=nullptr;
-        unsigned long count=strtoul(value,&end,10);
-        return end && !*end && count>=1 && count<=8 ? unsigned(count) : 2u;
-    }());
+    static mvkir::CompilerLimit limit(mvkShaderCompilerWorkerLimit());
     return limit;
 }
 struct Plugin {
@@ -45,7 +39,7 @@ Plugin& plugin() {
     static Plugin result=[] {
         Plugin p;
         fprintf(stderr,"MetalIR native base MoltenVK %s %s (local experimental changes)\n",MVK_VERSION_STRING,mvkRevString);
-        const char* path=getenv("MELONX_METAL_IR_PLUGIN");if(!path||!*path)return p;
+        const char* path=mvkShaderCompilerPluginPath().c_str();if(!*path)return p;
         p.library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
         if(!p.library){fprintf(stderr,"MetalIR compiler unavailable: %s\n",dlerror());return p;}
         p.compile=(MVKMetalIRCompileFunction)dlsym(p.library,"MeloNXCompileMetalIR");
@@ -89,7 +83,7 @@ Plugin& plugin() {
     }();return result;
 }
 std::atomic<bool>& telemetryStorage() {
-    static std::atomic<bool> enabled{[] {const char* v=getenv("MELONX_METAL_IR_TELEMETRY");return v&&strcmp(v,"1")==0;}()};
+    static std::atomic<bool> enabled{mvkShaderInitialTelemetryEnabled()};
     return enabled;
 }
 bool telemetryEnabled() { return telemetryStorage().load(std::memory_order_relaxed); }
@@ -105,15 +99,14 @@ struct DeviceArtifacts {
     std::mutex diskConfigurationLock;
     std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0},rejected{0},psoNs{0};
     DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
-        const char* directory=getenv("MELONX_METAL_IR_CACHE");
+        const char* directory=mvkShaderDeviceCacheConfig().directory;
         if(directory&&*directory) {
             diskDirectory=directory;
             disk=std::make_shared<mvkir::DiskCache>(diskDirectory);
         }
     }
     static size_t retainedCount() {
-        const char* v=getenv("MELONX_METAL_IR_MEMORY_CACHE");
-        return v&&strcmp(v,"0")==0?0:64;
+        return mvkShaderDeviceCacheConfig().retainedCount;
     }
 };
 std::mutex devicesLock;
@@ -275,7 +268,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     if (!plugin().compile || !plugin().release) return reject("compiler plugin unavailable or ABI incompatible", VK_ERROR_INITIALIZATION_FAILED);
     if(stage->pSpecializationInfo&&stage->pSpecializationInfo->mapEntryCount)return reject("specialization constants unsupported");
     if(stage->stage!=VK_SHADER_STAGE_VERTEX_BIT&&stage->stage!=VK_SHADER_STAGE_FRAGMENT_BIT&&stage->stage!=VK_SHADER_STAGE_COMPUTE_BIT)return reject("shader stage unsupported");
-    const char* stages=getenv("MELONX_METAL_IR_STAGES");
+    const auto compileConfig=mvkShaderCompileConfig();
+    const char* stages=compileConfig.stages;
     if(stages&&((strcmp(stages,"graphics")==0&&stage->stage==VK_SHADER_STAGE_COMPUTE_BIT)||
                 (strcmp(stages,"compute")==0&&stage->stage!=VK_SHADER_STAGE_COMPUTE_BIT)))return reject("stage filter excludes the requested IR shader");
     if(layout->getDescriptorSetCount()>8)return reject("descriptor set count exceeds IR ABI");
@@ -314,7 +308,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         pos+=count;
     }
     uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
-    const char* strictMathOption=getenv("MELONX_METAL_IR_STRICT_MATH");
+    const char* strictMathOption=compileConfig.strictMath;
     uint32_t mathMode=strictMathOption?(strcmp(strictMathOption,"1")==0):shaderMathMode(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
     mvkir::DiskCache::Reflection shaderReflection;
     {

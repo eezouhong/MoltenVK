@@ -1,3 +1,4 @@
+#include "MVKShaderRouteConfig.h"
 #include "MVKReplayBindingTrace.h"
 #include "MVKReplayTrace.h"
 #include "MVKReplayGPUStages.h"
@@ -170,6 +171,14 @@ extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(
     return mvkreplay::submissionSnapshot(output);
 }
 #endif
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity) {
+    if (!values || capacity < 5) return 0;
+    const auto& route = mvkShaderRouteConfig();
+    values[0] = 1; values[1] = route.requested; values[2] = unsigned(route.available);
+    values[3] = unsigned(route.selected); values[4] = route.failureReason;
+    return 5;
+}
 
 MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerABIMVK(void) {
     return mvkMetalIRCompilerAvailable() ? MVK_METAL_IR_ABI_VERSION : 0;

@@ -565,6 +565,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
 /** Nonzero compiler ABI only when the explicit IR compiler plugin is available. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
 
+/** Immutable process route, frozen before instance/physical-device creation.
+ * Five uint32 fields: schema1, requested, availability(0 unavailable/1 available/
+ * 2 not probed), selected(0 MSL/1 IR/2 unavailable), reason(0 none/1 plugin/2 hardware).
+ * Explicit unavailable IR keeps its existing failure path, never MSL fallback. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity);
+
+
 /** Configures per-device metallib/reflection persistence before the first IR
  * compilation. maxBytes == 0 is unlimited. Errors leave IR compilation usable. */
 VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMetalIRCacheMVK(

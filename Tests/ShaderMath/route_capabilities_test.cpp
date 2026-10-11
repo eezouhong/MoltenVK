@@ -8,7 +8,7 @@ int main() {
     for (unsigned mask=0; mask<64; ++mask) {
         bool tess=mask&1, mesh=mask&2, discard=mask&4, views=mask&8, sample=mask&16;
         for (float minimum : {0.0f, 0.5f, std::numeric_limits<float>::quiet_NaN()}) {
-            assert(ir.supportsGraphics(tess,mesh,discard,views)==(!tess&&!mesh&&!discard&&!views));
+            assert(ir.supportsGraphics(tess,mesh,discard,views)==(!tess&&!mesh&&!views));
             assert(ir.supportsSampleShading(sample,minimum)==!(sample&&minimum!=0.0f));
             assert(msl.supportsGraphics(tess,mesh,discard,views));
             assert(msl.supportsSampleShading(sample,minimum));

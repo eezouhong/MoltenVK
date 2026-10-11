@@ -9,8 +9,9 @@ struct MVKShaderRouteCapabilities {
     bool supportsStageClass(bool vertexFragmentCompute) const { return !metalIR || vertexFragmentCompute; }
     bool supportsPushDescriptors() const { return !metalIR; }
     bool supportsStages(bool tessellation, bool mesh) const { return !metalIR || (!tessellation && !mesh); }
-    bool supportsGraphics(bool tessellation, bool mesh, bool discard, bool multiview) const {
-        return !metalIR || (!tessellation && !mesh && !discard && !multiview);
+    bool supportsGraphics(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
+        // Discard suppresses rasterization, not vertex-stage storage writes.
+        return !metalIR || (!tessellation && !mesh && !multiview);
     }
     bool supportsSampleShading(bool enabled, float minimum) const { return !metalIR || !enabled || minimum == 0.0f; }
     bool supportsVertexBinding(uint32_t index) const { return !metalIR || index > 2; }

@@ -171,7 +171,7 @@ public:
         VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; fb.renderPass=renderPass; fb.attachmentCount=1; fb.pAttachments=&view; fb.width=fb.height=16; fb.layers=layers;
         VK_CHECK(vkCreateFramebuffer(device,&fb,nullptr,&framebuffer));
     }
-    VkPipeline graphics(VkShaderModule vertex,VkShaderModule fragment,VkPrimitiveTopology topology, bool threeInputs=false, bool twoViewports=false) {
+    VkPipeline graphics(VkShaderModule vertex,VkShaderModule fragment,VkPrimitiveTopology topology, bool threeInputs=false, bool twoViewports=false, bool discard=false) {
         VkPipelineShaderStageCreateInfo stages[2]={{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
         stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT; stages[0].module=vertex; stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module=fragment;
         for(auto& stage:stages) stage.pName="main";
@@ -184,12 +184,14 @@ public:
         VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; vp.viewportCount=vp.scissorCount=twoViewports?2:1; vp.pViewports=viewport; vp.pScissors=scissor;
         VkPipelineViewportDepthClipControlCreateInfoEXT depth{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT}; depth.negativeOneToOne=VK_TRUE;
         if(negativeDepth) vp.pNext=&depth;
-        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode=VK_POLYGON_MODE_FILL; raster.cullMode=VK_CULL_MODE_NONE; raster.lineWidth=1;
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode=VK_POLYGON_MODE_FILL; raster.cullMode=VK_CULL_MODE_NONE; raster.lineWidth=1; raster.rasterizerDiscardEnable=discard;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState attachment{}; attachment.colorWriteMask=15;
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blend.attachmentCount=1; blend.pAttachments=&attachment;
-        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount=2; info.pStages=stages; info.pVertexInputState=&input; info.pInputAssemblyState=&assembly;
+        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount=fragment?2:1; info.pStages=stages; info.pVertexInputState=&input; info.pInputAssemblyState=&assembly;
         info.pViewportState=&vp; info.pRasterizationState=&raster; info.pMultisampleState=&ms; info.pColorBlendState=&blend; info.layout=layout; info.renderPass=renderPass;
+        // These states are ignored by Vulkan when static discard is enabled.
+        if(discard) { info.pViewportState=nullptr;info.pMultisampleState=nullptr;info.pColorBlendState=nullptr; }
         ensureResidencyCache();
         VkPipeline result; VK_CHECK(vkCreateGraphicsPipelines(device,residencyCache,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
     }

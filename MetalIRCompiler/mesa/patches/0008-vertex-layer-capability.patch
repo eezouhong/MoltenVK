@@ -1,0 +1,11 @@
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -40,6 +40,7 @@ spirv_caps = {
+    .Shader = true,
+    .Geometry = true,
+    .DrawParameters = true,
++   .ShaderViewportIndexLayerEXT = true,
+    .MultiView = true,
+    .GroupNonUniform = true,
+    .GroupNonUniformBallot = true,

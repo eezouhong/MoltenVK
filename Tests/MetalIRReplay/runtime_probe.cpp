@@ -2,6 +2,27 @@
 #include <dlfcn.h>
 
 static const char* cacheDirectory=nullptr;
+static void checkResidency(Context& context) {
+    if (!getenv("MELONX_RESIDENCY_PROBE")) return;
+    auto query=reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetShaderLibraryResidencyStatisticsMVK"));
+    auto trim=reinterpret_cast<VkResult(*)(VkDevice)>(dlsym(RTLD_DEFAULT,"vkTrimShaderLibraryResidencyMVK"));
+    uint64_t before[16]{}, repeated[16]{}, after[16]{};
+    const bool ir=getenv("MELONX_EXPERIMENTAL_METAL_IR") && !strcmp(getenv("MELONX_EXPERIMENTAL_METAL_IR"),"1");
+    if (!query || !trim || query(VK_NULL_HANDLE,before,16)!=0 || query(context.device,before,15)!=0 ||
+        trim(VK_NULL_HANDLE)!=VK_ERROR_INITIALIZATION_FAILED || query(context.device,before,16)!=16 ||
+        query(context.device,repeated,16)!=16 || memcmp(before,repeated,sizeof(before)))
+        throw std::runtime_error("residency query invalid or mutated state");
+    if (before[0]!=1 || !before[1] || before[2]!=(ir?1:2) || before[4]!=(ir?64:512) ||
+        before[13]!=(ir?1:2) || before[14]!=(ir?1:2) || !before[15])
+        throw std::runtime_error("residency scope, payload or default changed");
+    VK_CHECK(trim(context.device));
+    if (query(context.device,after,16)!=16 || before[3]!=after[3] || before[4]!=after[4] ||
+        before[5]!=after[5] || before[6]!=after[6] || before[7]!=after[7] || before[8]!=after[8])
+        throw std::runtime_error("under-budget trim changed retained work");
+    fprintf(stderr,"MELONX_RESIDENCY {\"route\":\"%s\",\"entries\":%llu,\"limit\":%llu,\"evictions\":%llu,\"restores\":%llu,\"readOnly\":true,\"trimPreserved\":true}\n",
+        ir?"IR":"MSL",(unsigned long long)before[3],(unsigned long long)before[4],
+        (unsigned long long)before[5],(unsigned long long)before[6]);
+}
 static void configureCache(Context& context) {
     if(!cacheDirectory)return;
     if (getenv("MELONX_BASIC_COUNTER_PROBE")) {
@@ -16,6 +37,7 @@ static void configureCache(Context& context) {
     VK_CHECK(configure(context.device,cacheDirectory,2ull*1024*1024*1024));
 }
 static void printCacheStatistics(Context& context) {
+    checkResidency(context);
     if(!cacheDirectory)return;
     auto statistics=reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCompilerStatisticsMVK"));
     uint64_t values[9]{},legacy[7]{};

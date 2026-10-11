@@ -42,6 +42,7 @@ public:
     std::vector<Buffer> buffers;
     std::vector<VkShaderModule> modules;
     std::vector<VkPipeline> pipelines;
+    VkPipelineCache residencyCache{};
 
     explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
                      bool floatControls2 = false, bool fragmentStorageMode = false)
@@ -186,14 +187,23 @@ public:
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blend.attachmentCount=1; blend.pAttachments=&attachment;
         VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount=2; info.pStages=stages; info.pVertexInputState=&input; info.pInputAssemblyState=&assembly;
         info.pViewportState=&vp; info.pRasterizationState=&raster; info.pMultisampleState=&ms; info.pColorBlendState=&blend; info.layout=layout; info.renderPass=renderPass;
-        VkPipeline result; VK_CHECK(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
+        ensureResidencyCache();
+        VkPipeline result; VK_CHECK(vkCreateGraphicsPipelines(device,residencyCache,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
     }
     VkPipeline compute(VkShaderModule module) {
         VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO}; info.flags=VK_PIPELINE_CREATE_DISPATCH_BASE_BIT; info.layout=layout;
         info.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}; info.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; info.stage.module=module; info.stage.pName="main";
-        VkPipeline result; VK_CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
+        ensureResidencyCache();
+        VkPipeline result; VK_CHECK(vkCreateComputePipelines(device,residencyCache,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
+    }
+    void ensureResidencyCache() {
+        if (!residencyCache && getenv("MELONX_RESIDENCY_PROBE")) {
+            VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+            VK_CHECK(vkCreatePipelineCache(device,&info,nullptr,&residencyCache));
+        }
     }
     ~Context() {
+        if (residencyCache) vkDestroyPipelineCache(device,residencyCache,nullptr);
         if(device) {
             vkDeviceWaitIdle(device);
             vkDestroyCommandPool(device,commandPool,nullptr);

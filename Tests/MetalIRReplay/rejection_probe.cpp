@@ -2,12 +2,24 @@
 #include <dlfcn.h>
 
 int main(int argc,char** argv) {
-    if (argc!=3) return 64;
+    if (argc!=3 && argc!=4) return 64;
     auto enable=reinterpret_cast<uint32_t(*)(uint32_t)>(dlsym(RTLD_DEFAULT,"vkSetMetalIRTelemetryEnabledMVK"));
     auto stats=reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCompilerStatisticsMVK"));
     if (!enable||!stats||enable(1)==UINT32_MAX) return 1;
     Context context;
     context.target();
+    if (argc==4 && std::string(argv[3])=="layout-only") {
+        // Valid Vulkan dynamic UBO layout: unsupported by IR, before any shader attempt.
+        VkDescriptorSetLayoutBinding binding{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr};
+        VkDescriptorSetLayoutCreateInfo create{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        create.bindingCount=1;create.pBindings=&binding;
+        VkDescriptorSetLayout layout{};
+        VkResult result=vkCreateDescriptorSetLayout(context.device,&create,nullptr,&layout);
+        uint64_t values[9]{};
+        bool valid=result==VK_ERROR_FEATURE_NOT_PRESENT && layout==VK_NULL_HANDLE && stats(context.device,values,9)==9;
+        printf("{\"layoutRejected\":%s,\"counter\":%llu,\"result\":%d}\n",valid?"true":"false",(unsigned long long)values[7],result);
+        return valid ? 0 : 1;
+    }
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stages[1]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

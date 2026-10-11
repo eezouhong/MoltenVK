@@ -1,0 +1,128 @@
+{
+  "warm": {
+    "runs": {
+      "master-warm": {
+        "samples": 176,
+        "medianMiB": {
+          "physFootprintBytes": 6084.330669403076,
+          "nonResourceProxyMiB": 4261.532253265381,
+          "metalMinusVulkanProxyMiB": 163.68390274047852,
+          "managedHeapBytes": 774.7418060302734,
+          "lastGcHeapSizeBytes": 862.1369895935059,
+          "lastGcTotalCommittedBytes": 872.078125,
+          "allZones_sizeInUseBytes": 294.83763122558594,
+          "allZones_sizeAllocatedBytes": 386.32789611816406,
+          "task_internalBytes": 1780.4609375,
+          "task_compressedBytes": 2495.3671875,
+          "task_purgeableNonvolatileBytes": 85.5,
+          "task_purgeableNonvolatileCompressedBytes": 0.09375
+        },
+        "captureMs": {
+          "median": 0.7893,
+          "max": 1.788
+        },
+        "VMResidualMedianMiB": 1862.22119140625
+      },
+      "ir-warm": {
+        "samples": 177,
+        "medianMiB": {
+          "physFootprintBytes": 5798.588424682617,
+          "nonResourceProxyMiB": 4038.393985748291,
+          "metalMinusVulkanProxyMiB": 178.8432502746582,
+          "managedHeapBytes": 788.7157516479492,
+          "lastGcHeapSizeBytes": 645.8388900756836,
+          "lastGcTotalCommittedBytes": 653.1875,
+          "allZones_sizeInUseBytes": 212.94061279296875,
+          "allZones_sizeAllocatedBytes": 319.4060363769531,
+          "task_internalBytes": 1610.84375,
+          "task_compressedBytes": 2379.71875,
+          "task_purgeableNonvolatileBytes": 65.6875,
+          "task_purgeableNonvolatileCompressedBytes": 14.609375
+        },
+        "captureMs": {
+          "median": 0.7925,
+          "max": 6.0997
+        },
+        "VMResidualMedianMiB": 1784.0566711425781
+      }
+    },
+    "medianDeltaIRMinusMasterMiB": {
+      "physFootprintBytes": -285.742244720459,
+      "nonResourceProxyMiB": -223.13826751708984,
+      "metalMinusVulkanProxyMiB": 15.159347534179688,
+      "managedHeapBytes": 13.973945617675781,
+      "lastGcHeapSizeBytes": -216.29809951782227,
+      "lastGcTotalCommittedBytes": -218.890625,
+      "allZones_sizeInUseBytes": -81.89701843261719,
+      "allZones_sizeAllocatedBytes": -66.92185974121094,
+      "task_internalBytes": -169.6171875,
+      "task_compressedBytes": -115.6484375,
+      "task_purgeableNonvolatileBytes": -19.8125,
+      "task_purgeableNonvolatileCompressedBytes": 14.515625
+    },
+    "scope": "Statistics of overlapping accounting views, not physical owner attribution. Marginal medians cannot be added into an exact total. VM residual includes unexposed alternate-accounting/IOKit/page-table terms. No compiler-specific zone is identified."
+  },
+  "cold-reverse": {
+    "runs": {
+      "master-cold-2": {
+        "samples": 177,
+        "medianMiB": {
+          "physFootprintBytes": 5972.635208129883,
+          "nonResourceProxyMiB": 4189.675861358643,
+          "metalMinusVulkanProxyMiB": 161.02325820922852,
+          "managedHeapBytes": 1084.28173828125,
+          "lastGcHeapSizeBytes": 958.0086669921875,
+          "lastGcTotalCommittedBytes": 965.6875,
+          "allZones_sizeInUseBytes": 280.64276123046875,
+          "allZones_sizeAllocatedBytes": 383.4060363769531,
+          "task_internalBytes": 1521.828125,
+          "task_compressedBytes": 2645.4375,
+          "task_purgeableNonvolatileBytes": 73.5625,
+          "task_purgeableNonvolatileCompressedBytes": 0.546875
+        },
+        "captureMs": {
+          "median": 0.8852,
+          "max": 1.7029
+        },
+        "VMResidualMedianMiB": 1785.4789810180664
+      },
+      "ir-cold-2": {
+        "samples": 178,
+        "medianMiB": {
+          "physFootprintBytes": 5827.923675537109,
+          "nonResourceProxyMiB": 4137.328380584717,
+          "metalMinusVulkanProxyMiB": 181.77553939819336,
+          "managedHeapBytes": 929.9999618530273,
+          "lastGcHeapSizeBytes": 816.9830017089844,
+          "lastGcTotalCommittedBytes": 825.578125,
+          "allZones_sizeInUseBytes": 216.24462890625,
+          "allZones_sizeAllocatedBytes": 335.3904113769531,
+          "task_internalBytes": 1281.0625,
+          "task_compressedBytes": 2853.1328125,
+          "task_purgeableNonvolatileBytes": 66.1875,
+          "task_purgeableNonvolatileCompressedBytes": 14.59375
+        },
+        "captureMs": {
+          "median": 0.8692500000000001,
+          "max": 6.1211
+        },
+        "VMResidualMedianMiB": 1733.2832336425781
+      }
+    },
+    "medianDeltaIRMinusMasterMiB": {
+      "physFootprintBytes": -144.71153259277344,
+      "nonResourceProxyMiB": -52.34748077392578,
+      "metalMinusVulkanProxyMiB": 20.752281188964844,
+      "managedHeapBytes": -154.28177642822266,
+      "lastGcHeapSizeBytes": -141.02566528320312,
+      "lastGcTotalCommittedBytes": -140.109375,
+      "allZones_sizeInUseBytes": -64.39813232421875,
+      "allZones_sizeAllocatedBytes": -48.015625,
+      "task_internalBytes": -240.765625,
+      "task_compressedBytes": 207.6953125,
+      "task_purgeableNonvolatileBytes": -7.375,
+      "task_purgeableNonvolatileCompressedBytes": 14.046875
+    },
+    "scope": "Statistics of overlapping accounting views, not physical owner attribution. Marginal medians cannot be added into an exact total. VM residual includes unexposed alternate-accounting/IOKit/page-table terms. No compiler-specific zone is identified."
+  }
+}

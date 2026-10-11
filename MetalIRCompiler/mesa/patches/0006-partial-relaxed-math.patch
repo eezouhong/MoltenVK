@@ -1,0 +1,64 @@
+diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
+index 202d622..f5b6527 100644
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -2386,9 +2386,12 @@ emit_binop(struct ntd_context *ctx, nir_alu_instr *alu,
+    bool is_float_op = nir_alu_type_get_base_type(nir_op_infos[alu->op].output_type) == nir_type_float;
+ 
+    enum dxil_opt_flags flags = 0;
+-   if (is_float_op && !nir_alu_instr_is_exact(alu) &&
+-       !ctx->opts->disable_math_refactoring)
+-      flags |= DXIL_UNSAFE_ALGEBRA;
++   if (is_float_op && !nir_alu_instr_is_exact(alu)) {
++      if (ctx->opts->relaxed_math_refactoring)
++         flags |= DXIL_NO_SIGNED_ZEROS | DXIL_ALLOW_RECIPROCAL;
++      else if (!ctx->opts->disable_math_refactoring)
++         flags |= DXIL_UNSAFE_ALGEBRA;
++   }
+ 
+    const struct dxil_value *v = dxil_emit_binop(&ctx->mod, opcode, op0, op1, flags);
+    if (!v)
+diff --git a/src/microsoft/compiler/nir_to_dxil.h b/src/microsoft/compiler/nir_to_dxil.h
+index 9890115..cc6139a 100644
+--- a/src/microsoft/compiler/nir_to_dxil.h
++++ b/src/microsoft/compiler/nir_to_dxil.h
+@@ -79,6 +79,7 @@ struct nir_to_dxil_options {
+    bool interpolate_at_vertex;
+    bool lower_int16;
+    bool disable_math_refactoring;
++   bool relaxed_math_refactoring;
+    bool last_ubo_is_not_arrayed;
+    bool advanced_texture_ops;
+    unsigned provoking_vertex;
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+index cbf2af2..2440d6e 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
+@@ -161,6 +161,7 @@ spirv_to_dxil_impl(const uint32_t *words, size_t word_count,
+    struct nir_to_dxil_options opts = {
+       .environment = DXIL_ENVIRONMENT_VULKAN,
+       .disable_math_refactoring = conf->disable_math_refactoring,
++      .relaxed_math_refactoring = conf->relaxed_math_refactoring,
+       .shader_model_max = conf->shader_model_max,
+       .validator_version_max = validator_version_max,
+       .input_clip_size = conf->input_clip_size,
+@@ -322,6 +323,7 @@ spirv_to_dxil_link(const struct dxil_spirv_link_stage *stages, size_t num_stages
+    struct nir_to_dxil_options opts = {
+       .environment = DXIL_ENVIRONMENT_VULKAN,
+       .disable_math_refactoring = conf->disable_math_refactoring,
++      .relaxed_math_refactoring = conf->relaxed_math_refactoring,
+       .shader_model_max = conf->shader_model_max,
+       .validator_version_max = validator_version_max,
+       .input_clip_size = conf->input_clip_size,
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index 829ce80..bf8952c 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -232,6 +232,7 @@ struct dxil_spirv_runtime_conf {
+    unsigned input_clip_size;
+ 
+    bool disable_math_refactoring;
++   bool relaxed_math_refactoring;
+ };
+ 
+ struct dxil_spirv_debug_options {

@@ -24,6 +24,8 @@
 #include "MVKImage.h"
 #include "MVKRenderPass.h"
 #include "MVKPipeline.h"
+#include "MVKMetalIR.h"
+#include "MVKMetalIRResourceBinding.h"
 #include "MVKQueryPool.h"
 #include "mvk_datatypes.hpp"
 
@@ -660,6 +662,7 @@ static MVKResourceUsageStages combineStages(MVKResourceUsageStages a, MVKResourc
 	return MVKResourceUsageStages::All;
 }
 
+
 static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKCommandEncoder& mvkEncoder,
                                const MVKVulkanCommonEncoderState& common,
@@ -671,7 +674,21 @@ static void bindMetalResources(id<MTLCommandEncoder> encoder,
                                MVKStageResourceBits& exists,
                                MVKStageResourceBindings& bindings,
                                const MVKResourceBinder& RESTRICT binder) {
-	mvkreplay::BindingTrace bindingTrace(false);
+	mvkreplay::BindingTrace bindingTrace(bool(resources.metalIR));
+	if (resources.metalIR) {
+		mvkBindMetalIRResources(encoder, mvkEncoder, common, resources, pushConstants,
+		                       vkStage, useResourceStage, exists, bindings, binder, bindingTrace, [&] {
+			executeBindOps(encoder, mvkEncoder, common, implicitBufferData,
+			               resources.bindScript.ops.contents(), useResourceStage, exists, bindings, binder);
+		});
+		return;
+	}
+	if (bindings.metalIR) {
+		bindings.metalIR = false;
+		exists.descriptorSetData.reset();
+		exists.buffers.clear(0); exists.buffers.clear(1); exists.buffers.clear(2);
+		exists.buffers.clear(4); exists.buffers.clear(5);
+	}
 	// Clear descriptor set resource use bitarray for new sets and bind them
 	MVKStaticBitSet<kMVKMaxDescriptorSetCount> setsNeeded = resources.resources.descriptorSetData.clearingAllIn(exists.descriptorSetData);
 	exists.descriptorSetData |= resources.resources.descriptorSetData;
@@ -862,6 +879,9 @@ static void bindVertexBuffers(id<MTLCommandEncoder> encoder,
 
 /** If the contents of an implicit buffer changes, call this to ensure that the contents will be rebound before the next draw. */
 static void invalidateImplicitBuffer(MVKStageResourceBindings& bindings, MVKNonVolatileImplicitBuffer buffer) {
+	if (buffer == MVKNonVolatileImplicitBuffer::PushConstant) {
+		bindings.metalIRArguments.pushConstantSize = 0;
+	}
 	uint32_t idx = bindings.implicitBufferIndices[buffer];
 	if (bindings.buffers[idx] == MVKStageResourceBindings::ImplicitBuffer(buffer)) {
 		bindings.buffers[idx] = MVKStageResourceBindings::NullBuffer();
@@ -1090,6 +1110,10 @@ static uint32_t getSampleCount(VkSampleCountFlags vk) {
 
 void MVKMetalGraphicsCommandEncoderState::reset(VkSampleCountFlags sampleCount) {
 	memset(static_cast<MVKMetalGraphicsCommandEncoderStateQuickReset*>(this), 0, offsetof(MVKMetalGraphicsCommandEncoderStateQuickReset, MEMSET_RESET_LINE));
+	// A previous command buffer may already have recycled its temporary buffers.
+	for (uint32_t i = 0; i < static_cast<uint32_t>(MVKMetalGraphicsStage::Count); ++i) {
+		_bindings[static_cast<MVKMetalGraphicsStage>(i)].metalIRArguments.reset();
+	}
 	_lineWidth = 1;
 	_sampleCount = getSampleCount(sampleCount);
 	_depthStencil.reset();
@@ -1504,7 +1528,8 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
 	}
 	bindVulkanGraphicsToMetalGraphics(encoder, mvkEncoder, vk, vkShared, *this, pipeline, kMVKShaderStageFragment, MVKMetalGraphicsStage::Fragment);
 	{
-		mvkreplay::BindingTrace residencyTrace(false, mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::Residency);
+		mvkreplay::BindingTrace residencyTrace(bool(pipeline->getStageResources(kMVKShaderStageVertex).metalIR),
+		    mvkreplay::bindingSamplingEnabled(), mvkreplay::BindingGroup::Residency);
 		residencyTrace.checkpoint();
 		useResource.bindAndResetGraphics(encoder);
 		residencyTrace.checkpoint();
@@ -1516,6 +1541,7 @@ void MVKMetalGraphicsCommandEncoderState::setVertexStageIsMesh(bool isMesh) {
 	if (_flags.has(MVKMetalRenderEncoderStateFlag::MeshStageBound) != isMesh) {
 		_flags.set(MVKMetalRenderEncoderStateFlag::MeshStageBound, isMesh);
 		_exists.vertex() = MVKStageResourceBits();
+		_bindings.vertex().metalIRArguments.reset();
 	}
 }
 
@@ -1731,6 +1757,7 @@ void MVKMetalComputeCommandEncoderState::prepareRenderDispatch(
 void MVKMetalComputeCommandEncoderState::reset() {
 	memset((void*)this, 0, offsetof(MVKMetalComputeCommandEncoderState, MEMSET_RESET_LINE));
 	_vkStage = kMVKShaderStageCount;
+	_bindings.metalIRArguments.reset();
 }
 
 #pragma mark - MVKCommandEncoderState

@@ -562,6 +562,51 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndMetal4CompilerWorkMVK(
     size_t*                                    pStatsSize);
 
 /** Returns a nonblocking snapshot of current Metal 4 compiler admission usage. */
+/** Nonzero compiler ABI only when the explicit IR compiler plugin is available. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
+
+/** Immutable process route, frozen before instance/physical-device creation.
+ * Five uint32 fields: schema1, requested, availability(0 unavailable/1 available/
+ * 2 not probed), selected(0 MSL/1 IR/2 unavailable), reason(0 none/1 plugin/2 hardware).
+ * Explicit unavailable IR keeps its existing failure path, never MSL fallback. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity);
+
+/** Version1 library-residency adapter snapshot:16 uint64 fields, with explicit
+ * scope and validity. See Docs/metal-ir-modularization/LIBRARY-RESIDENCY-ABI.md. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderLibraryResidencyStatisticsMVK(VkDevice device, uint64_t* values, uint32_t capacity);
+/** Explicit pressure boundary. Retains existing configured trim/idle-relief
+ * semantics; never called automatically by UIKit or normal frame processing. */
+VKAPI_ATTR VkResult VKAPI_CALL vkTrimShaderLibraryResidencyMVK(VkDevice device);
+
+
+
+/** Configures per-device metallib/reflection persistence before the first IR
+ * compilation. maxBytes == 0 is unlimited. Errors leave IR compilation usable. */
+VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMetalIRCacheMVK(
+    VkDevice device, const char* directory, uint64_t maxBytes);
+
+/** Opt-in read-only compiler counters. Seven-field callers remain compatible;
+ * capacity >=8 includes rejected shader count in field7; >=9 adds PSO wall
+ * nanoseconds in field8. See MVKMetalIR.h. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity);
+
+/** Diagnostic scope only: bit0 IR counters, bit1 detailed/bit2 coarse replay.
+ * Returns previous flags for restoration, or UINT32_MAX for invalid flags.
+ * Caller must exclude game activity while switching this diagnostic scope. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags);
+
+/** Lightweight compiler/lifetime counters only; does not enable replay timers.
+ * Returns the previous enabled value, or UINT32_MAX for invalid input. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRTelemetryEnabledMVK(uint32_t enabled);
+
+/** Version-1 cache/lifetime snapshot, 37 uint64 fields. Unlike the compiler
+ * counters, the snapshot reports availability and coverage explicitly. Library
+ * byte fields measure metallib code, not Metal-private physical memory.
+ * See MetalIRCompiler/docs/ir-memory-statistics.json for field order and scope. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCacheStatisticsMVK(
+    VkDevice device, uint64_t* output, uint32_t capacity);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkGetMetal4CompilerConcurrencyStatisticsMVK(
     VkDevice                                   device,
     MVKMetal4CompilerConcurrencyStatistics*    pStats,

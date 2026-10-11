@@ -60,7 +60,7 @@ def main():
             valid = process.returncode == 0 and len(rows) == (3 if kind == 'toggle' else 1)
             valid = valid and all(r.get('success') is True for r in rows) and not rejected
         if kind == 'toggle':
-            valid = valid and text.count('Shader compiler selected: MSL') == 2 and text.count('Shader compiler selected: Metal IR') == 1
+            valid = valid and text.count('Shader compiler selected: ' + ('Metal IR' if enabled else 'MSL')) == 3
         elif not expected_failure:
             valid = valid and ('Shader compiler selected: ' + ('Metal IR' if enabled else 'MSL')) in text
         if enabled and not expected_failure:
@@ -85,7 +85,8 @@ def main():
         run('ir-' + kind + '-restored', kind, True, cache=cache)
         run('ir-' + kind + '-missing-compiler', kind, True, missing=True)
         run('msl-' + kind + '-missing-ir-compiler', kind, False, missing=True)
-    run('manual-device-selection', 'toggle', True)
+    run('immutable-ir-selection', 'toggle', True)
+    run('immutable-msl-selection', 'toggle', False)
     assert all(sha(Path(p)) == digest for p, digest in identity.items()), 'Input changed during replay'
     summary = {'passed': len(results), 'cases': len(results), 'allPassed': True,
                'scope': 'Synthetic system values, cache restore and explicit compiler selection. Not a game FPS or full Vulkan conformance gate.'}

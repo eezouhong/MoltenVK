@@ -129,11 +129,12 @@ int main(int argc,char** argv) {
     alarm(60);
     try {
         if (std::string(argv[1]) == "toggle") {
-            setenv("MELONX_EXPERIMENTAL_METAL_IR", "0", 1);
+            const char* first = getenv("MELONX_EXPERIMENTAL_METAL_IR");
+            bool initialIR = first && !strcmp(first, "1");
             bool success = graphics(argv[2],argv[3],false);
-            setenv("MELONX_EXPERIMENTAL_METAL_IR", "1", 1);
+            setenv("MELONX_EXPERIMENTAL_METAL_IR", initialIR ? "0" : "1", 1);
             success = graphics(argv[2],argv[3],false) && success;
-            setenv("MELONX_EXPERIMENTAL_METAL_IR", "0", 1);
+            setenv("MELONX_EXPERIMENTAL_METAL_IR", initialIR ? "1" : "0", 1);
             success = graphics(argv[2],argv[3],false) && success;
             return success ? 0 : 1;
         }

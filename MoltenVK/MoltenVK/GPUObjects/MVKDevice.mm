@@ -3411,6 +3411,7 @@ void MVKPhysicalDevice::initFeatures() {
 
 	// Additional non-extension Vulkan 1.4 features.
 	mvkClear(&_vulkan14NoExtFeatures);		// Start with everything cleared
+	// Physical-device advertising precedes logical MVKDevice and its shader backend.
 	_vulkan14NoExtFeatures.pushDescriptor = MVKShaderRouteCapabilities{mvkMetalIREnabled()}.supportsPushDescriptors();
 
 }
@@ -4084,6 +4085,7 @@ void MVKPhysicalDevice::initExtensions() {
 	MVKExtensionList* pWritableExtns = (MVKExtensionList*)&_supportedExtensions;
 	pWritableExtns->disableAllButEnabledDeviceExtensions();
 	// IR currently rejects push-descriptor layouts; advertise that limitation.
+	// This physical-device extension query has no logical-device backend yet.
 	if (!MVKShaderRouteCapabilities{mvkMetalIREnabled()}.supportsPushDescriptors()) pWritableExtns->vk_KHR_push_descriptor.enabled = false;
 
 	if (!_metalFeatures.subgroupUniformControlFlow) {

@@ -45,10 +45,16 @@ public:
     VkPipelineCache residencyCache{};
 
     explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
-                     bool floatControls2 = false, bool fragmentStorageMode = false, bool layeredOutputs = false)
+                     bool floatControls2 = false, bool fragmentStorageMode = false, bool layeredOutputs = false,
+                     bool portableLoader = false)
         : negativeDepth(negativeDepthMode), fragmentStorage(fragmentStorageMode) {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 || layeredOutputs ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
         VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
+        const char* portabilityExtension=VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        if(portableLoader) {
+            info.flags=VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+            info.enabledExtensionCount=1;info.ppEnabledExtensionNames=&portabilityExtension;
+        }
         VK_CHECK(vkCreateInstance(&info, nullptr, &instance));
         uint32_t count{}; VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
         if (!count) throw std::runtime_error("no GPU");

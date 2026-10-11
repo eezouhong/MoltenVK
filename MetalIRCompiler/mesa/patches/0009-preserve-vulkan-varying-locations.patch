@@ -1,0 +1,14 @@
+--- a/src/microsoft/compiler/dxil_signature.c
++++ b/src/microsoft/compiler/dxil_signature.c
+@@ -342,5 +342,10 @@
+    default: {
+-         info->index = var->data.driver_location;
++         /* Packed register rows are local to one shader. Vulkan Location is
++          * the cross-stage contract, including holes and declaration order. */
++         info->index = var->data.location >= VARYING_SLOT_VAR0 &&
++                       var->data.location <= VARYING_SLOT_VAR31
++            ? var->data.location - VARYING_SLOT_VAR0
++            : var->data.driver_location;
+          strcpy(info->name, "TEXCOORD");
+          info->kind = DXIL_SEM_ARBITRARY;
+       }

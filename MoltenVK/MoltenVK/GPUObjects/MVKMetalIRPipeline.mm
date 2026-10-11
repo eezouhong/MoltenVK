@@ -16,6 +16,8 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
     const VkPipelineShaderStageCreateInfo* pFragmentSS, uint32_t viewMask) {
 	uint32_t conflictingVertexBinding = UINT32_MAX;
 	const auto& capabilities = getDevice()->shaderBackend().capabilities();
+    const char* rejectionReason = capabilities.graphicsRejectionReason(isTessellationPipeline(), isMeshPipeline(),
+        pCreateInfo->pRasterizationState->rasterizerDiscardEnable, mvkIsMultiview(viewMask));
     bool tryMetalIR = capabilities.supportsGraphics(isTessellationPipeline(), isMeshPipeline(),
         pCreateInfo->pRasterizationState->rasterizerDiscardEnable, mvkIsMultiview(viewMask));
 	if (tryMetalIR && pCreateInfo->pVertexInputState) {
@@ -23,14 +25,18 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 		                                     pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
 			if (!capabilities.supportsVertexBinding(getMetalBufferIndexForVertexAttributeBinding(binding.binding))) {
 				tryMetalIR = false;
+                rejectionReason = "vertex_binding_conflict";
 				conflictingVertexBinding = binding.binding;
 			}
 		}
 	}
 	if (tryMetalIR && pCreateInfo->pMultisampleState && !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
-        pCreateInfo->pMultisampleState->minSampleShading)) tryMetalIR = false;
+        pCreateInfo->pMultisampleState->minSampleShading)) {
+        tryMetalIR = false;
+        rejectionReason = "sample_shading";
+    }
 	if (!tryMetalIR) {
-        mvkMetalIRRecordPipelineRejection(getDevice(), "graphics_route_capability");
+        mvkMetalIRRecordPipelineRejection(getDevice(), rejectionReason);
         setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
             "MetalIR graphics pipeline rejected: topology=%u, polygon=%u, discard=%u, view_mask=0x%x, sample_shading=%u, min_sample_shading=%.3f, vertex_binding=%u, vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
             pCreateInfo->pInputAssemblyState ? pCreateInfo->pInputAssemblyState->topology : UINT32_MAX,

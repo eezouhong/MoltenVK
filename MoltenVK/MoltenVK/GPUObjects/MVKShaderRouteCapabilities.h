@@ -12,6 +12,15 @@ struct MVKShaderRouteCapabilities {
     bool supportsGraphics(bool tessellation, bool mesh, bool discard, bool multiview) const {
         return !metalIR || (!tessellation && !mesh && !discard && !multiview);
     }
+    // Deterministic diagnostic classification only; supportsGraphics stays authoritative.
+    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool discard, bool multiview) const {
+        if (!metalIR) return nullptr;
+        if (tessellation) return "tessellation_stage";
+        if (mesh) return "mesh_stage";
+        if (discard) return "rasterizer_discard";
+        if (multiview) return "multiview";
+        return nullptr;
+    }
     bool supportsSampleShading(bool enabled, float minimum) const { return !metalIR || !enabled || minimum == 0.0f; }
     bool supportsVertexBinding(uint32_t index) const { return !metalIR || index > 2; }
     bool supportsRuntimeVertexBinding(uint32_t index) const { return !metalIR || (index != 4 && index != 5); }

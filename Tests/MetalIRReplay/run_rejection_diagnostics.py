@@ -1,5 +1,5 @@
 """Public rejection counter and reason fixtures; run through the shared GPU queue."""
-import argparse,json,os,subprocess
+import argparse,json,os,subprocess,re
 from pathlib import Path
 from run import sha
 
@@ -21,9 +21,11 @@ for label,native,mode,expected in cases:
  z=subprocess.run(command,env=dict(env,DYLD_LIBRARY_PATH=str(native.resolve().parent)),capture_output=True,text=True,timeout=45)
  log=z.stdout+z.stderr;(out/(label+'.log')).write_text(log)
  rows=[json.loads(s) for s in z.stdout.splitlines() if s.startswith('{')]
- valid=z.returncode==0 and len(rows)==1 and rows[0].get('counter')==expected and str(native.resolve()) in log and 'Metal GPU Validation Enabled' in log
+ loaded=re.findall(r'^dyld\[\d+\]: <[^>]+> (.+/libMoltenVK[^/]*\.dylib)$',log,re.M)
+ binary_ok=len(loaded)==1 and Path(loaded[0]).resolve()==native.resolve()
+ valid=z.returncode==0 and len(rows)==1 and rows[0].get('counter')==expected and binary_ok and 'Metal GPU Validation Enabled' in log
  if mode:valid &= rows[0].get('layoutRejected') is True and 'reason=descriptor_layout_capability' in log
  else:valid &= rows[0].get('rejected') is True and 'reason=rasterizer_discard' in log
- result={'case':label,'passed':bool(valid),'exitCode':z.returncode,'expectedCounter':expected,'oracle':rows};results.append(result)
+ result={'case':label,'passed':bool(valid),'binaryVerified':binary_ok,'exitCode':z.returncode,'expectedCounter':expected,'oracle':rows};results.append(result)
  (out/'results.json').write_text(json.dumps(results,indent=2));print(json.dumps(result),flush=True)
  if not valid:raise RuntimeError('Rejection fixture failed: '+label)

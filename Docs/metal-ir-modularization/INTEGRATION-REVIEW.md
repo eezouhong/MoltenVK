@@ -4,7 +4,7 @@ This PR replaces the review dependency stack with one diff against RC6 `8ec88055
 
 ## Scope boundary
 
-Native#34–#37 are excluded: Layer/ViewportIndex parser support, no-raster vertex producer/void AIR adaptation, loader dispatch lifetime and sparse varying linkage. Their compiler patches and probes are absent. The complete phone Build375 and formal-ID IPA Build376 contain those later fixes and are not artifacts for this narrower branch. Original PRs remain open/unmerged; this PR itself merges nothing.
+Native#34–#37 are excluded: Layer/ViewportIndex parser support, no-raster vertex producer/void AIR adaptation, loader dispatch lifetime and sparse varying linkage. Their compiler patches and probes are absent. The complete phone Build375 and formal-ID IPA Build376 contain those later fixes and are not artifacts for this narrower branch. At the user’s explicit request, superseded native24/27/28/29/30/31/32/33 are closed without merge; branches/history are preserved. This PR itself remains unmerged.
 
 Generic compiler code, Metal binding and the original point support are part of#24 and remain included. This boundary is a chronological feature/modularization scope, not a title-specific workaround. Known unsupported inputs still fail explicitly without MSL fallback. Experimental IR remains off by default.
 
@@ -30,3 +30,5 @@ Current focused validation is recorded in the final PR body after execution. His
 ## REVIEW-355-38 correction
 
 The earlier A1 premise was incorrect: `vkCreateDescriptorSetLayout` destroys a rejected layout and returns an error/null handle, so no later compilation can reuse it. The follow-up restores layout rejection count1 and removes the optional suppression parameter. The earlier count0 result remains in private historical evidence and is superseded. The compiler framework remains the pre-XC3 variant without Mesa patch0008; its source/binary hash is unchanged by this native counter fix.
+
+Housekeeping after code pin671fafcc only updates documentation; product355 continues pinning the rebuilt, tested code revision. Native34–37 stay open independently.

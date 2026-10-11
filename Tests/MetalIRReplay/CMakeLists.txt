@@ -163,3 +163,21 @@ if(APPLE AND EXISTS "${VULKAN_LOADER_LIBRARY}")
         "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/Vulkan")
     target_link_libraries(loader_handle_probe PRIVATE "${VULKAN_LOADER_LIBRARY}" "-framework Foundation" "-framework Metal" "-framework QuartzCore")
 endif()
+
+add_executable(varying_probe varying_probe.cpp)
+target_compile_features(varying_probe PRIVATE cxx_std_17)
+target_include_directories(varying_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(varying_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(varying_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+set(VARYING_SHADERS)
+foreach(KIND sparse reordered high array components flat gradient)
+    foreach(STAGE vert frag)
+        list(APPEND VARYING_SHADERS "${CMAKE_CURRENT_BINARY_DIR}/varying-${KIND}.${STAGE}.spv")
+    endforeach()
+endforeach()
+add_custom_command(OUTPUT ${VARYING_SHADERS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_varyings.py"
+        --output "${CMAKE_CURRENT_BINARY_DIR}" --glslang "${GLSLANG_VALIDATOR}" --validator "${SPIRV_VAL}"
+    DEPENDS prepare_varyings.py VERBATIM)
+add_custom_target(varying_shaders ALL DEPENDS ${VARYING_SHADERS})
+add_dependencies(varying_probe varying_shaders)

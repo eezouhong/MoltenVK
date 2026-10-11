@@ -10,6 +10,7 @@ class MVKShaderModule;
 class MVKPipelineLayout;
 class MVKPipeline;
 class MVKDevice;
+struct MVKMetalIRLifetimeCounters;
 struct MVKPipelineStageResourceInfo;
 struct MVKMetal4TextureViewBinding;
 
@@ -21,6 +22,8 @@ bool mvkMetalIRCompilerAvailable();
 // callers retain their original return/count contract.
 // Durations are nanoseconds; opt-in only.
 uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity);
+uint32_t mvkMetalIRSetTelemetryEnabled(uint32_t enabled);
+uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity);
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags);
 class MVKMetalIRPSOTimer {
     MVKDevice* _device=nullptr;
@@ -75,6 +78,11 @@ struct MVKMetalIRArtifact : MVKMetalIRMetadata {
     id<MTLLibrary> library = nil;
     id<MTLFunction> function = nil;
     std::shared_ptr<const MVKMetalIRMetadata> metadata;
+    // Statistics ownership is independent of device lifetime. A cache eviction
+    // can release the final artifact after the device map reference is removed.
+    std::shared_ptr<MVKMetalIRLifetimeCounters> lifetimeCounters;
+    uint64_t trackedMetallibBytes = 0;
+    bool trackedFunction = false;
     ~MVKMetalIRArtifact();
 };
 

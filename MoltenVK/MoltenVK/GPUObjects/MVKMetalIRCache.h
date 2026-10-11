@@ -52,6 +52,7 @@ private:
     // perform their reads without either lock.
     std::mutex _fileLock;
     std::atomic<uint64_t> _droppedWrites{0}, _failedWrites{0};
+    std::atomic<uint64_t> _completedWrites{0}, _writtenBytes{0};
     std::deque<Write> _pending;
     std::list<std::string> _lru;
     std::unordered_map<std::string,Entry> _entries;
@@ -141,6 +142,8 @@ private:
                             remember(work.key,sizeof(Header)+work.bindings.size()*8+work.bytes.size());
                         }
                         trim();
+                        ++_completedWrites;
+                        _writtenBytes += sizeof(Header) + work.bindings.size() * 8 + work.bytes.size();
                     } else {
                         ++_failedWrites;
                         std::filesystem::remove(temporary,error);
@@ -154,6 +157,16 @@ private:
         }
     }
 public:
+    struct Statistics {
+        uint64_t indexedBytes = 0, entries = 0, pendingBytes = 0, pendingCount = 0;
+        uint64_t droppedWrites = 0, failedWrites = 0, completedWrites = 0, writtenBytes = 0;
+    };
+    Statistics statistics() {
+        std::lock_guard<std::mutex> lock(_lock);
+        return {_diskBytes, _entries.size(), _pendingBytes, _pendingCount,
+                _droppedWrites.load(), _failedWrites.load(),
+                _completedWrites.load(), _writtenBytes.load()};
+    }
     explicit DiskCache(std::filesystem::path directory,uint64_t maxBytes=2ull*1024*1024*1024) noexcept : _maxBytes(maxBytes) {
       try {
         if(directory.empty())return;std::error_code error;

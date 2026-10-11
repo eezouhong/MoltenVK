@@ -25,6 +25,7 @@ public:
         uint64_t hits = 0, misses = 0, waits = 0, evictions = 0;
         uint64_t metadataInspections = 0, metadataPrunes = 0;
         size_t retained = 0, retainedBytes = 0, entries = 0;
+        size_t maxObjects = 0, maxBytes = 0;
     };
     ResidentCache(size_t objects, size_t bytes, size_t metadata = 4096)
         : _maxObjects(objects), _maxBytes(bytes), _maxMetadata(metadata) {}
@@ -98,6 +99,8 @@ public:
         result.retained = _recent.size();
         result.retainedBytes = _retainedBytes;
         result.entries = _entries.size();
+        result.maxObjects = _maxObjects;
+        result.maxBytes = _maxBytes;
         return result;
     }
 

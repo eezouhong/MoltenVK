@@ -1,8 +1,6 @@
 --- a/src/microsoft/compiler/dxil_signature.c
 +++ b/src/microsoft/compiler/dxil_signature.c
-@@ -340,7 +340,12 @@
-       break;
- 
+@@ -342,5 +342,10 @@
     default: {
 -         info->index = var->data.driver_location;
 +         /* Packed register rows are local to one shader. Vulkan Location is

@@ -27,10 +27,15 @@ int main(int argc,char** argv) {
     stages[0].module=context.shader(argv[1]);stages[1].module=context.shader(argv[2]);
     stages[0].pName=stages[1].pName="main";
     VkPipelineVertexInputStateCreateInfo vertex{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    // Retain the rejection-counter contract using a legal Vulkan binding that
+    // overlaps the IR backend's reserved Metal table slots, rather than discard.
+    VkPhysicalDeviceProperties properties{};vkGetPhysicalDeviceProperties(context.physical,&properties);
+    VkVertexInputBindingDescription reservedBinding{properties.limits.maxVertexInputBindings-1,16,VK_VERTEX_INPUT_RATE_VERTEX};
+    vertex.vertexBindingDescriptionCount=1;vertex.pVertexBindingDescriptions=&reservedBinding;
     VkPipelineInputAssemblyStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};input.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkViewport viewport{0,0,16,16,0,1};VkRect2D rect{{0,0},{16,16}};
     VkPipelineViewportStateCreateInfo view{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};view.viewportCount=1;view.pViewports=&viewport;view.scissorCount=1;view.pScissors=&rect;
-    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};raster.rasterizerDiscardEnable=VK_TRUE;raster.lineWidth=1;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};raster.lineWidth=1;
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};multisample.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
     VkPipelineColorBlendAttachmentState color{};color.colorWriteMask=0xf;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};blend.attachmentCount=1;blend.pAttachments=&color;

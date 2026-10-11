@@ -1,3 +1,4 @@
+#include "MVKShaderBackend.h"
 #include "MVKReplayTrace.h"
 /*
  * MVKDescriptorSet.mm
@@ -560,7 +561,7 @@ void MVKDescriptorBinding::populate(const VkDescriptorSetLayoutBinding& vk) {
 #pragma mark - MVKDescriptorSetLayout
 
 MVKDescriptorSetLayout::MVKDescriptorSetLayout(MVKDevice* device): MVKVulkanAPIDeviceObject(device) {
-    _metalIRStorage = device->isMetalIRShaderCompilerEnabled();
+    _metalIRStorage = device->shaderBackend().capabilities().metalIR;
     _descriptorStrategy = { _metalIRStorage ? &writeDescriptorSetBinding<true> : &writeDescriptorSetBinding<false>,
                             _metalIRStorage ? &mvkCopyMetalIRDescriptors : &copyDescriptorSetBinding };
 }
@@ -759,8 +760,9 @@ MVKDescriptorSetLayout* MVKDescriptorSetLayout::Create(MVKDevice* device, const 
 	// Immutable IR metadata is computed once, never by descriptor update loops.
 	if (!device->isMetalIRShaderCompilerEnabled()) return ret;
 	uint64_t irCount = 0, tableCounts[4] = {};
-	bool irEligible = (!hasAnyBindings || argBufMode == MVKArgumentBufferMode::Metal3) &&
-		!ret->isCPUAllocationVariable() && !ret->isGPUAllocationVariable() && !ret->dynamicOffsetCount(0);
+	bool irEligible = device->shaderBackend().capabilities().supportsDescriptorAllocation(!hasAnyBindings,
+        argBufMode == MVKArgumentBufferMode::Metal3, ret->isCPUAllocationVariable(),
+        ret->isGPUAllocationVariable(), ret->dynamicOffsetCount(0));
 	for (auto& binding : ret->_bindings) {
 		binding.metalIRDenseOffset = irCount <= UINT32_MAX ? (uint32_t)irCount : UINT32_MAX;
 		irCount += binding.descriptorCount;

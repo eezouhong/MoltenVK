@@ -15,20 +15,20 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
     const VkPipelineShaderStageCreateInfo* pVertexSS,
     const VkPipelineShaderStageCreateInfo* pFragmentSS, uint32_t viewMask) {
 	uint32_t conflictingVertexBinding = UINT32_MAX;
-	bool tryMetalIR = !isTessellationPipeline() && !isMeshPipeline() &&
-		!pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
-		!mvkIsMultiview(viewMask);
+	const auto& capabilities = getDevice()->shaderBackend().capabilities();
+    bool tryMetalIR = capabilities.supportsGraphics(isTessellationPipeline(), isMeshPipeline(),
+        pCreateInfo->pRasterizationState->rasterizerDiscardEnable, mvkIsMultiview(viewMask));
 	if (tryMetalIR && pCreateInfo->pVertexInputState) {
 		for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
 		                                     pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
-			if (getMetalBufferIndexForVertexAttributeBinding(binding.binding) <= 2) {
+			if (!capabilities.supportsVertexBinding(getMetalBufferIndexForVertexAttributeBinding(binding.binding))) {
 				tryMetalIR = false;
 				conflictingVertexBinding = binding.binding;
 			}
 		}
 	}
-	if (tryMetalIR && pCreateInfo->pMultisampleState && pCreateInfo->pMultisampleState->sampleShadingEnable &&
-		pCreateInfo->pMultisampleState->minSampleShading != 0.0f) tryMetalIR = false;
+	if (tryMetalIR && pCreateInfo->pMultisampleState && !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
+        pCreateInfo->pMultisampleState->minSampleShading)) tryMetalIR = false;
 	if (!tryMetalIR) {
         setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
             "MetalIR graphics pipeline rejected: topology=%u, polygon=%u, discard=%u, view_mask=0x%x, sample_shading=%u, min_sample_shading=%.3f, vertex_binding=%u, vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
@@ -49,7 +49,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
             ? MVK_METAL_IR_RENDERING_POINTS : 0;
         auto vertexIR = getDevice()->shaderBackend().compileStage({this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions, {}}).artifactOwner;
 		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
-            !(vertexIR->runtimeFlags & (MVK_METAL_IR_UNIT_POINT_SIZE | MVK_METAL_IR_NATIVE_POINT_SIZE))) {
+            !capabilities.supportsPointSize(vertexIR->runtimeFlags)) {
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
                 "MetalIR point pipeline has no native point size or proven one-pixel default: vertex_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
 				_vertexModule->getKey().codeHash, _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
@@ -59,7 +59,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 			for (const auto& binding : MVKArrayRef(pCreateInfo->pVertexInputState->pVertexBindingDescriptions,
 				pCreateInfo->pVertexInputState->vertexBindingDescriptionCount)) {
 				uint32_t index = getMetalBufferIndexForVertexAttributeBinding(binding.binding);
-				if (index == 4 || index == 5) {
+				if (!capabilities.supportsRuntimeVertexBinding(index)) {
 					setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "MetalIR runtime draw buffer conflicts with vertex binding; MSL fallback disabled."));
 					vertexIR.reset(); break;
 				}
@@ -67,7 +67,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 		}
         auto fragmentIR = vertexIR && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
         if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
-            !(fragmentIR->runtimeFlags & MVK_METAL_IR_NATIVE_POINT_COORDINATES)) {
+            !capabilities.supportsPointCoordinates(fragmentIR->runtimeFlags)) {
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
                 "MetalIR point coordinates have no native rasterizer input; MSL fallback disabled."));
 			return false;

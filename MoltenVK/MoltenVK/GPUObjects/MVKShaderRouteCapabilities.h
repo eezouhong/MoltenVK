@@ -15,6 +15,10 @@ struct MVKShaderRouteCapabilities {
     bool supportsRuntimeVertexBinding(uint32_t index) const { return !metalIR || (index != 4 && index != 5); }
     bool supportsPointSize(uint32_t flags) const { return !metalIR || (flags & (MVK_METAL_IR_UNIT_POINT_SIZE | MVK_METAL_IR_NATIVE_POINT_SIZE)); }
     bool supportsPointCoordinates(uint32_t flags) const { return !metalIR || (flags & MVK_METAL_IR_NATIVE_POINT_COORDINATES); }
+    bool supportsDescriptorAllocation(bool empty, bool metal3, bool cpuVariable, bool gpuVariable, bool dynamicOffsets) const {
+        return !metalIR || ((empty || metal3) && !cpuVariable && !gpuVariable && !dynamicOffsets);
+    }
+    bool supportsDescriptorType(bool unsupportedKind, bool multiPlane) const { return !metalIR || (!unsupportedKind && !multiPlane); }
     bool supportsDescriptorLayout(bool empty, bool metal3, bool cpuVariable, bool gpuVariable,
                                   bool dynamicOffsets, bool hasTable) const {
         return !metalIR || empty || (metal3 && !cpuVariable && !gpuVariable && !dynamicOffsets && hasTable);

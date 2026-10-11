@@ -1,3 +1,4 @@
+#include "MVKShaderBackend.h"
 #include "MVKReplayTrace.h"
 #include "MVKMetalIR.h"
 #include "MVKShaderRouteConfig.h"
@@ -342,7 +343,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     const char* stages=compileConfig.stages;
     if(stages&&((strcmp(stages,"graphics")==0&&stage->stage==VK_SHADER_STAGE_COMPUTE_BIT)||
                 (strcmp(stages,"compute")==0&&stage->stage!=VK_SHADER_STAGE_COMPUTE_BIT)))return reject("stage filter excludes the requested IR shader");
-    if(layout->getDescriptorSetCount()>8)return reject("descriptor set count exceeds IR ABI");
+    const auto& capabilities = owner->getDevice()->shaderBackend().capabilities();
+    if(!capabilities.supportsDescriptorSets(layout->getDescriptorSetCount()))return reject("descriptor set count exceeds IR ABI");
     std::vector<MVKMetalIRBinding> bindings;std::vector<uint32_t> sizes;
     for(uint32_t set=0;set<layout->getDescriptorSetCount();++set) {
         auto* dsl=layout->getDescriptorSetLayout(set);
@@ -360,8 +362,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         if(dsl->dynamicOffsetCount(0))return reject("dynamic descriptor offsets unsupported");
         if(!mvkMetalIRTableBytes(dsl))return reject("descriptor layout lacks an IR table");
         for(const auto& b:dsl->bindings()) {
-            if(b.descriptorType==VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK||b.descriptorType==VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)return reject("descriptor type unsupported");
-            if(b.gpuLayout==MVKDescriptorGPULayout::Tex2SampSoA||b.gpuLayout==MVKDescriptorGPULayout::Tex3SampSoA)return reject("multi-plane descriptor unsupported");
+            if(!capabilities.supportsDescriptorType(b.descriptorType==VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK||b.descriptorType==VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,false))return reject("descriptor type unsupported");
+            if(!capabilities.supportsDescriptorType(false,b.gpuLayout==MVKDescriptorGPULayout::Tex2SampSoA||b.gpuLayout==MVKDescriptorGPULayout::Tex3SampSoA))return reject("multi-plane descriptor unsupported");
             MVKMetalIRBinding irBinding{set,b.binding,b.descriptorCount,(uint32_t)b.descriptorType,mvkMetalIRDenseBinding(dsl,b.binding),{}};
             std::copy(std::begin(b.metalIRTableOffsets),std::end(b.metalIRTableOffsets),irBinding.tableOffsets);
             bindings.push_back(irBinding);

@@ -1,6 +1,7 @@
 #pragma once
 #include "MVKShaderModule.h"
 #include "MVKShaderRouteCapabilities.h"
+#include "MVKLibraryResidency.h"
 #include <functional>
 #include <memory>
 
@@ -29,9 +30,10 @@ struct MVKShaderStageResult {
 
 class MVKShaderBackend {
 public:
-    explicit MVKShaderBackend(bool ir) : _capabilities{ir} {}
+    explicit MVKShaderBackend(bool ir) : _capabilities{ir}, _residency(MVKLibraryResidency::create(ir)) {}
     virtual ~MVKShaderBackend() = default;
     const MVKShaderRouteCapabilities& capabilities() const { return _capabilities; }
+    MVKLibraryResidency& libraryResidency() const { return *_residency; }
     virtual MVKShaderStageResult compileStage(const MVKShaderStageRequest&) const = 0;
     virtual bool addGraphicsStages(const std::function<bool()>& msl,
                                    const std::function<bool()>& ir) const = 0;
@@ -40,4 +42,5 @@ public:
     static MVKShaderBackend* create(bool ir);
 private:
     const MVKShaderRouteCapabilities _capabilities;
+    const std::unique_ptr<MVKLibraryResidency> _residency;
 };

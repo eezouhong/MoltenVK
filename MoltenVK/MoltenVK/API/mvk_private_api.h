@@ -571,6 +571,14 @@ VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
  * Explicit unavailable IR keeps its existing failure path, never MSL fallback. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity);
 
+/** Version1 library-residency adapter snapshot:16 uint64 fields, with explicit
+ * scope and validity. See Docs/metal-ir-modularization/LIBRARY-RESIDENCY-ABI.md. */
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderLibraryResidencyStatisticsMVK(VkDevice device, uint64_t* values, uint32_t capacity);
+/** Explicit pressure boundary. Retains existing configured trim/idle-relief
+ * semantics; never called automatically by UIKit or normal frame processing. */
+VKAPI_ATTR VkResult VKAPI_CALL vkTrimShaderLibraryResidencyMVK(VkDevice device);
+
+
 
 /** Configures per-device metallib/reflection persistence before the first IR
  * compilation. maxBytes == 0 is unlimited. Errors leave IR compilation usable. */

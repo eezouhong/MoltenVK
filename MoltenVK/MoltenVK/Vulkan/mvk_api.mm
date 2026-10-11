@@ -1,3 +1,4 @@
+#include "MVKShaderBackend.h"
 #include "MVKShaderRouteConfig.h"
 #include "MVKReplayBindingTrace.h"
 #include "MVKReplayTrace.h"
@@ -171,6 +172,19 @@ extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkBool32 vkGetReplaySubmissionStatisticsMVK(
     return mvkreplay::submissionSnapshot(output);
 }
 #endif
+
+MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetShaderLibraryResidencyStatisticsMVK(VkDevice device, uint64_t* output, uint32_t capacity) {
+    if (!device || !output || capacity<16) return 0;
+    auto* owner=MVKDevice::getMVKDevice(device);
+    auto stats=owner->shaderBackend().libraryResidency().statistics(owner);
+    std::copy(stats.begin(),stats.end(),output);
+    return uint32_t(stats.size());
+}
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkTrimShaderLibraryResidencyMVK(VkDevice device) {
+    if (!device) return VK_ERROR_INITIALIZATION_FAILED;
+    auto* owner=MVKDevice::getMVKDevice(device);
+    return owner->shaderBackend().libraryResidency().trimPressure(owner);
+}
 
 MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity) {
     if (!values || capacity < 5) return 0;

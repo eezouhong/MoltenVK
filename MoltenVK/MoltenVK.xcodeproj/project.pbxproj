@@ -624,6 +624,7 @@
 		05491DA76F6DA168023D2F43 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		45524C79FEC824A1722E4700 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		62FC8D73FE466E3C51F36A31 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		508E1B111E93F79220F01E41 /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		7E488128D6282538F0409537 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		5313EBEBD32BC2F88C3498BD /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		C5FDE67AB4EF6513C4F42030 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -638,6 +639,7 @@
 		769485C78CCF9BA30C873928 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		BC012C32DE860E677B76B095 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		E0EB1D89C29EC7C5361349BF /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		09169A0B8088E25D4AC57BE5 /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		D3D2C18A9A9F8676788F2616 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		8753AE1E63102AA7BD06F111 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		45D356B32A1636F74CBBC4BB /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -650,6 +652,7 @@
 		5039F07AFCA785280ACB3D9D /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 37BB91DBAE29A100D0752CDF /* MVKMetalIRCommandEncoding.mm */; };
 		57BA4F49707DB407C758E5B6 /* MVKMetalIR.mm in Sources */ = {isa = PBXBuildFile; fileRef = AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */; };
 		934863231774C79E7F43A97F /* MVKShaderRouteConfig.mm in Sources */ = {isa = PBXBuildFile; fileRef = BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */; };
+		D1FE96A5CC21CACB224624CB /* MVKLibraryResidency.mm in Sources */ = {isa = PBXBuildFile; fileRef = A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */; };
 		EE067AD6527A34A0324160BB /* MVKShaderBackend.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */; };
 		C13A97534893C14BD096DDEA /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */; };
 		AF39C3301A73035311871B84 /* MVKMetalIRPipeline.mm in Sources */ = {isa = PBXBuildFile; fileRef = 90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */; };
@@ -658,6 +661,7 @@
 		62E42C9AD99AC17A844C1D14 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		04578B32C1B284ADBFAF161B /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		7A7EB3C4A8B04DC5530B1641 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		58E387847178DC558EB034CE /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		7F4B8F7A9431D21BBE0C8E45 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		A97E009EF844046B2B24A60B /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		48F68F0537334CE8A1D11744 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -672,6 +676,7 @@
 		9590D07CB57EF4A4271C1799 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		744FB2F18FFF383A48224DD4 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		1EBC44308030AFBFF4D97CF0 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		9B4886EA62FC48EAF34280FF /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		B84F37C259C2618F2754AB8D /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		BB8313A32B3629A173CC3FDB /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		29B7C1EFE0B1213F6549659D /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -684,6 +689,7 @@
 		21C154EC76D6F7177126CBE8 /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 37BB91DBAE29A100D0752CDF /* MVKMetalIRCommandEncoding.mm */; };
 		6A6B27BE17B346CF16743A51 /* MVKMetalIR.mm in Sources */ = {isa = PBXBuildFile; fileRef = AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */; };
 		8E71DCFD7E393DA7CB838391 /* MVKShaderRouteConfig.mm in Sources */ = {isa = PBXBuildFile; fileRef = BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */; };
+		555E79D8D0AE376293DA5EC2 /* MVKLibraryResidency.mm in Sources */ = {isa = PBXBuildFile; fileRef = A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */; };
 		85147B0171BD70973155F235 /* MVKShaderBackend.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */; };
 		FF201A95C13919D2EFA41BCB /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */; };
 		A57F519EEFB05415C5AF22A3 /* MVKMetalIRPipeline.mm in Sources */ = {isa = PBXBuildFile; fileRef = 90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */; };
@@ -692,6 +698,7 @@
 		53C22F37C181557CD7873FF5 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		AD9D4E879D42AE0A38B68FD3 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		373CE02837D2B5DD96836178 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		C4B41D81A40EFA6B069DBC0C /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		052589F6FA73EB4638DE7605 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		0B52A215C7F9DC3B611909E1 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		248E21AA016FE1A24EC7389C /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -706,6 +713,7 @@
 		9A22E9F7972DC0074DE0C886 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		6A5BE15530B2F15D2C63AF52 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		3F3803E67FBEBF57238D2513 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		254F7B02D79A55EB78FABB9C /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		22C113BFAA0F3E959D862820 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		53B964B4676A0D98C8B9C749 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		2C4526A503F2DFDEDC263AE8 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -720,6 +728,7 @@
 		796AB35F5061E75575986BA8 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		0642572BAF00E7E1D3A7B07D /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		B0D3A6502C55D93943C6437F /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		6D8EA8B852FA364B9EC2E2EF /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		58916A092916B0BE05DABDF6 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		B823EA2C40E80DA36D309452 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		FBA537984526358861AFD3D0 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -732,6 +741,7 @@
 		6DED3360FE835D03A6022814 /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 37BB91DBAE29A100D0752CDF /* MVKMetalIRCommandEncoding.mm */; };
 		460FD261E7756DB9A7588544 /* MVKMetalIR.mm in Sources */ = {isa = PBXBuildFile; fileRef = AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */; };
 		46D657A675899DB53E1DED63 /* MVKShaderRouteConfig.mm in Sources */ = {isa = PBXBuildFile; fileRef = BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */; };
+		3F6D987372D51E190CDFF71C /* MVKLibraryResidency.mm in Sources */ = {isa = PBXBuildFile; fileRef = A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */; };
 		D77C332542A2F0DF591981F1 /* MVKShaderBackend.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */; };
 		FE8B69809125923A9666CE62 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */; };
 		4CAF9E28F6308F47C003942B /* MVKMetalIRPipeline.mm in Sources */ = {isa = PBXBuildFile; fileRef = 90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */; };
@@ -740,6 +750,7 @@
 		FA1F29996A5B9971AC1E12A7 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		5CB2E1B7E5806CF5BDFC4417 /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		D1E4DDB4C908FEA580B06364 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		9286D52136A425F386039140 /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		8CE23F0FC88FDBA013E5C39A /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		660B85A3AEF02F7A2CFAFAC9 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		6A9F277D7DD6BB750D94833C /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -754,6 +765,7 @@
 		DA50FAC9FAFBB3B6AD1CBA28 /* MVKMetalIRResourceBinding.h in Headers */ = {isa = PBXBuildFile; fileRef = 2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */; };
 		A31EE92BFC05FB1BB9C3108D /* MVKMetalIR.h in Headers */ = {isa = PBXBuildFile; fileRef = 99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */; };
 		060E98CACC0F8417ACBB10D2 /* MVKShaderRouteConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */; };
+		CE033F5240153342F3BC16DD /* MVKLibraryResidency.h in Headers */ = {isa = PBXBuildFile; fileRef = 8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */; };
 		95BCE67C483937EA162D6DA0 /* MVKShaderRouteCapabilities.h in Headers */ = {isa = PBXBuildFile; fileRef = 6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */; };
 		5B4F1C19A812DE5596789B04 /* MVKShaderBackend.h in Headers */ = {isa = PBXBuildFile; fileRef = F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */; };
 		BD91058B23565091634D1C72 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
@@ -766,6 +778,7 @@
 		A4C12B068C50E10246642F3B /* MVKMetalIRCommandEncoding.mm in Sources */ = {isa = PBXBuildFile; fileRef = 37BB91DBAE29A100D0752CDF /* MVKMetalIRCommandEncoding.mm */; };
 		4B5749105CF1BDBFD8296AC8 /* MVKMetalIR.mm in Sources */ = {isa = PBXBuildFile; fileRef = AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */; };
 		6923925809E841E6D0F7A80B /* MVKShaderRouteConfig.mm in Sources */ = {isa = PBXBuildFile; fileRef = BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */; };
+		FE19694BB6EB9747EE0B28DB /* MVKLibraryResidency.mm in Sources */ = {isa = PBXBuildFile; fileRef = A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */; };
 		B4A9B26A550BE94E0CE6043A /* MVKShaderBackend.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */; };
 		0BE7ABD4C6813B2DE7C34CB9 /* MVKMetalIRDescriptors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */; };
 		5C94073501456D9FED5ACEC7 /* MVKMetalIRPipeline.mm in Sources */ = {isa = PBXBuildFile; fileRef = 90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */; };
@@ -1032,10 +1045,12 @@
 		2C140330237DAC665A92429F /* MVKMetalIRResourceBinding.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRResourceBinding.h; sourceTree = "<group>"; };
 		99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIR.h; sourceTree = "<group>"; };
 		6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKShaderRouteConfig.h; sourceTree = "<group>"; };
+		8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKLibraryResidency.h; sourceTree = "<group>"; };
 		6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKShaderRouteCapabilities.h; sourceTree = "<group>"; };
 		F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKShaderBackend.h; sourceTree = "<group>"; };
 		AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIR.mm; sourceTree = "<group>"; };
 		BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKShaderRouteConfig.mm; sourceTree = "<group>"; };
+		A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKLibraryResidency.mm; sourceTree = "<group>"; };
 		6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKShaderBackend.mm; sourceTree = "<group>"; };
 		428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRBridge.h; sourceTree = "<group>"; };
 		C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRCache.h; sourceTree = "<group>"; };
@@ -1204,10 +1219,12 @@
 			children = (
 				99FE68A4BC1195A1C0B19B08 /* MVKMetalIR.h */,
 				6C646754399E5962477DC679 /* MVKShaderRouteConfig.h */,
+				8A28992F27CFC40B064991EC /* MVKLibraryResidency.h */,
 				6CE4AEC7E1465F393787AF16 /* MVKShaderRouteCapabilities.h */,
 				F79A9315DD86C3387453FF42 /* MVKShaderBackend.h */,
 				AACBF7026EABF5F69324DAA9 /* MVKMetalIR.mm */,
 				BE0DE40E395365CC38626000 /* MVKShaderRouteConfig.mm */,
+				A1EEE345B104890DFBEBC5D4 /* MVKLibraryResidency.mm */,
 				6FE141D4040B569B8FDA1E25 /* MVKShaderBackend.mm */,
 				428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */,
 				C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */,
@@ -1432,6 +1449,7 @@
 				796AB35F5061E75575986BA8 /* MVKMetalIRResourceBinding.h in Headers */,
 				0642572BAF00E7E1D3A7B07D /* MVKMetalIR.h in Headers */,
 				B0D3A6502C55D93943C6437F /* MVKShaderRouteConfig.h in Headers */,
+				6D8EA8B852FA364B9EC2E2EF /* MVKLibraryResidency.h in Headers */,
 				58916A092916B0BE05DABDF6 /* MVKShaderRouteCapabilities.h in Headers */,
 				B823EA2C40E80DA36D309452 /* MVKShaderBackend.h in Headers */,
 				FBA537984526358861AFD3D0 /* MVKMetalIRBridge.h in Headers */,
@@ -1534,6 +1552,7 @@
 				05491DA76F6DA168023D2F43 /* MVKMetalIRResourceBinding.h in Headers */,
 				45524C79FEC824A1722E4700 /* MVKMetalIR.h in Headers */,
 				62FC8D73FE466E3C51F36A31 /* MVKShaderRouteConfig.h in Headers */,
+				508E1B111E93F79220F01E41 /* MVKLibraryResidency.h in Headers */,
 				7E488128D6282538F0409537 /* MVKShaderRouteCapabilities.h in Headers */,
 				5313EBEBD32BC2F88C3498BD /* MVKShaderBackend.h in Headers */,
 				C5FDE67AB4EF6513C4F42030 /* MVKMetalIRBridge.h in Headers */,
@@ -1565,6 +1584,7 @@
 				DA50FAC9FAFBB3B6AD1CBA28 /* MVKMetalIRResourceBinding.h in Headers */,
 				A31EE92BFC05FB1BB9C3108D /* MVKMetalIR.h in Headers */,
 				060E98CACC0F8417ACBB10D2 /* MVKShaderRouteConfig.h in Headers */,
+				CE033F5240153342F3BC16DD /* MVKLibraryResidency.h in Headers */,
 				95BCE67C483937EA162D6DA0 /* MVKShaderRouteCapabilities.h in Headers */,
 				5B4F1C19A812DE5596789B04 /* MVKShaderBackend.h in Headers */,
 				BD91058B23565091634D1C72 /* MVKMetalIRBridge.h in Headers */,
@@ -1666,6 +1686,7 @@
 				769485C78CCF9BA30C873928 /* MVKMetalIRResourceBinding.h in Headers */,
 				BC012C32DE860E677B76B095 /* MVKMetalIR.h in Headers */,
 				E0EB1D89C29EC7C5361349BF /* MVKShaderRouteConfig.h in Headers */,
+				09169A0B8088E25D4AC57BE5 /* MVKLibraryResidency.h in Headers */,
 				D3D2C18A9A9F8676788F2616 /* MVKShaderRouteCapabilities.h in Headers */,
 				8753AE1E63102AA7BD06F111 /* MVKShaderBackend.h in Headers */,
 				45D356B32A1636F74CBBC4BB /* MVKMetalIRBridge.h in Headers */,
@@ -1767,6 +1788,7 @@
 				62E42C9AD99AC17A844C1D14 /* MVKMetalIRResourceBinding.h in Headers */,
 				04578B32C1B284ADBFAF161B /* MVKMetalIR.h in Headers */,
 				7A7EB3C4A8B04DC5530B1641 /* MVKShaderRouteConfig.h in Headers */,
+				58E387847178DC558EB034CE /* MVKLibraryResidency.h in Headers */,
 				7F4B8F7A9431D21BBE0C8E45 /* MVKShaderRouteCapabilities.h in Headers */,
 				A97E009EF844046B2B24A60B /* MVKShaderBackend.h in Headers */,
 				48F68F0537334CE8A1D11744 /* MVKMetalIRBridge.h in Headers */,
@@ -1798,6 +1820,7 @@
 				FA1F29996A5B9971AC1E12A7 /* MVKMetalIRResourceBinding.h in Headers */,
 				5CB2E1B7E5806CF5BDFC4417 /* MVKMetalIR.h in Headers */,
 				D1E4DDB4C908FEA580B06364 /* MVKShaderRouteConfig.h in Headers */,
+				9286D52136A425F386039140 /* MVKLibraryResidency.h in Headers */,
 				8CE23F0FC88FDBA013E5C39A /* MVKShaderRouteCapabilities.h in Headers */,
 				660B85A3AEF02F7A2CFAFAC9 /* MVKShaderBackend.h in Headers */,
 				6A9F277D7DD6BB750D94833C /* MVKMetalIRBridge.h in Headers */,
@@ -1829,6 +1852,7 @@
 				9A22E9F7972DC0074DE0C886 /* MVKMetalIRResourceBinding.h in Headers */,
 				6A5BE15530B2F15D2C63AF52 /* MVKMetalIR.h in Headers */,
 				3F3803E67FBEBF57238D2513 /* MVKShaderRouteConfig.h in Headers */,
+				254F7B02D79A55EB78FABB9C /* MVKLibraryResidency.h in Headers */,
 				22C113BFAA0F3E959D862820 /* MVKShaderRouteCapabilities.h in Headers */,
 				53B964B4676A0D98C8B9C749 /* MVKShaderBackend.h in Headers */,
 				2C4526A503F2DFDEDC263AE8 /* MVKMetalIRBridge.h in Headers */,
@@ -1860,6 +1884,7 @@
 				53C22F37C181557CD7873FF5 /* MVKMetalIRResourceBinding.h in Headers */,
 				AD9D4E879D42AE0A38B68FD3 /* MVKMetalIR.h in Headers */,
 				373CE02837D2B5DD96836178 /* MVKShaderRouteConfig.h in Headers */,
+				C4B41D81A40EFA6B069DBC0C /* MVKLibraryResidency.h in Headers */,
 				052589F6FA73EB4638DE7605 /* MVKShaderRouteCapabilities.h in Headers */,
 				0B52A215C7F9DC3B611909E1 /* MVKShaderBackend.h in Headers */,
 				248E21AA016FE1A24EC7389C /* MVKMetalIRBridge.h in Headers */,
@@ -1891,6 +1916,7 @@
 				9590D07CB57EF4A4271C1799 /* MVKMetalIRResourceBinding.h in Headers */,
 				744FB2F18FFF383A48224DD4 /* MVKMetalIR.h in Headers */,
 				1EBC44308030AFBFF4D97CF0 /* MVKShaderRouteConfig.h in Headers */,
+				9B4886EA62FC48EAF34280FF /* MVKLibraryResidency.h in Headers */,
 				B84F37C259C2618F2754AB8D /* MVKShaderRouteCapabilities.h in Headers */,
 				BB8313A32B3629A173CC3FDB /* MVKShaderBackend.h in Headers */,
 				29B7C1EFE0B1213F6549659D /* MVKMetalIRBridge.h in Headers */,
@@ -2613,6 +2639,7 @@
 				6DED3360FE835D03A6022814 /* MVKMetalIRCommandEncoding.mm in Sources */,
 				460FD261E7756DB9A7588544 /* MVKMetalIR.mm in Sources */,
 				46D657A675899DB53E1DED63 /* MVKShaderRouteConfig.mm in Sources */,
+				3F6D987372D51E190CDFF71C /* MVKLibraryResidency.mm in Sources */,
 				D77C332542A2F0DF591981F1 /* MVKShaderBackend.mm in Sources */,
 				FE8B69809125923A9666CE62 /* MVKMetalIRDescriptors.mm in Sources */,
 				4CAF9E28F6308F47C003942B /* MVKMetalIRPipeline.mm in Sources */,
@@ -2684,6 +2711,7 @@
 				A4C12B068C50E10246642F3B /* MVKMetalIRCommandEncoding.mm in Sources */,
 				4B5749105CF1BDBFD8296AC8 /* MVKMetalIR.mm in Sources */,
 				6923925809E841E6D0F7A80B /* MVKShaderRouteConfig.mm in Sources */,
+				FE19694BB6EB9747EE0B28DB /* MVKLibraryResidency.mm in Sources */,
 				B4A9B26A550BE94E0CE6043A /* MVKShaderBackend.mm in Sources */,
 				0BE7ABD4C6813B2DE7C34CB9 /* MVKMetalIRDescriptors.mm in Sources */,
 				5C94073501456D9FED5ACEC7 /* MVKMetalIRPipeline.mm in Sources */,
@@ -2746,6 +2774,7 @@
 				5039F07AFCA785280ACB3D9D /* MVKMetalIRCommandEncoding.mm in Sources */,
 				57BA4F49707DB407C758E5B6 /* MVKMetalIR.mm in Sources */,
 				934863231774C79E7F43A97F /* MVKShaderRouteConfig.mm in Sources */,
+				D1FE96A5CC21CACB224624CB /* MVKLibraryResidency.mm in Sources */,
 				EE067AD6527A34A0324160BB /* MVKShaderBackend.mm in Sources */,
 				C13A97534893C14BD096DDEA /* MVKMetalIRDescriptors.mm in Sources */,
 				AF39C3301A73035311871B84 /* MVKMetalIRPipeline.mm in Sources */,
@@ -2840,6 +2869,7 @@
 				21C154EC76D6F7177126CBE8 /* MVKMetalIRCommandEncoding.mm in Sources */,
 				6A6B27BE17B346CF16743A51 /* MVKMetalIR.mm in Sources */,
 				8E71DCFD7E393DA7CB838391 /* MVKShaderRouteConfig.mm in Sources */,
+				555E79D8D0AE376293DA5EC2 /* MVKLibraryResidency.mm in Sources */,
 				85147B0171BD70973155F235 /* MVKShaderBackend.mm in Sources */,
 				FF201A95C13919D2EFA41BCB /* MVKMetalIRDescriptors.mm in Sources */,
 				A57F519EEFB05415C5AF22A3 /* MVKMetalIRPipeline.mm in Sources */,

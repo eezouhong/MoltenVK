@@ -1,0 +1,15 @@
+# Phase 4: native compilation backend and command policy
+
+Stacked on native #31. Each device owns a stateless MSL or IR stage backend. The result carries the existing MVKMTLFunction (reflection, optional Metal4 descriptor/key) and IR metadata/artifact owner. MSL callbacks wrap the original module/cache conversion logic; IR wraps mvkCompileMetalIR and the existing graphics helper. Shader conversion names are retained. IR still uses its existing legacy PSO API; VkPipelineCache API, plugin/per-key wait/disk-write ordering are unchanged.
+
+Descriptor writer/copier pointers are grouped into a strategy object with their original callbacks. Draw/dispatch use an inline, non-owning command hook facade. Five ownership/binding files remain byte-identical: CommandEncoderState.h/mm, CommandBuffer.mm, MetalIRCommandEncoding.h/mm. The same encoder arena member and begin/reset boundaries are retained; metadata dispatch and non-IR slot clearing are untouched.
+
+Accepted stages, graphics conditions, sample shading, reserved vertex slots, point semantics and descriptor eligibility are centralized in route capabilities. Source/math/CPU lattice checks preserve the original decisions, including NaN sample-shading behavior. Push-descriptor advertising reads the same policy and retains its original value.
+
+Fix #333 takes the explicitly allowed conservative option: no feature bit or extension advertising is changed. Mesh support controls front-end VTG mesh linking and compute-emulation choice; tessellation support is retained in hardware capability state without a proven universal guest fallback. Successful startup/coverage of every alternate path cannot be guaranteed from source alone. Existing rejected inputs now have a clear reason log and basic rejection count; return codes, null handles and no-MSL-fallback remain unchanged. Thus #333 advertising alignment remains open for a separate product decision.
+
+Validation: full native Release build; CPU input-policy matrix;24 execution/cache/freeze cases; IR descriptor oracle40/40;14 point cases;48 MSL/IR scalar math cases with GPU validation pass. Dedicated legal raster-discard input still returns VK_ERROR_FEATURE_NOT_PRESENT, null pipeline, rejection count1. Its first run caught a missing logging call; the call was repaired in a separate #333 fix commit and the failed log retained. Positive execution results are unaffected by this counter-only repair.
+
+Additional MSL descriptor oracle is NOT accepted: current and saved phase1 binaries both lose the device with Invalid Resource on the same input, exact identities verified. This new observed failure form is attached to existing #294, not blamed on the refactor or counted as passing. Other MSL runtime/math/point checks pass. No physical-memory, game FPS, iOS/XC3 or whole-game correctness claim.
+
+Raw phase4-evidence includes exact loaded binary/plugin identities, baseline comparison, first failed rejection, corrected rejection and untouched-file checks. Defaults64/8MiB,512,workers,math and route unchanged. Phase5 follows without an interim review stop.

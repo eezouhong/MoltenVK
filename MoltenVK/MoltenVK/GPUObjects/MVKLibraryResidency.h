@@ -1,5 +1,5 @@
 #pragma once
-#include "mvk_private_api.h"
+#include "MVKFoundation.h"
 #include <array>
 
 class MVKDevice;

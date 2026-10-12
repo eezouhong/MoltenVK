@@ -20,6 +20,8 @@
 
 
 #include "MVKBaseObject.h"
+#include <memory>
+class MVKGPUFaultDiagnostics;
 #include <string>
 
 #import <Metal/Metal.h>
@@ -82,7 +84,8 @@ public:
      * match the specified texture, creates a Metal encoder from the specified Metal 
      * command buffer, and calls render(encoder, interval) to render to the texture.
      */
-    void render(id<MTLTexture> mtlTexture, id<MTLCommandBuffer> mtlCommandBuffer, double frameInterval);
+    void render(id<MTLTexture> mtlTexture, id<MTLCommandBuffer> mtlCommandBuffer, double frameInterval,
+                std::shared_ptr<MVKGPUFaultDiagnostics> diagnostics = nullptr);
 
     MVKWatermark(id<MTLDevice> mtlDevice,
                  unsigned char* textureContent,

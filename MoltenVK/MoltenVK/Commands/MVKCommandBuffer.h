@@ -99,6 +99,8 @@ class MVKCommandBuffer : public MVKDispatchableVulkanAPIObject,
 						 public MVKDeviceTrackingMixin,
 						 public MVKLinkableMixin<MVKCommandBuffer> {
 public:
+    uint64_t gpuFaultRecordingId = 0;
+
 
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_COMMAND_BUFFER; }
@@ -249,6 +251,11 @@ typedef std::unordered_map<MVKQueryPool*, MVKSmallVector<uint32_t, kMVKDefaultQu
 class MVKCommandEncoder : public MVKBaseDeviceObject {
 
 public:
+    void recordGPUFaultPipeline(MVKPipeline* pipeline, id<MTLCommandEncoder> encoder);
+    std::shared_ptr<MVKGPUFaultDiagnostics> _gpuFaultDiagnostics;
+    uintptr_t _lastGPUFaultPipeline = 0;
+    uint32_t _gpuFaultSignposts = 0;
+
 
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return _cmdBuffer->getVulkanAPIObject(); };

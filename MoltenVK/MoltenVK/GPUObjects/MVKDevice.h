@@ -26,6 +26,7 @@
 #include "MVKSmallVector.h"
 #include "MVKPixelFormats.h"
 #include "MVKOSExtensions.h"
+#include "MVKGPUFaultDiagnostics.h"
 #include "mvk_datatypes.hpp"
 #include <shared_mutex>
 #include <string>
@@ -729,6 +730,15 @@ private:
 class MVKDevice : public MVKDispatchableVulkanAPIObject {
 
 public:
+    std::shared_ptr<MVKGPUFaultDiagnostics> getGPUFaultDiagnostics() const {
+        if (!_gpuFaultEnabled.load(std::memory_order_relaxed)) return nullptr;
+        return std::atomic_load(&_gpuFaultDiagnostics);
+    }
+    void configureGPUFaultDiagnostics(const char* path, uint64_t session) {
+        auto state = path && path[0] == '/' ? std::make_shared<MVKGPUFaultDiagnostics>(path, session) : nullptr;
+        std::atomic_store(&_gpuFaultDiagnostics, state);
+        _gpuFaultEnabled.store(state != nullptr, std::memory_order_release);
+    }
 
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_DEVICE; }
@@ -1141,6 +1151,8 @@ public:
 	}
 
 protected:
+    std::atomic<bool> _gpuFaultEnabled{false};
+    std::shared_ptr<MVKGPUFaultDiagnostics> _gpuFaultDiagnostics;
 	friend class MVKDeviceTrackingMixin;
 
 	void propagateDebugName() override  {}

@@ -655,6 +655,7 @@ void MVKCmdBlitImage<N>::encode(MVKCommandEncoder* cmdEncoder, MVKCommandUse com
                 id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPD];
                 if(mtlRendEnc)mvkreplay::encoderStarted(0);
 				cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mvkMTLRenderCommandEncoderLabel(commandUse));
+                if (cmdEncoder->_gpuFaultDiagnostics) cmdEncoder->_gpuFaultDiagnostics->encoder(cmdEncoder->_mtlCmdBuffer, mtlRendEnc, "render:image-blit");
 
 				cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
 
@@ -955,6 +956,7 @@ void MVKCmdResolveImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
 		id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPD];
 		if(mtlRendEnc)mvkreplay::encoderStarted(0);
 		cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mvkMTLRenderCommandEncoderLabel(kMVKCommandUseResolveImage));
+                if (cmdEncoder->_gpuFaultDiagnostics) cmdEncoder->_gpuFaultDiagnostics->encoder(cmdEncoder->_mtlCmdBuffer, mtlRendEnc, "render:image-resolve");
 
 		[mtlRendEnc pushDebugGroup: @"vkCmdResolveImage"];
 		[mtlRendEnc popDebugGroup];
@@ -1658,6 +1660,7 @@ void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
                 id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
                 if(mtlRendEnc)mvkreplay::encoderStarted(0);
 				cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mtlRendEncName);
+                if (cmdEncoder->_gpuFaultDiagnostics) cmdEncoder->_gpuFaultDiagnostics->encoder(cmdEncoder->_mtlCmdBuffer, mtlRendEnc, "render:image-clear");
 
 				cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
 				cmdEncoder->barrierUpdate(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
@@ -1679,6 +1682,7 @@ void MVKCmdClearImage<N>::encode(MVKCommandEncoder* cmdEncoder) {
                     id<MTLRenderCommandEncoder> mtlRendEnc = [cmdEncoder->_mtlCmdBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
                     if(mtlRendEnc)mvkreplay::encoderStarted(0);
 					cmdEncoder->_cmdBuffer->setMetalObjectLabel(mtlRendEnc, mtlRendEncName);
+                if (cmdEncoder->_gpuFaultDiagnostics) cmdEncoder->_gpuFaultDiagnostics->encoder(cmdEncoder->_mtlCmdBuffer, mtlRendEnc, "render:image-clear");
 
 					cmdEncoder->barrierWait(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);
 					cmdEncoder->barrierUpdate(kMVKBarrierStageCopy, mtlRendEnc, MTLRenderStageFragment);

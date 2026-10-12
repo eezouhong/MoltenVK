@@ -365,6 +365,7 @@ void MVKCommandBuffer::clearPrefilledMTLCommandBuffer() {
 	// a prefilled Metal command buffer that the app did not intend to submit, potentially
 	// causing unexpected side effects. But unfortunately there is nothing else we can do.
 	if (_prefilledMTLCmdBuffer && _prefilledMTLCmdBuffer.status == MTLCommandBufferStatusNotEnqueued) {
+		if (auto fault = getDevice()->getGPUFaultDiagnostics()) fault->commit(_prefilledMTLCmdBuffer);
 		[_prefilledMTLCmdBuffer commit];
 	}
 
@@ -415,6 +416,23 @@ void MVKCommandBuffer::recordBindPipeline(MVKCmdBindPipeline* mvkBindPipeline) {
 // Activity performance tracking is put here to deliberately exclude when
 // MVKConfiguration::prefillMetalCommandBuffers is set to immediate prefilling,
 // because that would include app time between command submissions.
+void MVKCommandEncoder::recordGPUFaultPipeline(MVKPipeline* pipeline, id<MTLCommandEncoder> encoder) {
+    if (!_gpuFaultDiagnostics || !pipeline || !encoder) return;
+    uintptr_t id = (uintptr_t)pipeline;
+    if (_lastGPUFaultPipeline == id) return;
+    _lastGPUFaultPipeline = id;
+    auto identity = pipeline->getGPUFaultLabel();
+    const char* name = identity ? identity->c_str() : "mlx:pipeline_shader_identity_unavailable_or_evicted";
+    _gpuFaultDiagnostics->pipeline(encoder, name);
+    // First binding identifies this encoder; bounded transition markers preserve more than one shader.
+    if (_gpuFaultSignposts < 16) {
+        NSString* label = [NSString stringWithUTF8String:name];
+        if (_gpuFaultSignposts == 0) encoder.label = [encoder.label stringByAppendingFormat:@"|%@", label];
+        [encoder insertDebugSignpost:label];
+    }
+    _gpuFaultSignposts++;
+}
+
 void MVKCommandEncoder::encode(id<MTLCommandBuffer> mtlCmdBuff,
 							   MVKCommandEncodingContext* pEncodingContext) {
 	uint64_t startTime = getPerformanceTimestamp();
@@ -435,6 +453,9 @@ void MVKCommandEncoder::beginEncoding(id<MTLCommandBuffer> mtlCmdBuff, MVKComman
     _canUseLayeredRendering = false;
 
     _mtlCmdBuffer = mtlCmdBuff;        // not retained
+    _gpuFaultDiagnostics = getDevice()->getGPUFaultDiagnostics();
+    if (_gpuFaultDiagnostics) _gpuFaultDiagnostics->attach(mtlCmdBuff, _cmdBuffer->gpuFaultRecordingId, (uintptr_t)_cmdBuffer->getVkCommandBuffer());
+
 
 	_cmdBuffer->setMetalObjectLabel(_mtlCmdBuffer, _cmdBuffer->_debugName);
 }
@@ -851,6 +872,8 @@ void MVKCommandEncoder::beginMetalRenderPass(MVKCommandUse cmdUse) {
     if (_mtlRenderEncoder) mvkreplay::encoderStarted(0);
 	retainIfImmediatelyEncoding(_mtlRenderEncoder);
 	_cmdBuffer->setMetalObjectLabel(_mtlRenderEncoder, getMTLRenderCommandEncoderName(cmdUse));
+    if (_gpuFaultDiagnostics) { _gpuFaultDiagnostics->encoder(_mtlCmdBuffer, _mtlRenderEncoder, "render"); _lastGPUFaultPipeline = 0; _gpuFaultSignposts = 0; }
+
 	getState().beginGraphicsEncoding(getSampleCount());
 
 	encodeBarrierWaits(cmdUse);
@@ -1155,11 +1178,13 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
 		if (_mtlComputeEncoder) mvkreplay::encoderStarted(1);
 		retainIfImmediatelyEncoding(_mtlComputeEncoder);
 		beginMetalComputeEncoding(cmdUse);
+        if (_gpuFaultDiagnostics) { _gpuFaultDiagnostics->encoder(_mtlCmdBuffer, _mtlComputeEncoder, "compute"); _lastGPUFaultPipeline = 0; _gpuFaultSignposts = 0; }
+
 	}
 	if (_mtlComputeEncoderUse != cmdUse) {
 		needWaits = true;
 		_mtlComputeEncoderUse = cmdUse;
-		_cmdBuffer->setMetalObjectLabel(_mtlComputeEncoder, mvkMTLComputeCommandEncoderLabel(cmdUse));
+        if (!_gpuFaultDiagnostics) _cmdBuffer->setMetalObjectLabel(_mtlComputeEncoder, mvkMTLComputeCommandEncoderLabel(cmdUse));
 	}
 	if (needWaits) {
 		encodeBarrierWaits(cmdUse);
@@ -1176,11 +1201,13 @@ id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmd
 		_mtlBlitEncoder = stagePass?[_mtlCmdBuffer blitCommandEncoderWithDescriptor:stagePass]:[_mtlCmdBuffer blitCommandEncoder];
 		if (_mtlBlitEncoder) mvkreplay::encoderStarted(2);
 		retainIfImmediatelyEncoding(_mtlBlitEncoder);
+        if (_gpuFaultDiagnostics) { _gpuFaultDiagnostics->encoder(_mtlCmdBuffer, _mtlBlitEncoder, "blit"); _lastGPUFaultPipeline = 0; _gpuFaultSignposts = 0; }
+
 	}
     if (_mtlBlitEncoderUse != cmdUse) {
 		needWaits = true;
         _mtlBlitEncoderUse = cmdUse;
-		_cmdBuffer->setMetalObjectLabel(_mtlBlitEncoder, mvkMTLBlitCommandEncoderLabel(cmdUse));
+        if (!_gpuFaultDiagnostics) _cmdBuffer->setMetalObjectLabel(_mtlBlitEncoder, mvkMTLBlitCommandEncoderLabel(cmdUse));
     }
 	if (needWaits) {
 		encodeBarrierWaits(cmdUse);

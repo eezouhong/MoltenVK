@@ -79,6 +79,30 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkSetMoltenVKConfigurationMVK(
 	return rslt;
 }
 
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkConfigureMeloNXGPUFaultDiagnosticsMVK(VkDevice device, const char* path, uint64_t session, uint64_t* machNanoseconds) {
+    if (!device || !machNanoseconds) return VK_ERROR_INITIALIZATION_FAILED;
+    try { MVKDevice::getMVKDevice(device)->configureGPUFaultDiagnostics(path, session); }
+    catch (...) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
+    *machNanoseconds = MVKGPUFaultDiagnostics::now();
+    return VK_SUCCESS;
+}
+MVK_PUBLIC_VULKAN_SYMBOL void vkSetMeloNXGPUFaultCommandBufferMVK(VkDevice device, VkCommandBuffer command, uint64_t serial) {
+    if (device && command) MVKCommandBuffer::getMVKCommandBuffer(command)->gpuFaultRecordingId = serial;
+}
+MVK_PUBLIC_VULKAN_SYMBOL void vkSetMeloNXGPUFaultPipelineNameMVK(VkDevice device, VkPipeline pipeline, const char* label) {
+    if (!device || !pipeline || !label) return;
+    try {
+        auto diagnostics = MVKDevice::getMVKDevice(device)->getGPUFaultDiagnostics();
+        if (diagnostics) ((MVKPipeline*)pipeline)->setGPUFaultLabel(diagnostics->registerPipeline(label));
+    } catch (...) { }
+}
+MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMeloNXGPUFaultMemoryMVK(VkDevice device, uint64_t* allocated, uint64_t* machNanoseconds) {
+    if (!device || !allocated || !machNanoseconds) return VK_ERROR_INITIALIZATION_FAILED;
+    *allocated = MVKDevice::getMVKDevice(device)->getPhysicalDevice()->getMTLDevice().currentAllocatedSize;
+    *machNanoseconds = MVKGPUFaultDiagnostics::now();
+    return VK_SUCCESS;
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceMetalFeaturesMVK(
 	VkPhysicalDevice                            physicalDevice,
 	MVKPhysicalDeviceMetalFeatures*             pMetalFeatures,

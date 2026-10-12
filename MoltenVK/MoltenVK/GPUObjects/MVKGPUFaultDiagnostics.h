@@ -21,6 +21,7 @@ public:
     static constexpr size_t SignpostCapacity = 8;
     static constexpr size_t RecordingCapacity = 16;
     static constexpr size_t EncoderMetadataCapacity = 256;
+    static constexpr size_t PipelineNameCapacity = 2048;
     static constexpr size_t MaximumFileBytes = 256 * 1024;
     static uint64_t now() {
         static mach_timebase_info_data_t timebase = [] { mach_timebase_info_data_t t; mach_timebase_info(&t); return t; }();
@@ -61,14 +62,20 @@ public:
         copy(e.label, encoder.label.UTF8String);
     }
     // Fixed first/last binding metadata survives the signpost cap; no resource ownership or heap allocation.
-    void pipeline(id<MTLCommandEncoder> encoder, NSString* label) {
+    std::shared_ptr<std::string> registerPipeline(const char* label) {
+        auto name = std::make_shared<std::string>(label, strnlen(label, 511));
+        std::lock_guard<std::mutex> guard(_mutex);
+        _pipelineNames[++_nextPipeline % PipelineNameCapacity] = name;
+        return name;
+    }
+    void pipeline(id<MTLCommandEncoder> encoder, const char* label) {
         std::lock_guard<std::mutex> guard(_mutex);
         size_t count = std::min<uint64_t>(_nextEncoder, EncoderMetadataCapacity);
         for (size_t i = 0; i < count; i++) {
             Encoder& e = _encoders[(_nextEncoder - i) % EncoderMetadataCapacity];
             if (e.object != (uintptr_t)encoder) continue;
-            if (!e.bindings) copy(e.firstPipeline, label.UTF8String);
-            copy(e.lastPipeline, label.UTF8String); e.bindings++;
+            if (!e.bindings) copy(e.firstPipeline, label);
+            copy(e.lastPipeline, label); e.bindings++;
             return;
         }
     }
@@ -186,5 +193,7 @@ private:
     std::array<Command, CommandCapacity> _commands = {};
     uint64_t _nextEncoder = 0;
     std::array<Encoder, EncoderMetadataCapacity> _encoders = {};
+    uint64_t _nextPipeline = 0;
+    std::array<std::shared_ptr<std::string>, PipelineNameCapacity> _pipelineNames = {};
     NSMutableArray* _errors;
 };

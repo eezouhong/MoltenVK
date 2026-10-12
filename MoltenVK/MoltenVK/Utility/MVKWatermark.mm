@@ -19,6 +19,7 @@
 
 #include "MVKEnvironment.h"
 #include "MVKWatermark.h"
+#include "../GPUObjects/MVKGPUFaultDiagnostics.h"
 #include "MVKOSExtensions.h"
 
 

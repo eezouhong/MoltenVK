@@ -20,7 +20,8 @@
 
 
 #include "MVKBaseObject.h"
-#include "MVKGPUFaultDiagnostics.h"
+#include <memory>
+class MVKGPUFaultDiagnostics;
 #include <string>
 
 #import <Metal/Metal.h>

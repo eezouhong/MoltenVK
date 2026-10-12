@@ -90,7 +90,11 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkSetMeloNXGPUFaultCommandBufferMVK(VkDevice devic
     if (device && command) MVKCommandBuffer::getMVKCommandBuffer(command)->gpuFaultRecordingId = serial;
 }
 MVK_PUBLIC_VULKAN_SYMBOL void vkSetMeloNXGPUFaultPipelineNameMVK(VkDevice device, VkPipeline pipeline, const char* label) {
-    if (device && pipeline && label) ((MVKPipeline*)pipeline)->setGPUFaultLabel(label);
+    if (!device || !pipeline || !label) return;
+    try {
+        auto diagnostics = MVKDevice::getMVKDevice(device)->getGPUFaultDiagnostics();
+        if (diagnostics) ((MVKPipeline*)pipeline)->setGPUFaultLabel(diagnostics->registerPipeline(label));
+    } catch (...) { }
 }
 MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetMeloNXGPUFaultMemoryMVK(VkDevice device, uint64_t* allocated, uint64_t* machNanoseconds) {
     if (!device || !allocated || !machNanoseconds) return VK_ERROR_INITIALIZATION_FAILED;

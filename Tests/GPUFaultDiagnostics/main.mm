@@ -31,7 +31,10 @@ int main(int argc, char** argv) { @autoreleasepool {
     diagnostics.attach(buffer, 10, 100); diagnostics.attach(buffer, 11, 101);
     id<MTLBlitCommandEncoder> encoder = [buffer blitCommandEncoder];
     diagnostics.encoder(buffer, encoder, "blit:test");
-    for (int i = 0; i < 40; i++) diagnostics.pipeline(encoder, [NSString stringWithFormat:@"shader-%d", i]);
+    for (int i = 0; i < 40; i++) diagnostics.pipeline(encoder, [NSString stringWithFormat:@"shader-%d", i].UTF8String);
+    std::weak_ptr<std::string> oldName = diagnostics.registerPipeline("old");
+    for (int i = 0; i < 2048; i++) diagnostics.registerPipeline("bounded");
+    assert(oldName.expired());
     NSString* label = [[encoder.label copy] autorelease];
     [encoder endEncoding]; diagnostics.commit(buffer); [buffer commit]; [buffer waitUntilCompleted];
     NSMutableArray* infos = [NSMutableArray array];

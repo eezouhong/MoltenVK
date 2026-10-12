@@ -421,12 +421,15 @@ void MVKCommandEncoder::recordGPUFaultPipeline(MVKPipeline* pipeline, id<MTLComm
     uintptr_t id = (uintptr_t)pipeline;
     if (_lastGPUFaultPipeline == id) return;
     _lastGPUFaultPipeline = id;
-    NSString* label = pipeline->getGPUFaultLabel();
-    if (!label) label = @"mlx:pipeline_shader_identity_unavailable";
-    _gpuFaultDiagnostics->pipeline(encoder, label);
+    auto identity = pipeline->getGPUFaultLabel();
+    const char* name = identity ? identity->c_str() : "mlx:pipeline_shader_identity_unavailable_or_evicted";
+    _gpuFaultDiagnostics->pipeline(encoder, name);
     // First binding identifies this encoder; bounded transition markers preserve more than one shader.
-    if (_gpuFaultSignposts == 0) encoder.label = [encoder.label stringByAppendingFormat:@"|%@", label];
-    if (_gpuFaultSignposts < 16) [encoder insertDebugSignpost:label];
+    if (_gpuFaultSignposts < 16) {
+        NSString* label = [NSString stringWithUTF8String:name];
+        if (_gpuFaultSignposts == 0) encoder.label = [encoder.label stringByAppendingFormat:@"|%@", label];
+        [encoder insertDebugSignpost:label];
+    }
     _gpuFaultSignposts++;
 }
 

@@ -2688,7 +2688,6 @@ MVKPipeline::MVKPipeline(MVKDevice* device, MVKPipelineCache* pipelineCache, MVK
 
 
 MVKPipeline::~MVKPipeline() {
-    [_gpuFaultLabel release];
 	releaseShaderLibraryContributions(_shaderLibraryContributions);
 	_layout->release();
 }

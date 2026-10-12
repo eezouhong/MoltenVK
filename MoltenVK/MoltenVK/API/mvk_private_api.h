@@ -462,6 +462,12 @@ typedef VkResult (VKAPI_PTR *PFN_vkDiscardPipelineCacheShaderLibrariesMVK)(VkPip
 
 #pragma mark -
 #pragma mark Function prototypes
+// Opt-in MeloNX fault-attribution metadata. These calls never submit GPU work.
+VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMeloNXGPUFaultDiagnosticsMVK(VkDevice device, const char* path, uint64_t session, uint64_t* machNanoseconds);
+VKAPI_ATTR void VKAPI_CALL vkSetMeloNXGPUFaultCommandBufferMVK(VkDevice device, VkCommandBuffer command, uint64_t serial);
+VKAPI_ATTR void VKAPI_CALL vkSetMeloNXGPUFaultPipelineNameMVK(VkDevice device, VkPipeline pipeline, const char* label);
+VKAPI_ATTR VkResult VKAPI_CALL vkGetMeloNXGPUFaultMemoryMVK(VkDevice device, uint64_t* allocated, uint64_t* machNanoseconds);
+
 
 #ifndef VK_NO_PROTOTYPES
 

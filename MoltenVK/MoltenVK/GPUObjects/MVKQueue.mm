@@ -159,7 +159,8 @@ VkResult MVKQueue::waitIdle(MVKCommandUse cmdUse) {
 	}
 	@autoreleasepool {
 		auto* mtlCmdBuff = getMTLCommandBuffer(cmdUse);
-		[mtlCmdBuff commit];
+		if (auto fault = getDevice()->getGPUFaultDiagnostics()) fault->commit(mtlCmdBuff);
+	[mtlCmdBuff commit];
 		[mtlCmdBuff waitUntilCompleted];
 	}
 	return _device->getConfigurationResult();
@@ -171,7 +172,8 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 
 	MTLCommandBufferDescriptor* mtlCmdBuffDesc = [MTLCommandBufferDescriptor new];	// temp retain
 	mtlCmdBuffDesc.retainedReferences = retainRefs;
-	if (getMVKConfig().debugMode) {
+	auto gpuFault = getDevice()->getGPUFaultDiagnostics();
+	if (getMVKConfig().debugMode || gpuFault) {
 		mtlCmdBuffDesc.errorOptions |= MTLCommandBufferErrorOptionEncoderExecutionStatus;
 	}
 	mtlCmdBuff = [_mtlQueue commandBufferWithDescriptor: mtlCmdBuffDesc];
@@ -180,6 +182,13 @@ id<MTLCommandBuffer> MVKQueue::getMTLCommandBuffer(MVKCommandUse cmdUse, bool re
 	addPerformanceInterval(getPerformanceStats().queue.retrieveMTLCommandBuffer, startTime);
 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
 	setMetalObjectLabel(mtlCmdBuff, mtlCmdBuffLabel);
+    if (gpuFault) {
+        gpuFault->created(mtlCmdBuff);
+        [mtlCmdBuff addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+            @autoreleasepool { @try { gpuFault->failed(buffer); } @catch (NSException*) { } }
+        }];
+    }
+
 #if MVK_REPLAY_TRACE
 	uint64_t frameToken=mtlCmdBuff?mvkreplay::frameBufferCreated():0;
 	auto stageCapture=mvkreplay::beginGPUStages(_replayGPUStagePool,mtlCmdBuff,frameToken);
@@ -272,7 +281,7 @@ void MVKQueue::handleMTLCommandBufferError(id<MTLCommandBuffer> mtlCmdBuff) {
 				 (mtlCmdBuff.label ? mtlCmdBuff.label.UTF8String : ""),
 				 mtlCmdBuff.error.code, mtlCmdBuff.error.localizedDescription.UTF8String);
 
-	if (NSArray<id<MTLCommandBufferEncoderInfo>>* mtlEncInfo = mtlCmdBuff.error.userInfo[MTLCommandBufferEncoderInfoErrorKey]) {
+	if (!getDevice()->getGPUFaultDiagnostics()) if (NSArray<id<MTLCommandBufferEncoderInfo>>* mtlEncInfo = mtlCmdBuff.error.userInfo[MTLCommandBufferEncoderInfoErrorKey]) {
 		MVKLogInfo("Encoders for %p \"%s\":", mtlCmdBuff, mtlCmdBuff.label ? mtlCmdBuff.label.UTF8String : "");
 		for (id<MTLCommandBufferEncoderInfo> enc in mtlEncInfo) {
 			MVKLogInfo(" - %s: %s", enc.label.UTF8String, mvkStringFromMTLCommandEncoderErrorState(enc.errorState));
@@ -571,6 +580,7 @@ VkResult MVKQueueCommandBufferSubmission::commitActiveMTLCommandBuffer(bool sign
 
 	// Retrieve the result before committing MTLCommandBuffer, because finish() will destroy this instance.
 	VkResult rslt = mtlCmdBuff ? getConfigurationResult() : VK_ERROR_OUT_OF_POOL_MEMORY;
+	if (auto fault = getDevice()->getGPUFaultDiagnostics()) fault->commit(mtlCmdBuff);
 	[mtlCmdBuff commit];
 	[mtlCmdBuff release];		// retained
 
@@ -763,7 +773,8 @@ VkResult MVKQueuePresentSurfaceSubmission::execute() {
 	mvkreplay::sealGPUStageEpoch(mvkreplay::framePresented());
 	if (mtlCmdBuff) {
 		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { this->finish(); }];
-		[mtlCmdBuff commit];
+		if (auto fault = getDevice()->getGPUFaultDiagnostics()) fault->commit(mtlCmdBuff);
+	[mtlCmdBuff commit];
 	} else {
 		finish();
 	}

@@ -152,7 +152,7 @@ void MVKSwapchain::renderWatermark(id<MTLTexture> mtlTexture, id<MTLCommandBuffe
                                                        getPixelFormats()->getBytesPerRow(__watermarkTextureFormat, __watermarkTextureWidth),
                                                        __watermarkShaderSource);
         }
-		_licenseWatermark->render(mtlTexture, mtlCmdBuff, 0.02f);
+		_licenseWatermark->render(mtlTexture, mtlCmdBuff, 0.02f, getDevice()->getGPUFaultDiagnostics());
     } else {
         if (_licenseWatermark) {
             _licenseWatermark->destroy();

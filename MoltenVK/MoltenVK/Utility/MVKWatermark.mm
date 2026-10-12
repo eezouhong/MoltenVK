@@ -133,7 +133,8 @@ id<MTLRenderPipelineState> MVKWatermark::newRenderPipelineState() {
 
 #pragma mark Rendering
 
-void MVKWatermark::render(id<MTLTexture> mtlTexture, id<MTLCommandBuffer> mtlCommandBuffer, double frameInterval) {
+void MVKWatermark::render(id<MTLTexture> mtlTexture, id<MTLCommandBuffer> mtlCommandBuffer, double frameInterval,
+                          std::shared_ptr<MVKGPUFaultDiagnostics> diagnostics) {
 
     updateRenderState(mtlTexture);
 
@@ -143,6 +144,7 @@ void MVKWatermark::render(id<MTLTexture> mtlTexture, id<MTLCommandBuffer> mtlCom
 
     id<MTLRenderCommandEncoder> mtlRendEnc = [mtlCommandBuffer renderCommandEncoderWithDescriptor: mtlRPDesc];
     mtlRendEnc.label = _mtlRendEncName;
+    if (diagnostics) diagnostics->encoder(mtlCommandBuffer, mtlRendEnc, "render:watermark");
     render(mtlRendEnc, frameInterval);
     [mtlRendEnc endEncoding];
 }

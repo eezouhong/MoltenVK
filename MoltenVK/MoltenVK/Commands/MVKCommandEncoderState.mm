@@ -1259,6 +1259,7 @@ void MVKMetalGraphicsCommandEncoderState::bindState(
 	const MVKVulkanGraphicsCommandEncoderState& vk)
 {
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
+    mvkEncoder.recordGPUFaultPipeline(pipeline, encoder);
 	MVKRenderStateFlags staticStateFlags = pipeline->getStaticStateFlags();
 	MVKRenderStateFlags dynamicStateFlags = pipeline->getDynamicStateFlags();
 	MVKRenderStateFlags anyStateNeeded = (staticStateFlags | dynamicStateFlags).removingAll(_stateReady);
@@ -1459,6 +1460,7 @@ void MVKMetalGraphicsCommandEncoderState::prepareDraw(
   const MVKVulkanGraphicsCommandEncoderState& vk,
   const MVKVulkanSharedCommandEncoderState& vkShared) {
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
+    mvkEncoder.recordGPUFaultPipeline(pipeline, encoder);
 	if (!pipeline->getMainPipelineState()) // Abort if pipeline could not be created.
 		return;
 
@@ -1653,6 +1655,7 @@ void MVKMetalComputeCommandEncoderState::prepareComputeDispatch(
   const MVKVulkanComputeCommandEncoderState& vk,
   const MVKVulkanSharedCommandEncoderState& vkShared) {
 	MVKComputePipeline* pipeline = vk._pipeline;
+    mvkEncoder.recordGPUFaultPipeline(pipeline, encoder);
 	id<MTLComputePipelineState> mtlPipeline = pipeline->getPipelineState();
 	if (!mtlPipeline) // Abort if pipeline could not be created.
 		return;
@@ -1685,6 +1688,7 @@ void MVKMetalComputeCommandEncoderState::prepareRenderDispatch(
 	MVKShaderStage stage)
 {
 	MVKGraphicsPipeline* pipeline = vk._pipeline;
+    mvkEncoder.recordGPUFaultPipeline(pipeline, encoder);
 	if (!pipeline->getMainPipelineState()) // Abort if pipeline could not be created.
 		return;
 

@@ -172,6 +172,9 @@ static const uint32_t kMVKTessEvalLevelBufferBinding = 2;
 class MVKPipeline : public MVKVulkanAPIDeviceObject {
 
 public:
+    NSString* getGPUFaultLabel() const { return _gpuFaultLabel; }
+    void setGPUFaultLabel(const char* label) { [_gpuFaultLabel release]; _gpuFaultLabel = [[NSString alloc] initWithUTF8String:label]; }
+
 
 	/** Returns the Vulkan type of this object. */
 	VkObjectType getVkObjectType() override { return VK_OBJECT_TYPE_PIPELINE; }
@@ -246,6 +249,8 @@ public:
 	~MVKPipeline();
 
 protected:
+    NSString* _gpuFaultLabel = nil;
+
 	void propagateDebugName() override {}
 	static bool consumeShaderLibraryContributionCapture(MVKPipelineCache* sourcePipelineCache);
 	static void releaseShaderLibraryContributions(

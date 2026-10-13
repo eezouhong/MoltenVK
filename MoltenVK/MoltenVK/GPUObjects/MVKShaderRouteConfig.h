@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <limits>
 
 // Product and Xcode builds stay dormant unless explicitly built for IR testing.
 #ifndef MVK_ENABLE_EXPERIMENTAL_METAL_IR
@@ -30,7 +31,13 @@ const MVKShaderRouteConfig& mvkShaderRouteConfig();
 unsigned mvkShaderCompilerWorkerLimit();
 const std::string& mvkShaderCompilerPluginPath();
 bool mvkShaderInitialTelemetryEnabled();
-struct MVKShaderDeviceCacheConfig { const char* directory; size_t retainedCount; };
-MVKShaderDeviceCacheConfig mvkShaderDeviceCacheConfig();
+struct MVKShaderIRResidentLimits { size_t count; size_t bytes; };
+constexpr MVKShaderIRResidentLimits mvkShaderIRResidentLimits(uint32_t sharedLimit, bool disabled) {
+    if (disabled) return {0, 0};
+    if (!sharedLimit) return {std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()};
+    return {sharedLimit, 64u * 1024u * 1024u};
+}
+struct MVKShaderDeviceCacheConfig { const char* directory; size_t retainedCount; size_t retainedBytes; };
+MVKShaderDeviceCacheConfig mvkShaderDeviceCacheConfig(uint32_t sharedResidentLimit);
 struct MVKShaderCompileConfig { const char* stages; const char* strictMath; };
 MVKShaderCompileConfig mvkShaderCompileConfig();

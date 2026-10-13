@@ -121,16 +121,16 @@ struct DeviceArtifacts {
     std::atomic<uint64_t> diskLookupCount{0}, diskLookupNs{0}, diskRestoreNs{0}, diskRestoreBytes{0};
     std::atomic<uint64_t> successfulDiskRestores{0}, successfulDiskRestoreNs{0}, successfulDiskRestoreBytes{0};
     std::shared_ptr<MVKMetalIRLifetimeCounters> lifetime = std::make_shared<MVKMetalIRLifetimeCounters>();
-    DeviceArtifacts():cache(retainedCount(),8*1024*1024) {
+    explicit DeviceArtifacts(MVKDevice* device)
+        : DeviceArtifacts(mvkShaderDeviceCacheConfig(device->getMVKConfig().metal4SharedShaderLibraryResidentLimit)) {}
+    explicit DeviceArtifacts(const MVKShaderDeviceCacheConfig& config)
+        : cache(config.retainedCount, config.retainedBytes) {
         lifetime->complete = telemetryEnabled();
-        const char* directory=mvkShaderDeviceCacheConfig().directory;
+        const char* directory=config.directory;
         if(directory&&*directory) {
             diskDirectory=directory;
             disk=std::make_shared<mvkir::DiskCache>(diskDirectory);
         }
-    }
-    static size_t retainedCount() {
-        return mvkShaderDeviceCacheConfig().retainedCount;
     }
 };
 std::mutex devicesLock;
@@ -138,7 +138,7 @@ std::unordered_map<MVKDevice*,std::shared_ptr<DeviceArtifacts>> devices;
 std::shared_ptr<DeviceArtifacts> deviceArtifacts(MVKDevice* device) {
     std::lock_guard<std::mutex> lock(devicesLock);
     auto& slot=devices[device];
-    if(!slot)slot=std::make_shared<DeviceArtifacts>();
+    if(!slot)slot=std::make_shared<DeviceArtifacts>(device);
     return slot;
 }
 uint32_t shaderMathMode(const std::vector<uint32_t>& code, const char* entry,

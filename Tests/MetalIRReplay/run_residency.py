@@ -41,7 +41,7 @@ def main():
                 valid = process.returncode == 0 and len(oracle) == len(snapshot) == 1 and oracle[0].get('success') is True
                 valid &= 'Metal GPU Validation Enabled' in log and '[mvk-error]' not in log
                 if snapshot:
-                    valid &= snapshot[0]['limit'] == (64 if route == 'IR' else 512)
+                    valid &= snapshot[0]['limit'] == 512
                     valid &= snapshot[0]['readOnly'] and snapshot[0]['trimPreserved']
                     if route == 'IR': valid &= snapshot[0]['restores'] == (2 if epoch == 'warm' else 0)
                 results.append(dict(case=label, valid=bool(valid), exitCode=process.returncode, snapshot=snapshot, oracle=oracle))

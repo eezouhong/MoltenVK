@@ -1,4 +1,5 @@
 #include "../../MoltenVK/MoltenVK/GPUObjects/MVKMetalIRResidentCache.h"
+#include "../../MoltenVK/MoltenVK/GPUObjects/MVKShaderRouteConfig.h"
 #include <cassert>
 #include <atomic>
 #include <thread>
@@ -7,6 +8,35 @@ struct Artifact { unsigned value; };
 using Cache = mvkir::ResidentCache<Artifact>;
 
 int main() {
+    auto limits = mvkShaderIRResidentLimits(512, false);
+    Cache standard(limits.count, limits.bytes);
+    for (unsigned i = 0; i < 513; ++i)
+        standard.get(std::to_string(i), [] {
+            return Cache::Result{std::make_shared<Artifact>(Artifact{1}), 32 * 1024, false};
+        });
+    assert(standard.stats().retained == 512 && standard.stats().evictions == 1);
+    assert(standard.stats().retainedBytes == 512 * 32 * 1024);
+    assert(standard.stats().maxBytes == 64 * 1024 * 1024);
+
+    Cache byteBounded(limits.count, limits.bytes);
+    for (unsigned i = 0; i < 200; ++i)
+        byteBounded.get(std::to_string(i), [] {
+            return Cache::Result{std::make_shared<Artifact>(Artifact{1}), 512 * 1024, false};
+        });
+    assert(byteBounded.stats().retained == 128 && byteBounded.stats().evictions == 72);
+
+    auto unlimitedLimits = mvkShaderIRResidentLimits(0, false);
+    Cache unlimited(unlimitedLimits.count, unlimitedLimits.bytes);
+    for (unsigned i = 0; i < 600; ++i)
+        unlimited.get(std::to_string(i), [] {
+            return Cache::Result{std::make_shared<Artifact>(Artifact{1}), 512 * 1024, false};
+        });
+    assert(unlimited.stats().retained == 600 && unlimited.stats().evictions == 0);
+    assert(unlimited.stats().retainedBytes > 64 * 1024 * 1024);
+    auto disabled = mvkShaderIRResidentLimits(512, true);
+    auto disabledUnlimited = mvkShaderIRResidentLimits(0, true);
+    assert(!disabled.count && !disabled.bytes && !disabledUnlimited.count && !disabledUnlimited.bytes);
+
     // Read-only statistics must preserve actual budget and ownership. Eviction
     // drops cache ownership, while an active constructing caller remains valid.
     Cache bounded(2, 8);

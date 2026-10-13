@@ -567,7 +567,9 @@ VKAPI_ATTR uint32_t VKAPI_CALL vkGetMetalIRCompilerABIMVK(void);
 
 /** Immutable process route, frozen before instance/physical-device creation.
  * Five uint32 fields: schema1, requested, availability(0 unavailable/1 available/
- * 2 not probed), selected(0 MSL/1 IR/2 unavailable), reason(0 none/1 plugin/2 hardware).
+ * 2 not probed), selected(0 MSL/1 IR/2 unavailable), reason(0 none/1 plugin/2 hardware/
+ * 3 rollout disabled). A dormant build suppresses the request and selects MSL
+ * without probing or loading an IR compiler.
  * Explicit unavailable IR keeps its existing failure path, never MSL fallback. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkGetShaderCompilerRouteMVK(uint32_t* values, uint32_t capacity);
 

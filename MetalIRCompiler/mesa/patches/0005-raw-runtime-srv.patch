@@ -1,0 +1,207 @@
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+index a25fb9c..884ef45 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -221,6 +221,39 @@ add_runtime_data_var(nir_shader *nir, unsigned desc_set, unsigned binding)
+    return var;
+ }
+ 
++static nir_variable *
++add_runtime_srv_var(nir_shader *nir, unsigned desc_set, unsigned binding)
++{
++   const unsigned words = nir->info.stage == MESA_SHADER_COMPUTE ? 3 : 2;
++   const struct glsl_type *array = glsl_array_type(glsl_uint_type(), words, sizeof(unsigned));
++   const struct glsl_struct_field field = {array, "arr"};
++   nir_variable *var = nir_variable_create(nir, nir_var_mem_ssbo,
++      glsl_struct_type(&field, 1, "runtime_raw", false), "runtime_raw");
++   var->data.descriptor_set = desc_set;
++   assert(var->data.descriptor_set == desc_set);
++   var->data.binding = binding;
++   var->data.access = ACCESS_NON_WRITEABLE;
++   var->data.how_declared = nir_var_hidden;
++   return var;
++}
++
++static bool
++runtime_buffer_is_live(nir_shader *nir, unsigned desc_set, unsigned binding)
++{
++   nir_foreach_function_impl(impl, nir) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic) continue;
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            if (intr->intrinsic == nir_intrinsic_vulkan_resource_index &&
++                nir_intrinsic_desc_set(intr) == desc_set && nir_intrinsic_binding(intr) == binding)
++               return true;
++         }
++      }
++   }
++   return false;
++}
++
+ static bool
+ lower_shader_system_values(struct nir_builder *builder, nir_instr *instr,
+                            void *cb_data)
+@@ -240,8 +273,10 @@ lower_shader_system_values(struct nir_builder *builder, nir_instr *instr,
+       (const struct dxil_spirv_runtime_conf *)cb_data;
+ 
+    int offset = 0;
++   bool raw = false;
+    switch (intrin->intrinsic) {
+    case nir_intrinsic_load_num_workgroups:
++      raw = conf->runtime_data_srv.enabled;
+       offset =
+          offsetof(struct dxil_spirv_compute_runtime_data, group_count_x);
+       break;
+@@ -252,6 +287,7 @@ lower_shader_system_values(struct nir_builder *builder, nir_instr *instr,
+    case nir_intrinsic_load_first_vertex:
+       if (conf->first_vertex_and_base_instance_mode == DXIL_SPIRV_SYSVAL_TYPE_NATIVE)
+          return false;
++      raw = conf->runtime_data_srv.enabled;
+       offset = offsetof(struct dxil_spirv_vertex_runtime_data, first_vertex);
+       break;
+    case nir_intrinsic_load_is_indexed_draw:
+@@ -261,6 +297,7 @@ lower_shader_system_values(struct nir_builder *builder, nir_instr *instr,
+    case nir_intrinsic_load_base_instance:
+       if (conf->first_vertex_and_base_instance_mode == DXIL_SPIRV_SYSVAL_TYPE_NATIVE)
+          return false;
++      raw = conf->runtime_data_srv.enabled;
+       offset = offsetof(struct dxil_spirv_vertex_runtime_data, base_instance);
+       break;
+    case nir_intrinsic_load_draw_id:
+@@ -276,31 +313,29 @@ lower_shader_system_values(struct nir_builder *builder, nir_instr *instr,
+    }
+ 
+    builder->cursor = nir_after_instr(instr);
+-   nir_address_format ubo_format = nir_address_format_32bit_index_offset;
+-
++   nir_address_format format = nir_address_format_32bit_index_offset;
++   const nir_descriptor_type type = raw ? nir_descriptor_type_storage_buffer : nir_descriptor_type_uniform_buffer;
+    nir_def *index = nir_vulkan_resource_index(
+-      builder, nir_address_format_num_components(ubo_format),
+-      nir_address_format_bit_size(ubo_format),
++      builder, nir_address_format_num_components(format), nir_address_format_bit_size(format),
+       nir_imm_int(builder, 0),
+-      .desc_set = conf->runtime_data_cbv.register_space,
+-      .binding = conf->runtime_data_cbv.base_shader_register,
+-      .desc_type = nir_descriptor_type_uniform_buffer);
+-
++      .desc_set = raw ? conf->runtime_data_srv.register_space : conf->runtime_data_cbv.register_space,
++      .binding = raw ? conf->runtime_data_srv.base_shader_register : conf->runtime_data_cbv.base_shader_register,
++      .desc_type = type);
+    nir_def *load_desc = nir_load_vulkan_descriptor(
+-      builder, nir_address_format_num_components(ubo_format),
+-      nir_address_format_bit_size(ubo_format),
+-      index, .desc_type = nir_descriptor_type_uniform_buffer);
+-
+-   nir_def *load_data = nir_load_ubo(
+-      builder, 
+-      intrin->def.num_components,
+-      intrin->def.bit_size,
+-      nir_channel(builder, load_desc, 0),
+-      nir_imm_int(builder, offset),
+-      .align_mul = 256,
+-      .align_offset = offset,
+-      .range_base = offset,
+-      .range = intrin->def.bit_size * intrin->def.num_components / 8);
++      builder, nir_address_format_num_components(format), nir_address_format_bit_size(format), index, .desc_type = type);
++   nir_def *load_data;
++   if (raw) {
++      /* No cbufferLoadLegacy: it reads a full 16-byte row and can overrun the
++       * last8bytes of a non-indexed indirect command. */
++      load_data = nir_load_ssbo(builder, intrin->def.num_components, intrin->def.bit_size,
++         nir_channel(builder, load_desc, 0), nir_imm_int(builder, offset),
++         .access = ACCESS_NON_WRITEABLE, .align_mul = 4, .align_offset = 0);
++   } else {
++      load_data = nir_load_ubo(builder, intrin->def.num_components, intrin->def.bit_size,
++         nir_channel(builder, load_desc, 0), nir_imm_int(builder, offset),
++         .align_mul = 256, .align_offset = offset, .range_base = offset,
++         .range = intrin->def.bit_size * intrin->def.num_components / 8);
++   }
+ 
+    nir_def_rewrite_uses(&intrin->def, load_data);
+    nir_instr_remove(instr);
+@@ -1102,6 +1137,10 @@ dxil_spirv_nir_passes(nir_shader *nir,
+    if (metadata->requires_runtime_data) {
+       add_runtime_data_var(nir, conf->runtime_data_cbv.register_space,
+                            conf->runtime_data_cbv.base_shader_register);
++      if (conf->runtime_data_srv.enabled) {
++         add_runtime_srv_var(nir, conf->runtime_data_srv.register_space,
++                             conf->runtime_data_srv.base_shader_register);
++      }
+    }
+ 
+    if (push_constant_size > 0) {
+@@ -1197,25 +1236,11 @@ dxil_spirv_nir_passes(nir_shader *nir,
+       dxil_reassign_driver_locations(nir, nir_var_shader_in, 0, NULL);
+    }
+ 
+-   // Runtime loads may cancel during integer simplification. Only advertise
+-   // the CBV if an actual descriptor reference survives the final DCE pass.
+-   // Otherwise indirect draws would perform an unused GPU parameter copy.
++   // Advertise each runtime binding only if its descriptor survives DCE.
+    if (metadata->requires_runtime_data) {
+-      bool live = false;
+-      nir_foreach_function_impl(impl, nir) {
+-         nir_foreach_block(block, impl) {
+-            nir_foreach_instr(instr, block) {
+-               if (instr->type != nir_instr_type_intrinsic) continue;
+-               nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+-               if (intr->intrinsic == nir_intrinsic_vulkan_resource_index &&
+-                   nir_intrinsic_desc_set(intr) == conf->runtime_data_cbv.register_space &&
+-                   nir_intrinsic_binding(intr) == conf->runtime_data_cbv.base_shader_register)
+-                  live = true;
+-            }
+-         }
+-      }
+-      metadata->requires_runtime_data = live;
+-      if (!live) {
++      metadata->requires_runtime_data = runtime_buffer_is_live(nir,
++         conf->runtime_data_cbv.register_space, conf->runtime_data_cbv.base_shader_register);
++      if (!metadata->requires_runtime_data) {
+          nir_foreach_variable_with_modes_safe(var, nir, nir_var_mem_ubo) {
+             if (var->data.descriptor_set == conf->runtime_data_cbv.register_space &&
+                 var->data.binding == conf->runtime_data_cbv.base_shader_register)
+@@ -1223,6 +1248,15 @@ dxil_spirv_nir_passes(nir_shader *nir,
+          }
+       }
+    }
++   metadata->requires_runtime_srv = conf->runtime_data_srv.enabled && runtime_buffer_is_live(nir,
++      conf->runtime_data_srv.register_space, conf->runtime_data_srv.base_shader_register);
++   if (conf->runtime_data_srv.enabled && !metadata->requires_runtime_srv) {
++      nir_foreach_variable_with_modes_safe(var, nir, nir_var_mem_ssbo) {
++         if (var->data.descriptor_set == conf->runtime_data_srv.register_space &&
++             var->data.binding == conf->runtime_data_srv.base_shader_register)
++            exec_node_remove(&var->node);
++      }
++   }
+ 
+    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+ 
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index d201aca..829ce80 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -74,6 +74,7 @@ struct dxil_spirv_metadata {
+    // Some sysval or other type of data is accessed which needs to be piped
+    // from the app/API implementation into the shader via a buffer
+    bool requires_runtime_data;
++   bool requires_runtime_srv;
+ 
+    // Specifically if a vertex shader needs the first-vertex or base-instance
+    // sysval. These are relevant since these can come from an indirect arg
+@@ -168,6 +169,14 @@ struct dxil_spirv_runtime_conf {
+       uint32_t base_shader_register;
+    } runtime_data_cbv;
+ 
++   /* Optional raw SRV for GPU-written draw bases / dispatch group counts.
++    * Four-byte loads allow pointers into exact-size Vulkan indirect commands. */
++   struct {
++      uint32_t register_space;
++      uint32_t base_shader_register;
++      bool enabled;
++   } runtime_data_srv;
++
+    struct {
+       uint32_t register_space;
+       uint32_t base_shader_register;

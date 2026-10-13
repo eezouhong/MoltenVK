@@ -299,7 +299,8 @@ function build_repo() {
 # ----------------- Main -------------------
 
 EXT_DIR=External
-EXT_REV_DIR=../ExternalRevisions
+# Resolve before entering External, which may be a shared dependency symlink.
+EXT_REV_DIR="$(pwd -P)/ExternalRevisions"
 
 echo
 echo ========== Retrieving MoltenVK dependencies into ${EXT_DIR} ==========
@@ -394,7 +395,7 @@ else
 	if [ "$BLD_SPV_TLS" = "Y" ]; then
 		build_repo "${REPO_NAME}"
 	else
-		unzip -o -q -d "${REPO_NAME}" ../Templates/spirv-tools/build.zip
+		unzip -o -q -d "${REPO_NAME}" "${EXT_REV_DIR}/../Templates/spirv-tools/build.zip"
 		rm -rf "${REPO_NAME}/__MACOSX"
 	fi
 fi

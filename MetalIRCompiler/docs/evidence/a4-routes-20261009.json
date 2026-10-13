@@ -1,0 +1,4455 @@
+{
+  "rows": [
+    {
+      "case": "ir-control-905",
+      "label": "master-cold-1",
+      "source": "09d98ddd5ccf1e3f980ff012ac6b9ed6ae4494a4",
+      "nativeSource": "9a09a595a54792a517c7d34437ad4857a894a685",
+      "nativeSHA": "496b64c6bbb5eb2e7090bb0d1805427afd4cf3eba00c8318fb6ae2f257bfbcd4",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "cold",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.01548912504222,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 3557,
+        "guestFps": 19.759410800085316,
+        "p95Ms": 109.79654092807323,
+        "p99Ms": 348.65387505851686,
+        "maxMs": 1694.5960829034448,
+        "over100ms": {
+          "intervals": 196,
+          "totalSeconds": 47.20325725490693
+        },
+        "over250ms": {
+          "intervals": 58,
+          "totalSeconds": 26.132689250749536
+        },
+        "over500ms": {
+          "intervals": 13,
+          "totalSeconds": 10.3551127507817
+        },
+        "pipelineCreateMs": 39463.3171,
+        "pipelineCreates": 551,
+        "sampleFps": {
+          "samples": 177,
+          "median": 21.325185918227483,
+          "mean": 19.863728878258076,
+          "p95": 30.19474296529486,
+          "min": 0,
+          "max": 31.731932190927957
+        },
+        "samplesBelow15Fps": 53
+      },
+      "memorySamples": 0,
+      "memoryBands": {
+        "0-30": {},
+        "75-105": {},
+        "150-181": {}
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "2bd6da1ce321620df421c2f7eaed3112fcca3f20ae7d5c5b6f762f25a1c878dc"
+    },
+    {
+      "case": "ir-functional-905",
+      "label": "ir-cold-1",
+      "source": "558b568d50935efbdacbc66e98e0c9cf4420299d",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "cold",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.02271729207132,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 4531,
+        "guestFps": 25.169045707986086,
+        "p95Ms": 51.09104095026851,
+        "p99Ms": 102.17624995857477,
+        "maxMs": 325.2840000204742,
+        "over100ms": {
+          "intervals": 49,
+          "totalSeconds": 8.123378543066792
+        },
+        "over250ms": {
+          "intervals": 4,
+          "totalSeconds": 1.166425125207752
+        },
+        "over500ms": {
+          "intervals": 0,
+          "totalSeconds": 0.0
+        },
+        "pipelineCreateMs": 9011.1525,
+        "pipelineCreates": 391,
+        "sampleFps": {
+          "samples": 177,
+          "median": 25.492943220927273,
+          "mean": 25.037774697556337,
+          "p95": 30.317974588161952,
+          "min": 6.4308947011419715,
+          "max": 31.27269102295973
+        },
+        "samplesBelow15Fps": 6
+      },
+      "memorySamples": 0,
+      "memoryBands": {
+        "0-30": {},
+        "75-105": {},
+        "150-181": {}
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "dca8eaf8d702cb565837772bbe5902d18564b5a1d0b796e4d1a8924d2b243e6b"
+    },
+    {
+      "case": "ir-control-913",
+      "label": "master-warm",
+      "source": "0b49c7cbe65f1c75929b7bd7616ac75075f0373a",
+      "nativeSource": "9a09a595a54792a517c7d34437ad4857a894a685",
+      "nativeSHA": "496b64c6bbb5eb2e7090bb0d1805427afd4cf3eba00c8318fb6ae2f257bfbcd4",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "warm",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.02642687503248,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 3844,
+        "guestFps": 21.352420679150395,
+        "p95Ms": 71.14745792932808,
+        "p99Ms": 299.74195803515613,
+        "maxMs": 1544.48791698087,
+        "over100ms": {
+          "intervals": 139,
+          "totalSeconds": 35.2712853794219
+        },
+        "over250ms": {
+          "intervals": 47,
+          "totalSeconds": 21.22143841581419
+        },
+        "over500ms": {
+          "intervals": 12,
+          "totalSeconds": 9.027712997864
+        },
+        "pipelineCreateMs": 33098.2693,
+        "pipelineCreates": 515,
+        "sampleFps": {
+          "samples": 177,
+          "median": 23.858308615835156,
+          "mean": 21.680657778541537,
+          "p95": 30.156906714525615,
+          "min": 0,
+          "max": 31.874742437269667
+        },
+        "samplesBelow15Fps": 40
+      },
+      "memorySamples": 176,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 87.94075012207031,
+            "mean": 88.47092779751482,
+            "p95": 97.83781433105469,
+            "min": 79.33747863769531,
+            "max": 97.89462280273438
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 354.32789611816406,
+            "mean": 356.5347926698882,
+            "p95": 370.32789611816406,
+            "min": 346.32789611816406,
+            "max": 370.32789611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 268.0804138183594,
+            "mean": 268.06386487237336,
+            "p95": 278.9032745361328,
+            "min": 251.0133056640625,
+            "max": 280.0371551513672
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.72,
+            "mean": 0.8125034482758621,
+            "p95": 1.2554,
+            "min": 0.6422,
+            "max": 1.4123
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 77.2779541015625,
+            "mean": 77.80824911183325,
+            "p95": 87.175048828125,
+            "min": 68.67471313476562,
+            "max": 87.23185729980469
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 343.53125,
+            "mean": 345.7381465517241,
+            "p95": 359.53125,
+            "min": 335.53125,
+            "max": 359.53125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 267.946533203125,
+            "mean": 267.9298974398909,
+            "p95": 278.76939392089844,
+            "min": 250.87942504882812,
+            "max": 279.9032745361328
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 862.616325378418,
+            "mean": 829.5017676517881,
+            "p95": 884.6340713500977,
+            "min": 742.5109176635742,
+            "max": 886.8193969726562
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 872.796875,
+            "mean": 837.6039870689655,
+            "p95": 889.78125,
+            "min": 750.15625,
+            "max": 889.78125
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 797.988037109375,
+            "mean": 777.6603035762392,
+            "p95": 823.8782958984375,
+            "min": 699.5907363891602,
+            "max": 881.1698150634766
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 2386.15625,
+            "mean": 2299.643318965517,
+            "p95": 2386.15625,
+            "min": 2072.546875,
+            "max": 2386.15625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 176.91701889038086,
+            "mean": 176.3994176141147,
+            "p95": 176.91701889038086,
+            "min": 175.04071426391602,
+            "max": 176.91701889038086
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 3959.6609840393066,
+            "mean": 3934.118714299695,
+            "p95": 4094.4880332946777,
+            "min": 3771.6143379211426,
+            "max": 4115.769306182861
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 6040.4160232543945,
+            "mean": 6057.362615651098,
+            "p95": 6204.665817260742,
+            "min": 5883.025489807129,
+            "max": 6211.665817260742
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2654.671875,
+            "mean": 2678.052801724138,
+            "p95": 3047.421875,
+            "min": 2309.75,
+            "max": 3056.359375
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 1019.40625,
+            "mean": 1029.8970905172414,
+            "p95": 1160.796875,
+            "min": 827.71875,
+            "max": 1161.046875
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 914.4375,
+            "mean": 970.1977370689655,
+            "p95": 1293.984375,
+            "min": 624.15625,
+            "max": 1302.75
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1177.203125,
+            "mean": 1158.322198275862,
+            "p95": 1251.09375,
+            "min": 1027.046875,
+            "max": 1251.125
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1395.625,
+            "mean": 1325.4876077586207,
+            "p95": 1761.015625,
+            "min": 810.484375,
+            "max": 1780.921875
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 6040.4160232543945,
+            "mean": 6057.362615651098,
+            "p95": 6204.665817260742,
+            "min": 5883.025489807129,
+            "max": 6211.665817260742
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 83.25,
+            "mean": 76.60829741379311,
+            "p95": 83.25,
+            "min": 64.8125,
+            "max": 83.25
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.09375,
+            "mean": 5.830818965517241,
+            "p95": 14.15625,
+            "min": 0.09375,
+            "max": 14.15625
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 2.828125,
+            "mean": 2.3949353448275863,
+            "p95": 4.484375,
+            "min": 0.0,
+            "max": 5.40625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 2209.239231109619,
+            "mean": 2123.2439013514027,
+            "p95": 2209.239231109619,
+            "min": 1897.506160736084,
+            "max": 2209.239231109619
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 91.50160217285156,
+            "mean": 91.34340694032866,
+            "p95": 97.78433227539062,
+            "min": 85.32978820800781,
+            "max": 97.8369140625
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 386.32789611816406,
+            "mean": 386.32789611816406,
+            "p95": 386.32789611816406,
+            "min": 386.32789611816406,
+            "max": 386.32789611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 294.8262939453125,
+            "mean": 294.98448917783537,
+            "p95": 300.68263244628906,
+            "min": 288.49098205566406,
+            "max": 300.99810791015625
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.8169,
+            "mean": 0.8867206896551724,
+            "p95": 1.1113,
+            "min": 0.6813,
+            "max": 1.4335
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 80.83930969238281,
+            "mean": 80.682102597993,
+            "p95": 87.12156677246094,
+            "min": 74.66702270507812,
+            "max": 87.17176818847656
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 375.53125,
+            "mean": 375.53125,
+            "p95": 375.53125,
+            "min": 375.53125,
+            "max": 375.53125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 294.6919403076172,
+            "mean": 294.849147402007,
+            "p95": 300.5487518310547,
+            "min": 288.35948181152344,
+            "max": 300.8642272949219
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 912.042236328125,
+            "mean": 877.625689013251,
+            "p95": 918.0616912841797,
+            "min": 826.5653686523438,
+            "max": 980.0448379516602
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 924.265625,
+            "mean": 888.770474137931,
+            "p95": 924.265625,
+            "min": 839.859375,
+            "max": 992.1875
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 849.9488296508789,
+            "mean": 787.7037761293609,
+            "p95": 925.1667098999023,
+            "min": 691.1372375488281,
+            "max": 929.5958404541016
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 1972.734375,
+            "mean": 1967.212823275862,
+            "p95": 1972.734375,
+            "min": 1949.859375,
+            "max": 1972.734375
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 162.01800918579102,
+            "mean": 161.3340029223212,
+            "p95": 162.01800918579102,
+            "min": 159.18426895141602,
+            "max": 162.01800918579102
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 4315.163249969482,
+            "mean": 4291.081302116657,
+            "p95": 4390.668933868408,
+            "min": 4227.918842315674,
+            "max": 4450.168979644775
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 6105.838356018066,
+            "mean": 6096.960122470198,
+            "p95": 6201.385299682617,
+            "min": 6038.635208129883,
+            "max": 6260.885345458984
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2044.09375,
+            "mean": 2050.6724137931033,
+            "p95": 2115.703125,
+            "min": 2003.640625,
+            "max": 2121.03125
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 1176.640625,
+            "mean": 1176.3782327586207,
+            "p95": 1180.453125,
+            "min": 1170.484375,
+            "max": 1180.65625
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 683.75,
+            "mean": 640.9035560344828,
+            "p95": 716.375,
+            "min": 529.359375,
+            "max": 721.09375
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1281.578125,
+            "mean": 1305.865301724138,
+            "p95": 1408.84375,
+            "min": 1222.78125,
+            "max": 1409.640625
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 2192.59375,
+            "mean": 2187.152478448276,
+            "p95": 2256.015625,
+            "min": 2064.125,
+            "max": 2304.171875
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 6105.838356018066,
+            "mean": 6096.95257936675,
+            "p95": 6201.385299682617,
+            "min": 6038.635208129883,
+            "max": 6261.010345458984
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 85.5,
+            "mean": 85.5,
+            "p95": 85.5,
+            "min": 85.5,
+            "max": 85.5
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.09375,
+            "mean": 0.09375,
+            "p95": 0.09375,
+            "min": 0.09375,
+            "max": 0.09375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 2.84375,
+            "mean": 5.557650862068965,
+            "p95": 16.859375,
+            "min": 1.953125,
+            "max": 16.859375
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1810.716365814209,
+            "mean": 1805.878820353541,
+            "p95": 1810.716365814209,
+            "min": 1790.675106048584,
+            "max": 1810.716365814209
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 102.52857971191406,
+            "mean": 102.06402324808055,
+            "p95": 106.44935607910156,
+            "min": 94.19834899902344,
+            "max": 106.45425415039062
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 414.32789611816406,
+            "mean": 413.36237887678476,
+            "p95": 414.32789611816406,
+            "min": 406.32789611816406,
+            "max": 414.32789611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 311.79931640625,
+            "mean": 311.2983556287042,
+            "p95": 317.1394348144531,
+            "min": 303.4087371826172,
+            "max": 317.1746063232422
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.806,
+            "mean": 0.8481241379310345,
+            "p95": 1.1017,
+            "min": 0.7171,
+            "max": 1.1716
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 91.86581420898438,
+            "mean": 91.40115198595771,
+            "p95": 95.78672790527344,
+            "min": 83.53558349609375,
+            "max": 95.79148864746094
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 403.53125,
+            "mean": 402.5657327586207,
+            "p95": 403.53125,
+            "min": 395.53125,
+            "max": 403.53125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 311.6654357910156,
+            "mean": 311.164580772663,
+            "p95": 317.00555419921875,
+            "min": 303.2735290527344,
+            "max": 317.0407257080078
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 869.9453811645508,
+            "mean": 871.678512047077,
+            "p95": 889.6675491333008,
+            "min": 839.0195922851562,
+            "max": 890.5253448486328
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 877.765625,
+            "mean": 879.5091594827586,
+            "p95": 897.5,
+            "min": 846.8125,
+            "max": 898.0
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 827.4343872070312,
+            "mean": 823.3354336968783,
+            "p95": 852.1159057617188,
+            "min": 739.8183059692383,
+            "max": 854.0116653442383
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 2002.015625,
+            "mean": 1991.3345905172414,
+            "p95": 2002.015625,
+            "min": 1963.296875,
+            "max": 2002.015625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 165.3597297668457,
+            "mean": 168.49008402331123,
+            "p95": 176.7072639465332,
+            "min": 165.3597297668457,
+            "max": 176.7072639465332
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 4305.870029449463,
+            "mean": 4310.636745715963,
+            "p95": 4374.014553070068,
+            "min": 4231.6200523376465,
+            "max": 4378.373905181885
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 6142.525924682617,
+            "mean": 6133.481252209894,
+            "p95": 6160.604164123535,
+            "min": 6063.869789123535,
+            "max": 6164.963516235352
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2515.875,
+            "mean": 2537.7580818965516,
+            "p95": 2628.46875,
+            "min": 2485.703125,
+            "max": 2668.0
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 717.90625,
+            "mean": 716.832974137931,
+            "p95": 726.234375,
+            "min": 691.203125,
+            "max": 726.25
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 582.15625,
+            "mean": 578.0571120689655,
+            "p95": 680.765625,
+            "min": 407.25,
+            "max": 706.96875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1339.75,
+            "mean": 1338.8453663793102,
+            "p95": 1374.0,
+            "min": 1221.296875,
+            "max": 1397.609375
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1780.0,
+            "mean": 1771.426724137931,
+            "p95": 1855.859375,
+            "min": 1593.296875,
+            "max": 1876.671875
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 6142.525924682617,
+            "mean": 6133.486101347825,
+            "p95": 6160.744789123535,
+            "min": 6063.869789123535,
+            "max": 6164.963516235352
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 85.5,
+            "mean": 82.59051724137932,
+            "p95": 85.5,
+            "min": 71.4375,
+            "max": 85.5
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.09375,
+            "mean": 3.0032327586206895,
+            "p95": 14.15625,
+            "min": 0.09375,
+            "max": 14.15625
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.0625,
+            "mean": 0.06734913793103449,
+            "p95": 0.109375,
+            "min": 0.015625,
+            "max": 0.109375
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1836.6558952331543,
+            "mean": 1822.84450649393,
+            "p95": 1836.6558952331543,
+            "min": 1786.5896110534668,
+            "max": 1836.6558952331543
+          }
+        }
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "5a4adaff0a8aacf517ef978261965a1554cdae2cc0ff4dc48ac0ed56fc68fcaa"
+    },
+    {
+      "case": "ir-functional-914",
+      "label": "ir-warm",
+      "source": "7e10825340fe77d80046f3f0f7a0f9b614f64843",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "warm",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.02202395908535,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 3914,
+        "guestFps": 21.741784221299266,
+        "p95Ms": 51.415916066616774,
+        "p99Ms": 185.66012498922646,
+        "maxMs": 624.2943329270929,
+        "over100ms": {
+          "intervals": 83,
+          "totalSeconds": 18.45658237359021
+        },
+        "over250ms": {
+          "intervals": 26,
+          "totalSeconds": 9.723162709968165
+        },
+        "over500ms": {
+          "intervals": 3,
+          "totalSeconds": 1.767049040994607
+        },
+        "pipelineCreateMs": 1086.8954,
+        "pipelineCreates": 369,
+        "sampleFps": {
+          "samples": 177,
+          "median": 21.32558028965726,
+          "mean": 21.589955143358655,
+          "p95": 30.562726258190942,
+          "min": 2.4133804239565753,
+          "max": 31.374837210232677
+        },
+        "samplesBelow15Fps": 19
+      },
+      "memorySamples": 177,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 105.23304748535156,
+            "mean": 104.50295178643589,
+            "p95": 107.05136108398438,
+            "min": 94.30181884765625,
+            "max": 107.11320495605469
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 315.3904113769531,
+            "mean": 313.183514825229,
+            "p95": 315.3904113769531,
+            "min": 307.3904113769531,
+            "max": 315.3904113769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 209.01710510253906,
+            "mean": 208.6805630387931,
+            "p95": 213.08859252929688,
+            "min": 202.0026397705078,
+            "max": 215.0658721923828
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.7625,
+            "mean": 0.9959965517241379,
+            "p95": 1.0682,
+            "min": 0.6741,
+            "max": 6.0997
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 94.58827209472656,
+            "mean": 93.85803380505791,
+            "p95": 96.40658569335938,
+            "min": 83.65704345703125,
+            "max": 96.46842956542969
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 304.578125,
+            "mean": 302.3712284482759,
+            "p95": 304.578125,
+            "min": 296.578125,
+            "max": 304.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 208.84959411621094,
+            "mean": 208.51319464321793,
+            "p95": 212.92108154296875,
+            "min": 201.8351287841797,
+            "max": 214.8983612060547
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 554.0836181640625,
+            "mean": 553.6684862334153,
+            "p95": 611.1432495117188,
+            "min": 473.23439025878906,
+            "max": 611.7074661254883
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 562.078125,
+            "mean": 561.2424568965517,
+            "p95": 618.015625,
+            "min": 482.296875,
+            "max": 618.765625
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 711.4540786743164,
+            "mean": 707.2262907357051,
+            "p95": 778.4568023681641,
+            "min": 584.7308120727539,
+            "max": 778.743034362793
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 1803.109375,
+            "mean": 1897.9714439655172,
+            "p95": 2032.359375,
+            "min": 1803.109375,
+            "max": 2032.359375
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 111.82320022583008,
+            "mean": 139.1483892243484,
+            "p95": 177.85907363891602,
+            "min": 111.82320022583008,
+            "max": 177.85907363891602
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 4327.066844940186,
+            "mean": 4261.717453134471,
+            "p95": 4449.8479347229,
+            "min": 4076.8058891296387,
+            "max": 4510.129047393799
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 6018.3530197143555,
+            "mean": 6020.540507875639,
+            "p95": 6141.13410949707,
+            "min": 5931.306190490723,
+            "max": 6201.415222167969
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2379.84375,
+            "mean": 2382.2494612068967,
+            "p95": 2554.25,
+            "min": 2106.390625,
+            "max": 2591.390625
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 1125.921875,
+            "mean": 1162.9321120689656,
+            "p95": 1270.015625,
+            "min": 971.890625,
+            "max": 1290.015625
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 785.953125,
+            "mean": 813.7559267241379,
+            "p95": 994.25,
+            "min": 639.484375,
+            "max": 1086.71875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1222.703125,
+            "mean": 1260.6293103448277,
+            "p95": 1346.21875,
+            "min": 1173.21875,
+            "max": 1375.578125
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1652.671875,
+            "mean": 1666.5280172413793,
+            "p95": 1911.703125,
+            "min": 1494.921875,
+            "max": 1914.234375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 6018.3530197143555,
+            "mean": 6020.54212425495,
+            "p95": 6141.13410949707,
+            "min": 5931.321815490723,
+            "max": 6201.415222167969
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 65.6875,
+            "mean": 65.63739224137932,
+            "p95": 66.046875,
+            "min": 62.796875,
+            "max": 66.046875
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 14.609375,
+            "mean": 14.547413793103448,
+            "p95": 14.609375,
+            "min": 14.25,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.008081896551724138,
+            "p95": 0.03125,
+            "min": 0.0,
+            "max": 0.03125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1691.28617477417,
+            "mean": 1758.8230547411688,
+            "p95": 1854.500301361084,
+            "min": 1691.28617477417,
+            "max": 1854.500301361084
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 106.54096984863281,
+            "mean": 104.27512701626482,
+            "p95": 106.99295043945312,
+            "min": 96.96762084960938,
+            "max": 106.99655151367188
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 319.4060363769531,
+            "mean": 318.02457085971173,
+            "p95": 319.4060363769531,
+            "min": 315.3904113769531,
+            "max": 319.4060363769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 212.61749267578125,
+            "mean": 213.74944384344693,
+            "p95": 218.42771911621094,
+            "min": 211.65289306640625,
+            "max": 218.43841552734375
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.8926,
+            "mean": 1.1932827586206898,
+            "p95": 2.8048,
+            "min": 0.7121,
+            "max": 3.5263
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 95.89619445800781,
+            "mean": 93.62911461139548,
+            "p95": 96.34817504882812,
+            "min": 86.32284545898438,
+            "max": 96.35177612304688
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 308.59375,
+            "mean": 307.2122844827586,
+            "p95": 308.59375,
+            "min": 304.578125,
+            "max": 308.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 212.44998168945312,
+            "mean": 213.58316987136314,
+            "p95": 218.2602081298828,
+            "min": 211.48538208007812,
+            "max": 218.27090454101562
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 644.3999252319336,
+            "mean": 655.3674176972488,
+            "p95": 718.4122467041016,
+            "min": 559.5655288696289,
+            "max": 765.0734939575195
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 653.1875,
+            "mean": 663.8933189655172,
+            "p95": 723.1875,
+            "min": 569.796875,
+            "max": 774.125
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 788.0322113037109,
+            "mean": 810.8409052881701,
+            "p95": 905.3446655273438,
+            "min": 702.5755157470703,
+            "max": 972.3340530395508
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 1925.015625,
+            "mean": 1936.7165948275863,
+            "p95": 2038.125,
+            "min": 1925.015625,
+            "max": 2038.125
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 180.24945449829102,
+            "mean": 180.06622274990738,
+            "p95": 180.24945449829102,
+            "min": 178.47821426391602,
+            "max": 180.24945449829102
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 3969.2438774108887,
+            "mean": 3975.385467660838,
+            "p95": 4036.8373985290527,
+            "min": 3872.4566917419434,
+            "max": 4109.1499671936035
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 5718.900672912598,
+            "mean": 5732.035839738517,
+            "p95": 5781.603569030762,
+            "min": 5694.431831359863,
+            "max": 5853.9161376953125
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2802.203125,
+            "mean": 2797.1373922413795,
+            "p95": 3225.75,
+            "min": 2262.234375,
+            "max": 3261.75
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 145.0625,
+            "mean": 148.00646551724137,
+            "p95": 273.015625,
+            "min": 99.59375,
+            "max": 273.828125
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 761.921875,
+            "mean": 740.203125,
+            "p95": 839.3125,
+            "min": 633.875,
+            "max": 839.890625
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1122.875,
+            "mean": 1154.051724137931,
+            "p95": 1271.015625,
+            "min": 1039.34375,
+            "max": 1275.609375
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1167.734375,
+            "mean": 1150.5899784482758,
+            "p95": 1602.75,
+            "min": 674.484375,
+            "max": 1648.46875
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 5718.900672912598,
+            "mean": 5732.042844048862,
+            "p95": 5781.572319030762,
+            "min": 5694.431831359863,
+            "max": 5853.9161376953125
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 65.6875,
+            "mean": 68.11099137931035,
+            "p95": 79.75,
+            "min": 65.65625,
+            "max": 79.75
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 14.609375,
+            "mean": 12.185883620689655,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.640625
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.008081896551724138,
+            "p95": 0.03125,
+            "min": 0.0,
+            "max": 0.03125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1744.766170501709,
+            "mean": 1756.6503720776789,
+            "p95": 1859.646785736084,
+            "min": 1744.766170501709,
+            "max": 1859.646785736084
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 105.20828247070312,
+            "mean": 104.39562356883081,
+            "p95": 108.39576721191406,
+            "min": 99.42660522460938,
+            "max": 108.39999389648438
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 327.4060363769531,
+            "mean": 326.57845017005656,
+            "p95": 327.4060363769531,
+            "min": 323.4060363769531,
+            "max": 327.4060363769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 220.0234375,
+            "mean": 222.18282660122574,
+            "p95": 227.8697509765625,
+            "min": 216.9497833251953,
+            "max": 227.97943115234375
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.8018,
+            "mean": 0.8840413793103449,
+            "p95": 1.1305,
+            "min": 0.7227,
+            "max": 1.1508
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 94.56350708007812,
+            "mean": 93.74961326862204,
+            "p95": 97.75099182128906,
+            "min": 88.78182983398438,
+            "max": 97.75521850585938
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 316.59375,
+            "mean": 315.76616379310343,
+            "p95": 316.59375,
+            "min": 312.59375,
+            "max": 316.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 219.85589599609375,
+            "mean": 222.0165505244814,
+            "p95": 227.70223999023438,
+            "min": 216.7822723388672,
+            "max": 227.81192016601562
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 683.8476409912109,
+            "mean": 687.9833024123619,
+            "p95": 714.8095474243164,
+            "min": 677.8603210449219,
+            "max": 732.2782974243164
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 691.890625,
+            "mean": 696.229525862069,
+            "p95": 722.359375,
+            "min": 688.140625,
+            "max": 739.328125
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 779.2777938842773,
+            "mean": 799.0091234404465,
+            "p95": 890.8634490966797,
+            "min": 715.9524078369141,
+            "max": 927.2278442382812
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 1847.171875,
+            "mean": 1896.1740301724137,
+            "p95": 1965.59375,
+            "min": 1847.171875,
+            "max": 1965.59375
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 181.9183235168457,
+            "mean": 212.79768437352675,
+            "p95": 256.5434455871582,
+            "min": 181.9183235168457,
+            "max": 256.5434455871582
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 4105.850574493408,
+            "mean": 4099.954462380245,
+            "p95": 4150.553676605225,
+            "min": 4012.537929534912,
+            "max": 4157.647426605225
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 5772.932083129883,
+            "mean": 5783.330808179132,
+            "p95": 5859.603981018066,
+            "min": 5677.791481018066,
+            "max": 5866.697731018066
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 1949.03125,
+            "mean": 1954.7273706896551,
+            "p95": 2049.625,
+            "min": 1918.671875,
+            "max": 2073.84375
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 272.640625,
+            "mean": 273.51293103448273,
+            "p95": 276.71875,
+            "min": 270.15625,
+            "max": 276.71875
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 295.6875,
+            "mean": 316.22683189655174,
+            "p95": 374.53125,
+            "min": 293.21875,
+            "max": 375.34375
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1513.0625,
+            "mean": 1527.3561422413793,
+            "p95": 1615.171875,
+            "min": 1443.8125,
+            "max": 1621.125
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 2104.296875,
+            "mean": 2106.004849137931,
+            "p95": 2154.203125,
+            "min": 1945.78125,
+            "max": 2208.734375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 5772.932083129883,
+            "mean": 5783.338890075684,
+            "p95": 5859.603981018066,
+            "min": 5677.791481018066,
+            "max": 5866.697731018066
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 83.75,
+            "mean": 83.75,
+            "p95": 83.75,
+            "min": 83.75,
+            "max": 83.75
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.546875,
+            "mean": 0.546875,
+            "p95": 0.546875,
+            "min": 0.546875,
+            "max": 0.546875
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.078125,
+            "mean": 0.8313577586206896,
+            "p95": 2.0625,
+            "min": 0.0625,
+            "max": 2.0625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1665.2535514831543,
+            "mean": 1683.376345798887,
+            "p95": 1709.0503044128418,
+            "min": 1665.2535514831543,
+            "max": 1709.0503044128418
+          }
+        }
+      },
+      "reliefObservations": [
+        {
+          "observedSeconds": 17.91370445850771,
+          "count": 14,
+          "beforeSeconds": 16.910892542102374,
+          "footprintChangeMiB": -19.734375,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 48.18314804206602,
+          "count": 20,
+          "beforeSeconds": 47.18265304202214,
+          "footprintChangeMiB": 1.890625,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 78.5699673545314,
+          "count": 24,
+          "beforeSeconds": 77.55913729208987,
+          "footprintChangeMiB": 3.40625,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 108.06679850060027,
+          "count": 28,
+          "beforeSeconds": 107.0553771465784,
+          "footprintChangeMiB": -25.218727111816406,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 138.61127602111083,
+          "count": 37,
+          "beforeSeconds": 137.57578720909078,
+          "footprintChangeMiB": -8.46875,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 168.0976216045674,
+          "count": 41,
+          "beforeSeconds": 167.0974523751065,
+          "footprintChangeMiB": 27.359397888183594,
+          "allZoneAllocatedChangeMiB": 0.0
+        }
+      ],
+      "admissionSamples": 177,
+      "lastAdmission": {
+        "available": 1,
+        "active": 0,
+        "waiting": 0,
+        "peak": 2,
+        "limit": 2,
+        "batches": 1687,
+        "reliefs": 41
+      },
+      "perfSHA": "f0470dd1aa307ded3edfddc23581331f8e50363391e896ebe23b8717ddc1f123"
+    },
+    {
+      "case": "ir-msl-908",
+      "label": "candidate-msl-cold",
+      "source": "7e10825340fe77d80046f3f0f7a0f9b614f64843",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "cold",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.02367041702382,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 3319,
+        "guestFps": 18.436464451099987,
+        "p95Ms": 119.77087496779859,
+        "p99Ms": 318.5796670150012,
+        "maxMs": 1749.0435419604182,
+        "over100ms": {
+          "intervals": 202,
+          "totalSeconds": 45.94625587493647
+        },
+        "over250ms": {
+          "intervals": 53,
+          "totalSeconds": 24.14855649729725
+        },
+        "over500ms": {
+          "intervals": 11,
+          "totalSeconds": 10.095384168089367
+        },
+        "pipelineCreateMs": 34533.4758,
+        "pipelineCreates": 419,
+        "sampleFps": {
+          "samples": 178,
+          "median": 20.25766532212313,
+          "mean": 18.55832730909515,
+          "p95": 29.935598373789034,
+          "min": 0,
+          "max": 31.2684961301729
+        },
+        "samplesBelow15Fps": 55
+      },
+      "memorySamples": 177,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 92.22142791748047,
+            "mean": 89.45637919108073,
+            "p95": 95.58285522460938,
+            "min": 73.798828125,
+            "max": 95.8673095703125
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 365.42164611816406,
+            "mean": 360.3549794514974,
+            "p95": 367.42164611816406,
+            "min": 343.42164611816406,
+            "max": 367.42164611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 272.31658935546875,
+            "mean": 270.8986002604167,
+            "p95": 279.8119659423828,
+            "min": 257.9385681152344,
+            "max": 280.57228088378906
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.89935,
+            "mean": 0.9458933333333334,
+            "p95": 1.4063,
+            "min": 0.7225,
+            "max": 1.4709
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 81.56061553955078,
+            "mean": 78.7956049601237,
+            "p95": 84.92204284667969,
+            "min": 63.13801574707031,
+            "max": 85.20649719238281
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 354.59375,
+            "mean": 349.52708333333334,
+            "p95": 356.59375,
+            "min": 332.59375,
+            "max": 356.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 272.1495056152344,
+            "mean": 270.73147837320965,
+            "p95": 279.64601135253906,
+            "min": 257.771484375,
+            "max": 280.40293884277344
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 939.2380409240723,
+            "mean": 932.3034011840821,
+            "p95": 980.8343734741211,
+            "min": 888.3637084960938,
+            "max": 982.4177703857422
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 947.0,
+            "mean": 939.3109375,
+            "p95": 987.65625,
+            "min": 896.328125,
+            "max": 987.65625
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 1049.9383964538574,
+            "mean": 1006.0442235310873,
+            "p95": 1102.18603515625,
+            "min": 772.8554763793945,
+            "max": 1102.22412109375
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 2255.765625,
+            "mean": 2201.7239583333335,
+            "p95": 2255.765625,
+            "min": 2053.109375,
+            "max": 2255.765625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 175.62392807006836,
+            "mean": 175.4277468363444,
+            "p95": 175.62392807006836,
+            "min": 174.88824844360352,
+            "max": 175.62392807006836
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4006.1102294921875,
+            "mean": 4033.3120045979817,
+            "p95": 4165.8669090271,
+            "min": 3929.5398597717285,
+            "max": 4185.0856590271
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6050.697227478027,
+            "mean": 6059.608216094971,
+            "p95": 6143.243942260742,
+            "min": 6009.68155670166,
+            "max": 6171.384544372559
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2446.296875,
+            "mean": 2540.3260416666667,
+            "p95": 2981.4375,
+            "min": 2132.015625,
+            "max": 2998.9375
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 1668.4140625,
+            "mean": 1211.421875,
+            "p95": 1745.15625,
+            "min": 187.234375,
+            "max": 1745.484375
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 891.71875,
+            "mean": 893.5411458333333,
+            "p95": 1037.96875,
+            "min": 784.71875,
+            "max": 1080.640625
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1167.1953125,
+            "mean": 1155.6,
+            "p95": 1207.046875,
+            "min": 1034.4375,
+            "max": 1208.0
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1597.8203125,
+            "mean": 1542.8432291666666,
+            "p95": 1972.375,
+            "min": 1122.015625,
+            "max": 1976.015625
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6050.697227478027,
+            "mean": 6059.608216094971,
+            "p95": 6143.243942260742,
+            "min": 6009.68155670166,
+            "max": 6171.384544372559
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 88.125,
+            "mean": 84.175,
+            "p95": 88.484375,
+            "min": 74.0625,
+            "max": 88.484375
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.1875,
+            "mean": 4.046875,
+            "p95": 14.609375,
+            "min": 0.1875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0067708333333333336,
+            "p95": 0.015625,
+            "min": 0.0,
+            "max": 0.015625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 2080.1416969299316,
+            "mean": 2026.296211496989,
+            "p95": 2080.1416969299316,
+            "min": 1878.2211265563965,
+            "max": 2080.1416969299316
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 99.32037353515625,
+            "mean": 98.45164337158204,
+            "p95": 101.30284118652344,
+            "min": 93.79383850097656,
+            "max": 101.340087890625
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 383.42164611816406,
+            "mean": 383.42164611816406,
+            "p95": 383.42164611816406,
+            "min": 383.42164611816406,
+            "max": 383.42164611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 284.1012725830078,
+            "mean": 284.97000274658205,
+            "p95": 288.86451721191406,
+            "min": 282.08155822753906,
+            "max": 289.6278076171875
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.92285,
+            "mean": 1.2765166666666667,
+            "p95": 1.7151,
+            "min": 0.7762,
+            "max": 8.5635
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 88.6583023071289,
+            "mean": 87.79075520833334,
+            "p95": 90.64202880859375,
+            "min": 83.13302612304688,
+            "max": 90.67922973632812
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 372.59375,
+            "mean": 372.59375,
+            "p95": 372.59375,
+            "min": 372.59375,
+            "max": 372.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 283.9354476928711,
+            "mean": 284.80299479166666,
+            "p95": 288.6974334716797,
+            "min": 281.9145202636719,
+            "max": 289.4607238769531
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 1005.3237991333008,
+            "mean": 1055.4978042602538,
+            "p95": 1222.5843048095703,
+            "min": 1002.2185974121094,
+            "max": 1228.4825820922852
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 1014.71875,
+            "mean": 1064.7317708333333,
+            "p95": 1230.4375,
+            "min": 1012.34375,
+            "max": 1231.1875
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 529.0690078735352,
+            "mean": 678.325511932373,
+            "p95": 1375.2358322143555,
+            "min": 496.91316986083984,
+            "max": 1380.4729919433594
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1991.75,
+            "mean": 1986.4088541666667,
+            "p95": 1991.75,
+            "min": 1968.859375,
+            "max": 1991.75
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 162.95196914672852,
+            "mean": 162.33696263631185,
+            "p95": 162.95196914672852,
+            "min": 160.31622695922852,
+            "max": 162.95196914672852
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4193.813934326172,
+            "mean": 4237.630713144938,
+            "p95": 4427.96724319458,
+            "min": 4106.243724822998,
+            "max": 4440.185901641846
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6022.611965179443,
+            "mean": 6061.702604675293,
+            "p95": 6236.510391235352,
+            "min": 5935.0417556762695,
+            "max": 6248.729049682617
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 3040.953125,
+            "mean": 3068.327083333333,
+            "p95": 3436.9375,
+            "min": 2662.078125,
+            "max": 3454.4375
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 383.296875,
+            "mean": 386.7765625,
+            "p95": 410.1875,
+            "min": 329.515625,
+            "max": 412.328125
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 783.8828125,
+            "mean": 780.3973958333333,
+            "p95": 879.9375,
+            "min": 636.734375,
+            "max": 890.046875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1170.7421875,
+            "mean": 1168.5296875,
+            "p95": 1278.859375,
+            "min": 1052.984375,
+            "max": 1281.40625
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1130.21875,
+            "mean": 1127.9223958333334,
+            "p95": 1672.09375,
+            "min": 677.890625,
+            "max": 1690.5
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6022.611965179443,
+            "mean": 6061.702604675293,
+            "p95": 6236.510391235352,
+            "min": 5935.0417556762695,
+            "max": 6248.729049682617
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 74.078125,
+            "mean": 78.30104166666666,
+            "p95": 88.125,
+            "min": 74.0625,
+            "max": 88.125
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.59375,
+            "mean": 10.370833333333334,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.0078125,
+            "mean": 0.015625,
+            "p95": 0.078125,
+            "min": 0.0,
+            "max": 0.078125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1828.7980308532715,
+            "mean": 1824.0718915303548,
+            "p95": 1828.7980308532715,
+            "min": 1808.5431480407715,
+            "max": 1828.7980308532715
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 98.63703918457031,
+            "mean": 98.55832014412715,
+            "p95": 100.772216796875,
+            "min": 94.72488403320312,
+            "max": 100.91874694824219
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 391.42164611816406,
+            "mean": 393.21474956643993,
+            "p95": 395.42164611816406,
+            "min": 391.42164611816406,
+            "max": 395.42164611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 295.16172790527344,
+            "mean": 294.6564294223128,
+            "p95": 296.6880798339844,
+            "min": 292.72679138183594,
+            "max": 296.69676208496094
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.9737,
+            "mean": 1.142455172413793,
+            "p95": 2.108,
+            "min": 0.8157,
+            "max": 2.112
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 87.97647094726562,
+            "mean": 87.89726204707705,
+            "p95": 90.11140441894531,
+            "min": 84.06407165527344,
+            "max": 90.25871276855469
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 380.59375,
+            "mean": 382.3868534482759,
+            "p95": 384.59375,
+            "min": 380.59375,
+            "max": 384.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 294.99464416503906,
+            "mean": 294.4895914011988,
+            "p95": 296.5232391357422,
+            "min": 292.55970764160156,
+            "max": 296.52967834472656
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 1344.2244186401367,
+            "mean": 1311.0963055840855,
+            "p95": 1445.4488220214844,
+            "min": 1143.6166076660156,
+            "max": 1451.0152282714844
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 1354.328125,
+            "mean": 1321.5436422413793,
+            "p95": 1455.71875,
+            "min": 1150.5625,
+            "max": 1455.96875
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 1109.5326614379883,
+            "mean": 1078.1063519181876,
+            "p95": 1223.8942031860352,
+            "min": 897.0537567138672,
+            "max": 1224.4106369018555
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 1847.140625,
+            "mean": 1817.7052801724137,
+            "p95": 1847.140625,
+            "min": 1740.4375,
+            "max": 1847.140625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 175.8417854309082,
+            "mean": 171.42465854513233,
+            "p95": 175.8417854309082,
+            "min": 159.8297004699707,
+            "max": 175.8417854309082
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 4517.899715423584,
+            "mean": 4549.096288878342,
+            "p95": 4743.840938568115,
+            "min": 4373.915203094482,
+            "max": 4763.981563568115
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 6189.198554992676,
+            "mean": 6195.3769105056235,
+            "p95": 6324.4487380981445,
+            "min": 6045.214042663574,
+            "max": 6344.5893630981445
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 3096.28125,
+            "mean": 3026.3168103448274,
+            "p95": 3400.390625,
+            "min": 2461.96875,
+            "max": 3447.046875
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 317.5,
+            "mean": 310.0533405172414,
+            "p95": 342.328125,
+            "min": 258.453125,
+            "max": 349.234375
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 485.125,
+            "mean": 495.5404094827586,
+            "p95": 573.84375,
+            "min": 420.515625,
+            "max": 587.09375
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1234.015625,
+            "mean": 1228.2268318965516,
+            "p95": 1340.296875,
+            "min": 1147.53125,
+            "max": 1341.59375
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1597.390625,
+            "mean": 1540.2225215517242,
+            "p95": 1941.75,
+            "min": 968.40625,
+            "max": 1945.734375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 6189.198554992676,
+            "mean": 6195.3769105056235,
+            "p95": 6324.4487380981445,
+            "min": 6045.214042663574,
+            "max": 6344.5893630981445
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 74.0625,
+            "mean": 76.48706896551724,
+            "p95": 88.125,
+            "min": 74.0625,
+            "max": 88.125
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 14.609375,
+            "mean": 12.184806034482758,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.015625,
+            "mean": 0.017780172413793104,
+            "p95": 0.046875,
+            "min": 0.0,
+            "max": 0.046875
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 1671.2988395690918,
+            "mean": 1646.2806216272816,
+            "p95": 1671.2988395690918,
+            "min": 1580.6077995300293,
+            "max": 1671.2988395690918
+          }
+        }
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "de5d9b480ece91505ec84926c551216c7cc2026c32b3aeb1c3307a45a642c7db"
+    },
+    {
+      "case": "ir-msl-909",
+      "label": "candidate-msl-warm",
+      "source": "7e10825340fe77d80046f3f0f7a0f9b614f64843",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "warm",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.03392229101155,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 4249,
+        "guestFps": 23.601107757524748,
+        "p95Ms": 51.26641702372581,
+        "p99Ms": 150.4626669920981,
+        "maxMs": 591.3874589605257,
+        "over100ms": {
+          "intervals": 66,
+          "totalSeconds": 13.723587419255637
+        },
+        "over250ms": {
+          "intervals": 19,
+          "totalSeconds": 6.370558334165253
+        },
+        "over500ms": {
+          "intervals": 1,
+          "totalSeconds": 0.5913874589605257
+        },
+        "pipelineCreateMs": 5404.6564,
+        "pipelineCreates": 396,
+        "sampleFps": {
+          "samples": 178,
+          "median": 23.54448701729979,
+          "mean": 23.54643744296352,
+          "p95": 30.815431573321927,
+          "min": 2.2918036078440474,
+          "max": 31.953761164277893
+        },
+        "samplesBelow15Fps": 16
+      },
+      "memorySamples": 178,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 88.73387908935547,
+            "mean": 88.95601501464844,
+            "p95": 92.34126281738281,
+            "min": 83.67874145507812,
+            "max": 93.01942443847656
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 359.40602111816406,
+            "mean": 356.7393544514974,
+            "p95": 359.40602111816406,
+            "min": 343.40602111816406,
+            "max": 359.40602111816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 268.3217239379883,
+            "mean": 267.78333943684896,
+            "p95": 275.63323974609375,
+            "min": 252.7457275390625,
+            "max": 275.72727966308594
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.90605,
+            "mean": 1.0326633333333333,
+            "p95": 1.7657,
+            "min": 0.7538,
+            "max": 1.8477
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 78.07437896728516,
+            "mean": 78.29592336018881,
+            "p95": 81.6817626953125,
+            "min": 73.01924133300781,
+            "max": 82.35992431640625
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 348.578125,
+            "mean": 345.9114583333333,
+            "p95": 348.578125,
+            "min": 332.578125,
+            "max": 348.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 268.15328216552734,
+            "mean": 267.6155349731445,
+            "p95": 275.46484375,
+            "min": 252.57733154296875,
+            "max": 275.5588836669922
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 819.3792495727539,
+            "mean": 818.7292925516764,
+            "p95": 823.1131210327148,
+            "min": 811.7989349365234,
+            "max": 823.9001388549805
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 827.265625,
+            "mean": 827.065625,
+            "p95": 831.265625,
+            "min": 821.765625,
+            "max": 831.515625
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 717.8847236633301,
+            "mean": 714.8542277018229,
+            "p95": 766.0986557006836,
+            "min": 581.5827865600586,
+            "max": 767.4292449951172
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 2313.1875,
+            "mean": 2276.90625,
+            "p95": 2313.1875,
+            "min": 2041.078125,
+            "max": 2313.1875
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 174.09414291381836,
+            "mean": 171.98832117716472,
+            "p95": 174.09414291381836,
+            "min": 158.30047988891602,
+            "max": 174.09414291381836
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4323.392555236816,
+            "mean": 4323.045064544678,
+            "p95": 4694.524875640869,
+            "min": 4101.056743621826,
+            "max": 4697.9155921936035
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6341.736015319824,
+            "mean": 6427.962993367513,
+            "p95": 6833.618232727051,
+            "min": 6240.150100708008,
+            "max": 6837.008949279785
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 3118.125,
+            "mean": 3083.748958333333,
+            "p95": 3617.96875,
+            "min": 2605.234375,
+            "max": 3628.71875
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 1295.796875,
+            "mean": 1114.3614583333333,
+            "p95": 1381.03125,
+            "min": 440.75,
+            "max": 1383.03125
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 839.34375,
+            "mean": 861.3645833333334,
+            "p95": 987.875,
+            "min": 728.515625,
+            "max": 990.40625
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1177.9296875,
+            "mean": 1221.4619791666667,
+            "p95": 1539.359375,
+            "min": 1102.46875,
+            "max": 1543.421875
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1217.0703125,
+            "mean": 1343.2833333333333,
+            "p95": 2014.96875,
+            "min": 784.6875,
+            "max": 2032.953125
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6341.736015319824,
+            "mean": 6427.962993367513,
+            "p95": 6833.618232727051,
+            "min": 6240.150100708008,
+            "max": 6837.008949279785
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 65.0,
+            "mean": 69.50572916666667,
+            "p95": 79.125,
+            "min": 60.421875,
+            "max": 79.125
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.4296875,
+            "mean": 9.861979166666666,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.015625,
+            "mean": 0.009375,
+            "p95": 0.03125,
+            "min": 0.0,
+            "max": 0.03125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 2139.0933570861816,
+            "mean": 2104.917928822835,
+            "p95": 2139.0933570861816,
+            "min": 1882.777645111084,
+            "max": 2139.0933570861816
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 99.33806610107422,
+            "mean": 97.5864501953125,
+            "p95": 99.62776184082031,
+            "min": 91.81022644042969,
+            "max": 99.63006591796875
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 379.40602111816406,
+            "mean": 378.2060211181641,
+            "p95": 379.40602111816406,
+            "min": 371.40602111816406,
+            "max": 379.40602111816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 279.9824676513672,
+            "mean": 280.61957092285155,
+            "p95": 284.6219787597656,
+            "min": 279.24522399902344,
+            "max": 284.7250213623047
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.90835,
+            "mean": 0.9740633333333333,
+            "p95": 1.1889,
+            "min": 0.8006,
+            "max": 1.4374
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 88.6785659790039,
+            "mean": 86.92667388916016,
+            "p95": 88.96826171875,
+            "min": 81.15072631835938,
+            "max": 88.97056579589844
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 368.578125,
+            "mean": 367.378125,
+            "p95": 368.578125,
+            "min": 360.578125,
+            "max": 368.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 279.81407165527344,
+            "mean": 280.45145111083986,
+            "p95": 284.4532775878906,
+            "min": 279.0768280029297,
+            "max": 284.5562286376953
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 1065.3739624023438,
+            "mean": 1058.693344370524,
+            "p95": 1255.4818496704102,
+            "min": 896.9720687866211,
+            "max": 1256.0365142822266
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 1073.390625,
+            "mean": 1067.2526041666667,
+            "p95": 1263.828125,
+            "min": 907.796875,
+            "max": 1263.828125
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 1189.6920051574707,
+            "mean": 1103.3924087524415,
+            "p95": 1382.120231628418,
+            "min": 689.3569793701172,
+            "max": 1384.0646438598633
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1807.46875,
+            "mean": 1834.46875,
+            "p95": 1874.96875,
+            "min": 1807.46875,
+            "max": 1874.96875
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 159.85785293579102,
+            "mean": 159.808194732666,
+            "p95": 159.85785293579102,
+            "min": 159.73370742797852,
+            "max": 159.85785293579102
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4369.806346893311,
+            "mean": 4425.21730855306,
+            "p95": 4655.165027618408,
+            "min": 4293.477367401123,
+            "max": 4655.274425506592
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6085.041389465332,
+            "mean": 6099.877863820394,
+            "p95": 6302.775924682617,
+            "min": 5941.088264465332,
+            "max": 6302.885322570801
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2800.6484375,
+            "mean": 2913.0973958333334,
+            "p95": 3249.6875,
+            "min": 2599.328125,
+            "max": 3260.109375
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 141.140625,
+            "mean": 679.1208333333333,
+            "p95": 1933.203125,
+            "min": 92.921875,
+            "max": 1934.609375
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 532.6796875,
+            "mean": 526.75625,
+            "p95": 626.984375,
+            "min": 431.921875,
+            "max": 642.125
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1244.7421875,
+            "mean": 1252.4890625,
+            "p95": 1346.828125,
+            "min": 1125.71875,
+            "max": 1362.484375
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1485.359375,
+            "mean": 1502.121875,
+            "p95": 1793.484375,
+            "min": 1281.03125,
+            "max": 1798.890625
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6085.041389465332,
+            "mean": 6099.878385416667,
+            "p95": 6302.791572570801,
+            "min": 5941.088264465332,
+            "max": 6302.885322570801
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 66.9375,
+            "mean": 69.33802083333333,
+            "p95": 82.0,
+            "min": 65.234375,
+            "max": 82.0
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.4375,
+            "mean": 11.733854166666667,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.0234375,
+            "mean": 0.03125,
+            "p95": 0.0625,
+            "min": 0.0,
+            "max": 0.0625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1647.610897064209,
+            "mean": 1674.660555267334,
+            "p95": 1715.2350425720215,
+            "min": 1647.610897064209,
+            "max": 1715.2350425720215
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 103.802490234375,
+            "mean": 102.47177429199219,
+            "p95": 104.72276306152344,
+            "min": 98.16873168945312,
+            "max": 104.94813537597656
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 391.40602111816406,
+            "mean": 390.07268778483075,
+            "p95": 391.40602111816406,
+            "min": 387.40602111816406,
+            "max": 391.40602111816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 287.57208251953125,
+            "mean": 287.6009134928385,
+            "p95": 289.229248046875,
+            "min": 282.4578857421875,
+            "max": 289.23728942871094
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.9775499999999999,
+            "mean": 1.2007833333333333,
+            "p95": 2.1917,
+            "min": 0.8374,
+            "max": 5.2326
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 93.14299011230469,
+            "mean": 91.81213836669922,
+            "p95": 94.06326293945312,
+            "min": 87.50923156738281,
+            "max": 94.28863525390625
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 380.578125,
+            "mean": 379.2447916666667,
+            "p95": 380.578125,
+            "min": 376.578125,
+            "max": 380.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 287.4036865234375,
+            "mean": 287.43265329996746,
+            "p95": 289.06085205078125,
+            "min": 282.28948974609375,
+            "max": 289.0688934326172
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 927.7319679260254,
+            "mean": 928.5309544881185,
+            "p95": 978.0448913574219,
+            "min": 891.398681640625,
+            "max": 979.1392211914062
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 934.3125,
+            "mean": 937.5015625,
+            "p95": 985.875,
+            "min": 902.234375,
+            "max": 986.875
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 880.9104499816895,
+            "mean": 889.0992459615071,
+            "p95": 1097.4815826416016,
+            "min": 692.3971405029297,
+            "max": 1133.4753036499023
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1701.296875,
+            "mean": 1731.421875,
+            "p95": 2002.546875,
+            "min": 1701.296875,
+            "max": 2002.546875
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 161.47748184204102,
+            "mean": 171.7579261779785,
+            "p95": 264.281925201416,
+            "min": 161.47748184204102,
+            "max": 264.281925201416
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4596.901809692383,
+            "mean": 4555.738575744629,
+            "p95": 4660.753498077393,
+            "min": 4395.651599884033,
+            "max": 4743.28479385376
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6139.447788238525,
+            "mean": 6115.402524566651,
+            "p95": 6200.572891235352,
+            "min": 5987.791641235352,
+            "max": 6283.104187011719
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2980.7109375,
+            "mean": 2984.618229166667,
+            "p95": 3491.4375,
+            "min": 1964.53125,
+            "max": 3552.546875
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 85.5234375,
+            "mean": 137.75833333333333,
+            "p95": 292.765625,
+            "min": 79.140625,
+            "max": 292.96875
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 543.2734375,
+            "mean": 550.8880208333334,
+            "p95": 766.59375,
+            "min": 343.9375,
+            "max": 771.21875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1274.6171875,
+            "mean": 1267.8692708333333,
+            "p95": 1421.265625,
+            "min": 1093.1875,
+            "max": 1430.125
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1383.203125,
+            "mean": 1405.8359375,
+            "p95": 2366.5625,
+            "min": 812.71875,
+            "max": 2443.46875
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6139.447788238525,
+            "mean": 6115.40877456665,
+            "p95": 6200.572891235352,
+            "min": 5987.791641235352,
+            "max": 6283.291687011719
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 72.0625,
+            "mean": 73.28072916666666,
+            "p95": 85.75,
+            "min": 71.6875,
+            "max": 86.109375
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.609375,
+            "mean": 13.191145833333334,
+            "p95": 14.609375,
+            "min": 0.1875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.03125,
+            "mean": 0.034375,
+            "p95": 0.0625,
+            "min": 0.0,
+            "max": 0.078125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1539.819393157959,
+            "mean": 1559.6639488220214,
+            "p95": 1738.264949798584,
+            "min": 1539.819393157959,
+            "max": 1738.264949798584
+          }
+        }
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "cc1d2ca0653e276db5e4a8c6e12f1b5d5655c3487a76dab4e057288a39698181"
+    },
+    {
+      "case": "ir-functional-910",
+      "label": "ir-cold-2",
+      "source": "7e10825340fe77d80046f3f0f7a0f9b614f64843",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "cold",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.02733787498437,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 4020,
+        "guestFps": 22.329941926884416,
+        "p95Ms": 51.35179206263274,
+        "p99Ms": 100.00270896125585,
+        "maxMs": 371.9074170803651,
+        "over100ms": {
+          "intervals": 41,
+          "totalSeconds": 6.2290930019225925
+        },
+        "over250ms": {
+          "intervals": 3,
+          "totalSeconds": 1.0496573330601677
+        },
+        "over500ms": {
+          "intervals": 0,
+          "totalSeconds": 0.0
+        },
+        "pipelineCreateMs": 4692.5613,
+        "pipelineCreates": 380,
+        "sampleFps": {
+          "samples": 178,
+          "median": 21.323320122768415,
+          "mean": 22.507610533108434,
+          "p95": 30.0433956091208,
+          "min": 11.05104266362981,
+          "max": 31.697644959717127
+        },
+        "samplesBelow15Fps": 6
+      },
+      "memorySamples": 178,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 113.92381286621094,
+            "mean": 113.86787312825521,
+            "p95": 117.52146911621094,
+            "min": 109.03060913085938,
+            "max": 118.23316955566406
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 323.3904113769531,
+            "mean": 322.72374471028644,
+            "p95": 327.3904113769531,
+            "min": 307.3904113769531,
+            "max": 327.3904113769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 209.51187133789062,
+            "mean": 208.85587158203126,
+            "p95": 213.81800842285156,
+            "min": 198.35980224609375,
+            "max": 213.8572235107422
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.8573999999999999,
+            "mean": 0.9402733333333333,
+            "p95": 1.2168,
+            "min": 0.754,
+            "max": 1.6975
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 103.27992248535156,
+            "mean": 103.22401428222656,
+            "p95": 106.87757873535156,
+            "min": 98.38648986816406,
+            "max": 107.58927917480469
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 312.578125,
+            "mean": 311.9114583333333,
+            "p95": 316.578125,
+            "min": 296.578125,
+            "max": 316.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 209.34347534179688,
+            "mean": 208.68744405110678,
+            "p95": 213.6496124267578,
+            "min": 198.19163513183594,
+            "max": 213.68882751464844
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 661.676342010498,
+            "mean": 663.2363207499186,
+            "p95": 696.7931976318359,
+            "min": 575.7017211914062,
+            "max": 697.3931732177734
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 671.96875,
+            "mean": 672.4067708333333,
+            "p95": 705.421875,
+            "min": 579.703125,
+            "max": 705.421875
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 782.8494338989258,
+            "mean": 761.5492075602214,
+            "p95": 830.0074920654297,
+            "min": 673.2291488647461,
+            "max": 841.8373336791992
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1738.765625,
+            "mean": 1841.453125,
+            "p95": 1995.484375,
+            "min": 1738.765625,
+            "max": 1995.484375
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 111.75654983520508,
+            "mean": 144.54472732543945,
+            "p95": 193.72699356079102,
+            "min": 111.75654983520508,
+            "max": 193.72699356079102
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4238.148929595947,
+            "mean": 4243.404722340902,
+            "p95": 4632.468898773193,
+            "min": 3983.361560821533,
+            "max": 4665.14075088501
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 5865.158004760742,
+            "mean": 5940.313120015462,
+            "p95": 6259.477973937988,
+            "min": 5785.118942260742,
+            "max": 6292.149826049805
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2870.484375,
+            "mean": 2886.671354166667,
+            "p95": 3151.84375,
+            "min": 2719.765625,
+            "max": 3203.171875
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 1174.515625,
+            "mean": 1202.76875,
+            "p95": 1356.0,
+            "min": 974.75,
+            "max": 1382.0
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 814.0625,
+            "mean": 799.4015625,
+            "p95": 1041.171875,
+            "min": 592.265625,
+            "max": 1133.171875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1165.2265625,
+            "mean": 1164.3583333333333,
+            "p95": 1234.484375,
+            "min": 1054.5625,
+            "max": 1251.96875
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1221.1015625,
+            "mean": 1192.1098958333334,
+            "p95": 1389.171875,
+            "min": 900.8125,
+            "max": 1431.109375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 5865.158004760742,
+            "mean": 5940.313120015462,
+            "p95": 6259.477973937988,
+            "min": 5785.118942260742,
+            "max": 6292.149826049805
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 66.1875,
+            "mean": 67.31770833333333,
+            "p95": 80.25,
+            "min": 62.921875,
+            "max": 80.25
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.609375,
+            "mean": 13.175,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0005208333333333333,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.015625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1627.009075164795,
+            "mean": 1696.9083976745605,
+            "p95": 1801.757381439209,
+            "min": 1627.009075164795,
+            "max": 1801.757381439209
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 119.219482421875,
+            "mean": 118.6611551920573,
+            "p95": 124.75082397460938,
+            "min": 106.43171691894531,
+            "max": 124.91288757324219
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 335.3904113769531,
+            "mean": 336.99041137695315,
+            "p95": 343.3904113769531,
+            "min": 335.3904113769531,
+            "max": 343.3904113769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 216.23373413085938,
+            "mean": 218.32925618489583,
+            "p95": 225.5177459716797,
+            "min": 213.4468994140625,
+            "max": 232.9586944580078
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.94005,
+            "mean": 0.9701133333333334,
+            "p95": 1.2348,
+            "min": 0.7546,
+            "max": 1.2991
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 108.57559204101562,
+            "mean": 108.01655782063803,
+            "p95": 114.10693359375,
+            "min": 95.78782653808594,
+            "max": 114.26899719238281
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 324.578125,
+            "mean": 326.178125,
+            "p95": 332.578125,
+            "min": 324.578125,
+            "max": 332.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 216.0663070678711,
+            "mean": 218.16156717936198,
+            "p95": 225.34934997558594,
+            "min": 213.27850341796875,
+            "max": 232.79029846191406
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 864.2290534973145,
+            "mean": 883.496546681722,
+            "p95": 968.9260635375977,
+            "min": 811.5405883789062,
+            "max": 969.4666366577148
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 871.578125,
+            "mean": 891.5828125,
+            "p95": 976.65625,
+            "min": 822.71875,
+            "max": 976.65625
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 990.0295791625977,
+            "mean": 1009.1768442789713,
+            "p95": 1103.5560760498047,
+            "min": 925.4272079467773,
+            "max": 1104.4743194580078
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1920.65625,
+            "mean": 1916.475,
+            "p95": 1920.65625,
+            "min": 1878.84375,
+            "max": 1920.65625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 182.37689590454102,
+            "mean": 182.25344619750976,
+            "p95": 182.37689590454102,
+            "min": 181.14239883422852,
+            "max": 182.37689590454102
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4078.7072219848633,
+            "mean": 4074.0124318440753,
+            "p95": 4174.293308258057,
+            "min": 3976.9025230407715,
+            "max": 4177.543308258057
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 5816.986576080322,
+            "mean": 5808.233985646566,
+            "p95": 5912.572662353516,
+            "min": 5715.1818771362305,
+            "max": 5915.822662353516
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2681.8125,
+            "mean": 2742.641145833333,
+            "p95": 3024.734375,
+            "min": 2505.8125,
+            "max": 3044.0
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 941.0859375,
+            "mean": 901.8645833333334,
+            "p95": 1061.65625,
+            "min": 705.015625,
+            "max": 1091.578125
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 592.359375,
+            "mean": 598.871875,
+            "p95": 685.3125,
+            "min": 543.015625,
+            "max": 699.34375
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1208.8046875,
+            "mean": 1218.271875,
+            "p95": 1336.703125,
+            "min": 1161.609375,
+            "max": 1343.21875
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1374.515625,
+            "mean": 1363.3854166666667,
+            "p95": 1537.453125,
+            "min": 1131.5,
+            "max": 1551.75
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 5816.986576080322,
+            "mean": 5808.231381479899,
+            "p95": 5912.572662353516,
+            "min": 5715.1818771362305,
+            "max": 5915.822662353516
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 66.1875,
+            "mean": 67.45833333333333,
+            "p95": 76.625,
+            "min": 62.5625,
+            "max": 76.625
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.609375,
+            "mean": 12.734375,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.015625,
+            "mean": 0.016666666666666666,
+            "p95": 0.0625,
+            "min": 0.0,
+            "max": 0.0625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1738.279354095459,
+            "mean": 1734.2215538024902,
+            "p95": 1738.279354095459,
+            "min": 1697.7013511657715,
+            "max": 1738.279354095459
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 120.34351348876953,
+            "mean": 119.06896565755208,
+            "p95": 121.35224914550781,
+            "min": 110.51113891601562,
+            "max": 121.63502502441406
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 343.3904113769531,
+            "mean": 343.3904113769531,
+            "p95": 343.3904113769531,
+            "min": 343.3904113769531,
+            "max": 343.3904113769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 223.0468978881836,
+            "mean": 224.32144571940105,
+            "p95": 232.75521850585938,
+            "min": 221.75538635253906,
+            "max": 232.8792724609375
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.8709,
+            "mean": 1.1040066666666666,
+            "p95": 1.2493,
+            "min": 0.7859,
+            "max": 6.1211
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 109.69915008544922,
+            "mean": 108.42476399739583,
+            "p95": 110.7078857421875,
+            "min": 99.86703491210938,
+            "max": 110.99066162109375
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 332.578125,
+            "mean": 332.578125,
+            "p95": 332.578125,
+            "min": 332.578125,
+            "max": 332.578125
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 222.87897491455078,
+            "mean": 224.15336100260416,
+            "p95": 232.58729553222656,
+            "min": 221.58746337890625,
+            "max": 232.71109008789062
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 1209.920810699463,
+            "mean": 1188.7399904886881,
+            "p95": 1249.8570098876953,
+            "min": 1070.879150390625,
+            "max": 1250.016845703125
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 1217.90625,
+            "mean": 1196.696875,
+            "p95": 1256.484375,
+            "min": 1082.03125,
+            "max": 1256.484375
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 1339.446475982666,
+            "mean": 1319.6554931640626,
+            "p95": 1388.252212524414,
+            "min": 1192.7683334350586,
+            "max": 1389.369499206543
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1709.84375,
+            "mean": 1805.06875,
+            "p95": 1947.90625,
+            "min": 1709.84375,
+            "max": 1947.90625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 167.81362533569336,
+            "mean": 201.51435775756835,
+            "p95": 252.06545639038086,
+            "min": 167.81362533569336,
+            "max": 252.06545639038086
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4593.951053619385,
+            "mean": 4602.448863728841,
+            "p95": 4699.246074676514,
+            "min": 4495.076076507568,
+            "max": 4718.792972564697
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6206.049648284912,
+            "mean": 6206.003255971273,
+            "p95": 6286.182472229004,
+            "min": 6077.291664123535,
+            "max": 6293.401222229004
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 3102.4453125,
+            "mean": 3100.3541666666665,
+            "p95": 3473.515625,
+            "min": 2610.171875,
+            "max": 3495.5625
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 122.0234375,
+            "mean": 126.74322916666667,
+            "p95": 190.09375,
+            "min": 95.65625,
+            "max": 192.375
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 539.859375,
+            "mean": 514.565625,
+            "p95": 660.765625,
+            "min": 315.5,
+            "max": 689.046875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1298.3515625,
+            "mean": 1319.3036458333333,
+            "p95": 1464.296875,
+            "min": 1131.203125,
+            "max": 1464.5625
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1358.15625,
+            "mean": 1397.3546875,
+            "p95": 1757.0625,
+            "min": 1013.796875,
+            "max": 1787.140625
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6206.049648284912,
+            "mean": 6206.0001309712725,
+            "p95": 6286.182472229004,
+            "min": 6077.291664123535,
+            "max": 6293.307472229004
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 73.8125,
+            "mean": 77.5625,
+            "p95": 87.875,
+            "min": 73.8125,
+            "max": 87.875
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.546875,
+            "mean": 1.484375,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.00625,
+            "p95": 0.03125,
+            "min": 0.0,
+            "max": 0.03125
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1542.0301246643066,
+            "mean": 1603.5543922424317,
+            "p95": 1695.8407936096191,
+            "min": 1542.0301246643066,
+            "max": 1695.8407936096191
+          }
+        }
+      },
+      "reliefObservations": [
+        {
+          "observedSeconds": 18.81628368748352,
+          "count": 12,
+          "beforeSeconds": 17.795722874929197,
+          "footprintChangeMiB": -75.0156478881836,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 48.19209487491753,
+          "count": 18,
+          "beforeSeconds": 47.17920564545784,
+          "footprintChangeMiB": 1.25,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 78.67617129138671,
+          "count": 21,
+          "beforeSeconds": 77.65891968749929,
+          "footprintChangeMiB": -27.5,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 108.04828445846215,
+          "count": 26,
+          "beforeSeconds": 107.01646535447799,
+          "footprintChangeMiB": -12.90625,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 138.45271262491588,
+          "count": 31,
+          "beforeSeconds": 137.4521417709766,
+          "footprintChangeMiB": -78.125,
+          "allZoneAllocatedChangeMiB": 0.0
+        },
+        {
+          "observedSeconds": 168.74601160397287,
+          "count": 33,
+          "beforeSeconds": 167.7411796664819,
+          "footprintChangeMiB": 11.0625,
+          "allZoneAllocatedChangeMiB": 0.0
+        }
+      ],
+      "admissionSamples": 178,
+      "lastAdmission": {
+        "available": 1,
+        "active": 0,
+        "waiting": 0,
+        "peak": 2,
+        "limit": 2,
+        "batches": 1070,
+        "reliefs": 33
+      },
+      "perfSHA": "19051458c21519d78f2fd562ceb18e4457a91cc4ccdf03eb70fb2dd7abeb14af"
+    },
+    {
+      "case": "ir-control-910",
+      "label": "master-cold-2",
+      "source": "0b49c7cbe65f1c75929b7bd7616ac75075f0373a",
+      "nativeSource": "9a09a595a54792a517c7d34437ad4857a894a685",
+      "nativeSHA": "496b64c6bbb5eb2e7090bb0d1805427afd4cf3eba00c8318fb6ae2f257bfbcd4",
+      "saveSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "cache": "cold",
+      "routeSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "durationSeconds": 180.0287520000711,
+      "ACKs": 40,
+      "normalExit": true,
+      "metrics": {
+        "frames": 4064,
+        "guestFps": 22.574171930039235,
+        "p95Ms": 51.34191701654345,
+        "p99Ms": 128.91845894046128,
+        "maxMs": 1955.9366250177845,
+        "over100ms": {
+          "intervals": 64,
+          "totalSeconds": 17.95780566672329
+        },
+        "over250ms": {
+          "intervals": 26,
+          "totalSeconds": 12.613339625997469
+        },
+        "over500ms": {
+          "intervals": 5,
+          "totalSeconds": 5.501560208853334
+        },
+        "pipelineCreateMs": 28857.8665,
+        "pipelineCreates": 399,
+        "sampleFps": {
+          "samples": 177,
+          "median": 23.083673222341307,
+          "mean": 22.73911533476122,
+          "p95": 30.32987695853087,
+          "min": 0,
+          "max": 31.762548478940936
+        },
+        "samplesBelow15Fps": 16
+      },
+      "memorySamples": 177,
+      "memoryBands": {
+        "0-30": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 95.58554077148438,
+            "mean": 95.12033449370286,
+            "p95": 103.89387512207031,
+            "min": 85.82698059082031,
+            "max": 103.90147399902344
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 355.42164611816406,
+            "mean": 363.8354392216123,
+            "p95": 379.42164611816406,
+            "min": 351.42164611816406,
+            "max": 379.42164611816406
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 29,
+            "median": 269.59466552734375,
+            "mean": 268.7151047279095,
+            "p95": 281.09913635253906,
+            "min": 253.8416748046875,
+            "max": 282.81158447265625
+          },
+          "captureMs": {
+            "samples": 29,
+            "median": 0.8533,
+            "mean": 0.9405241379310345,
+            "p95": 1.398,
+            "min": 0.736,
+            "max": 1.7029
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 29,
+            "median": 84.92604064941406,
+            "mean": 84.46076702249461,
+            "p95": 93.234375,
+            "min": 75.16748046875,
+            "max": 93.24197387695312
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 29,
+            "median": 344.59375,
+            "mean": 353.00754310344826,
+            "p95": 368.59375,
+            "min": 340.59375,
+            "max": 368.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 29,
+            "median": 269.42626953125,
+            "mean": 268.5467760809537,
+            "p95": 280.9307403564453,
+            "min": 253.67327880859375,
+            "max": 282.64292907714844
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 29,
+            "median": 809.16259765625,
+            "mean": 807.8144852210736,
+            "p95": 816.8180313110352,
+            "min": 792.1134796142578,
+            "max": 818.900390625
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 29,
+            "median": 814.765625,
+            "mean": 814.0754310344828,
+            "p95": 823.203125,
+            "min": 800.609375,
+            "max": 823.203125
+          },
+          "managedHeapBytes": {
+            "samples": 29,
+            "median": 856.459587097168,
+            "mean": 846.29123161579,
+            "p95": 922.4469375610352,
+            "min": 716.657829284668,
+            "max": 923.5166091918945
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 29,
+            "median": 2257.578125,
+            "mean": 2208.285021551724,
+            "p95": 2257.578125,
+            "min": 2078.890625,
+            "max": 2257.578125
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 29,
+            "median": 176.87160873413086,
+            "mean": 176.64424856777848,
+            "p95": 176.87160873413086,
+            "min": 176.04742813110352,
+            "max": 176.87160873413086
+          },
+          "nonResourceProxyMiB": {
+            "samples": 29,
+            "median": 3857.8968238830566,
+            "mean": 3831.349722895129,
+            "p95": 3955.963794708252,
+            "min": 3690.4438819885254,
+            "max": 3980.229305267334
+          },
+          "physFootprintBytes": {
+            "samples": 29,
+            "median": 5839.291091918945,
+            "mean": 5862.990495879075,
+            "p95": 5973.2600021362305,
+            "min": 5771.1503982543945,
+            "max": 5992.712829589844
+          },
+          "task_compressedBytes": {
+            "samples": 29,
+            "median": 2500.171875,
+            "mean": 2536.6869612068967,
+            "p95": 2712.1875,
+            "min": 2365.234375,
+            "max": 2718.203125
+          },
+          "task_deviceBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 29,
+            "median": 1433.234375,
+            "mean": 1421.1519396551723,
+            "p95": 1477.578125,
+            "min": 1315.171875,
+            "max": 1481.171875
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 29,
+            "median": 922.296875,
+            "mean": 900.3453663793103,
+            "p95": 1132.984375,
+            "min": 740.734375,
+            "max": 1156.59375
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 29,
+            "median": 1145.109375,
+            "mean": 1162.063577586207,
+            "p95": 1224.609375,
+            "min": 1103.703125,
+            "max": 1225.984375
+          },
+          "task_internalBytes": {
+            "samples": 29,
+            "median": 1375.0625,
+            "mean": 1338.7004310344828,
+            "p95": 1529.671875,
+            "min": 1110.984375,
+            "max": 1533.484375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 29,
+            "median": 5839.291091918945,
+            "mean": 5862.990495879075,
+            "p95": 5973.2600021362305,
+            "min": 5771.1503982543945,
+            "max": 5992.712829589844
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 29,
+            "median": 73.734375,
+            "mean": 77.72306034482759,
+            "p95": 85.484375,
+            "min": 71.0625,
+            "max": 85.484375
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.546875,
+            "mean": 7.211745689655173,
+            "p95": 14.609375,
+            "min": 0.1875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 29,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 29,
+            "median": 0.015625,
+            "mean": 0.6831896551724138,
+            "p95": 5.78125,
+            "min": 0.0,
+            "max": 6.15625
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 29,
+            "median": 2080.706516265869,
+            "mean": 2031.6407729839457,
+            "p95": 2080.706516265869,
+            "min": 1902.8431968688965,
+            "max": 2080.706516265869
+          }
+        },
+        "75-105": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 102.93250274658203,
+            "mean": 102.79093627929687,
+            "p95": 104.88368225097656,
+            "min": 100.36903381347656,
+            "max": 104.92549133300781
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 383.4060363769531,
+            "mean": 383.4060363769531,
+            "p95": 383.4060363769531,
+            "min": 383.4060363769531,
+            "max": 383.4060363769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 280.4735336303711,
+            "mean": 280.61510009765624,
+            "p95": 282.8697967529297,
+            "min": 278.4805450439453,
+            "max": 283.03700256347656
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.88925,
+            "mean": 0.94634,
+            "p95": 1.1691,
+            "min": 0.7845,
+            "max": 1.3708
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 92.28813934326172,
+            "mean": 92.14669494628906,
+            "p95": 94.23931884765625,
+            "min": 89.72514343261719,
+            "max": 94.2811279296875
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 372.59375,
+            "mean": 372.59375,
+            "p95": 372.59375,
+            "min": 372.59375,
+            "max": 372.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 280.3056106567383,
+            "mean": 280.4470550537109,
+            "p95": 282.70140075683594,
+            "min": 278.3126220703125,
+            "max": 282.8686065673828
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 920.3704719543457,
+            "mean": 954.0645563761393,
+            "p95": 1044.86376953125,
+            "min": 920.1026840209961,
+            "max": 1045.2121887207031
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 929.34375,
+            "mean": 961.8515625,
+            "p95": 1052.25,
+            "min": 928.4375,
+            "max": 1052.25
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 758.9118461608887,
+            "mean": 873.3038925170898,
+            "p95": 1204.2999114990234,
+            "min": 716.6687393188477,
+            "max": 1209.727439880371
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1871.703125,
+            "mean": 1897.8109375,
+            "p95": 1983.59375,
+            "min": 1871.703125,
+            "max": 1983.59375
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 146.22797012329102,
+            "mean": 146.3397092183431,
+            "p95": 146.70685195922852,
+            "min": 146.22797012329102,
+            "max": 146.70685195922852
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4196.089878082275,
+            "mean": 4191.98441212972,
+            "p95": 4290.941417694092,
+            "min": 4112.904582977295,
+            "max": 4291.738292694092
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 5926.690032958984,
+            "mean": 5943.455640411377,
+            "p95": 6021.94775390625,
+            "min": 5905.229118347168,
+            "max": 6029.979026794434
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 2502.484375,
+            "mean": 2488.2473958333335,
+            "p95": 2600.578125,
+            "min": 2343.515625,
+            "max": 2608.109375
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 1448.3125,
+            "mean": 1448.9671875,
+            "p95": 1458.34375,
+            "min": 1441.71875,
+            "max": 1458.8125
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 647.890625,
+            "mean": 644.5177083333333,
+            "p95": 673.671875,
+            "min": 614.3125,
+            "max": 693.25
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1223.7578125,
+            "mean": 1227.3369791666667,
+            "p95": 1257.796875,
+            "min": 1178.6875,
+            "max": 1258.015625
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1665.390625,
+            "mean": 1672.2239583333333,
+            "p95": 1788.828125,
+            "min": 1562.125,
+            "max": 1798.5625
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 5926.690032958984,
+            "mean": 5943.458765411377,
+            "p95": 6021.94775390625,
+            "min": 5905.229118347168,
+            "max": 6029.979026794434
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 73.5625,
+            "mean": 77.3125,
+            "p95": 87.625,
+            "min": 73.5625,
+            "max": 87.625
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.546875,
+            "mean": 0.546875,
+            "p95": 0.546875,
+            "min": 0.546875,
+            "max": 0.546875
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.09375,
+            "mean": 0.08125,
+            "p95": 0.109375,
+            "min": 0.046875,
+            "max": 0.109375
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1725.475154876709,
+            "mean": 1751.471228281657,
+            "p95": 1836.8868980407715,
+            "min": 1725.475154876709,
+            "max": 1836.8868980407715
+          }
+        },
+        "150-181": {
+          "allZones_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 97.08448028564453,
+            "mean": 97.46338958740235,
+            "p95": 98.39436340332031,
+            "min": 96.25848388671875,
+            "max": 99.40191650390625
+          },
+          "allZones_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 383.4060363769531,
+            "mean": 383.4060363769531,
+            "p95": 383.4060363769531,
+            "min": 383.4060363769531,
+            "max": 383.4060363769531
+          },
+          "allZones_sizeInUseBytes": {
+            "samples": 30,
+            "median": 286.3215560913086,
+            "mean": 285.9426467895508,
+            "p95": 286.7097930908203,
+            "min": 284.0041198730469,
+            "max": 287.1475524902344
+          },
+          "captureMs": {
+            "samples": 30,
+            "median": 0.8914500000000001,
+            "mean": 0.9343366666666667,
+            "p95": 1.1178,
+            "min": 0.8158,
+            "max": 1.1689
+          },
+          "defaultZone_reservedMinusLiveMiB": {
+            "samples": 30,
+            "median": 86.44009399414062,
+            "mean": 86.81935323079428,
+            "p95": 87.75027465820312,
+            "min": 85.61459350585938,
+            "max": 88.75802612304688
+          },
+          "defaultZone_sizeAllocatedBytes": {
+            "samples": 30,
+            "median": 372.59375,
+            "mean": 372.59375,
+            "p95": 372.59375,
+            "min": 372.59375,
+            "max": 372.59375
+          },
+          "defaultZone_sizeInUseBytes": {
+            "samples": 30,
+            "median": 286.1536560058594,
+            "mean": 285.77439676920574,
+            "p95": 286.54139709472656,
+            "min": 283.8357238769531,
+            "max": 286.9791564941406
+          },
+          "lastGcHeapSizeBytes": {
+            "samples": 30,
+            "median": 1455.0454750061035,
+            "mean": 1453.1471692403159,
+            "p95": 1616.2856216430664,
+            "min": 1293.6717987060547,
+            "max": 1650.220474243164
+          },
+          "lastGcTotalCommittedBytes": {
+            "samples": 30,
+            "median": 1462.421875,
+            "mean": 1460.2979166666667,
+            "p95": 1623.921875,
+            "min": 1301.09375,
+            "max": 1657.828125
+          },
+          "managedHeapBytes": {
+            "samples": 30,
+            "median": 1474.5998001098633,
+            "mean": 1467.1054423014323,
+            "p95": 1639.1510391235352,
+            "min": 1297.2764892578125,
+            "max": 1673.4089889526367
+          },
+          "metal4CacheMetalDeviceCurrentAllocatedBytes": {
+            "samples": 30,
+            "median": 1686.65625,
+            "mean": 1755.8390625,
+            "p95": 1917.265625,
+            "min": 1686.65625,
+            "max": 1917.265625
+          },
+          "metalMinusVulkanProxyMiB": {
+            "samples": 30,
+            "median": 160.07464981079102,
+            "mean": 178.5380874633789,
+            "p95": 221.61944198608398,
+            "min": 160.07464981079102,
+            "max": 221.61944198608398
+          },
+          "nonResourceProxyMiB": {
+            "samples": 30,
+            "median": 4972.537799835205,
+            "mean": 4937.054827372233,
+            "p95": 5174.960750579834,
+            "min": 4756.257396697998,
+            "max": 5219.601398468018
+          },
+          "physFootprintBytes": {
+            "samples": 30,
+            "median": 6508.784469604492,
+            "mean": 6514.355802408854,
+            "p95": 6745.839317321777,
+            "min": 6282.838996887207,
+            "max": 6746.182998657227
+          },
+          "task_compressedBytes": {
+            "samples": 30,
+            "median": 3402.515625,
+            "mean": 3354.50625,
+            "p95": 3648.78125,
+            "min": 3094.90625,
+            "max": 3676.359375
+          },
+          "task_deviceBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_externalBytes": {
+            "samples": 30,
+            "median": 1250.7578125,
+            "mean": 1202.7630208333333,
+            "p95": 1252.65625,
+            "min": 1071.53125,
+            "max": 1252.65625
+          },
+          "task_graphicsCompressedBytes": {
+            "samples": 30,
+            "median": 421.6796875,
+            "mean": 449.12708333333336,
+            "p95": 596.25,
+            "min": 366.40625,
+            "max": 604.671875
+          },
+          "task_graphicsFootprintBytes": {
+            "samples": 30,
+            "median": 1289.7109375,
+            "mean": 1292.1901041666667,
+            "p95": 1408.09375,
+            "min": 1191.15625,
+            "max": 1449.890625
+          },
+          "task_internalBytes": {
+            "samples": 30,
+            "median": 1513.8984375,
+            "mean": 1509.0765625,
+            "p95": 1640.75,
+            "min": 1324.71875,
+            "max": 1644.734375
+          },
+          "task_iokitMappedBytes": null,
+          "task_physFootprintBytes": {
+            "samples": 30,
+            "median": 6508.784469604492,
+            "mean": 6514.3693440755205,
+            "p95": 6745.839317321777,
+            "min": 6282.838996887207,
+            "max": 6746.589248657227
+          },
+          "task_purgeableNonvolatileBytes": {
+            "samples": 30,
+            "median": 73.8125,
+            "mean": 76.55,
+            "p95": 87.625,
+            "min": 73.5625,
+            "max": 87.875
+          },
+          "task_purgeableNonvolatileCompressedBytes": {
+            "samples": 30,
+            "median": 14.609375,
+            "mean": 11.796875,
+            "p95": 14.609375,
+            "min": 0.546875,
+            "max": 14.609375
+          },
+          "task_purgeableVolatileBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_purgeableVolatileCompressedBytes": {
+            "samples": 30,
+            "median": 0.0,
+            "mean": 0.0,
+            "p95": 0.0,
+            "min": 0.0,
+            "max": 0.0
+          },
+          "task_reusableBytes": {
+            "samples": 30,
+            "median": 0.015625,
+            "mean": 0.29375,
+            "p95": 0.953125,
+            "min": 0.0,
+            "max": 0.96875
+          },
+          "vulkanAllocatorTotalRequestedLiveBytes": {
+            "samples": 30,
+            "median": 1526.581600189209,
+            "mean": 1577.3009750366211,
+            "p95": 1695.646183013916,
+            "min": 1526.581600189209,
+            "max": 1695.646183013916
+          }
+        }
+      },
+      "reliefObservations": [],
+      "admissionSamples": 0,
+      "lastAdmission": null,
+      "perfSHA": "ab4101fb1f6086507eaf2a86131e9ab6121e4b7a1ece63ba2e23887d3b68d3bb"
+    }
+  ],
+  "scope": "Frozen ordered product comparisons; 905 historical cold pair plus six requested A4 runs. System Metal cache uncleared. Guest fence_ready frames / actual route duration; within-window intervals, no censored boundary intervals. Pipeline totals and sampled FPS are secondary. Native memory accounting overlaps and is not a physical ownership partition. Original 905 has no A5 native memory sampler. Admission telemetry was added for remaining candidate runs after the paused master warm route; core A5 sampling and native/compiler binaries unchanged."
+}

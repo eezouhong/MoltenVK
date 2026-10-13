@@ -10,6 +10,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  metal_ir_resident_cache:
+    name: Metal IR resident-cache CPU regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate resident limits, ownership, and concurrency without Metal
+        run: python3 Scripts/test-metal-ir-resident-cache.py
+
   shared_shader_repository_policy:
     name: Metal 4 shared shader repository policy
     runs-on: ubuntu-latest

@@ -435,6 +435,9 @@ void MVKCommandEncoder::beginEncoding(id<MTLCommandBuffer> mtlCmdBuff, MVKComman
     _canUseLayeredRendering = false;
 
     _mtlCmdBuffer = mtlCmdBuff;        // not retained
+	// Never reuse a slice from an earlier command buffer, even if its GPU work
+	// has not finished. Its completion handlers still own the old allocations.
+	_metalIRCommands.reset();
 
 	_cmdBuffer->setMetalObjectLabel(_mtlCmdBuffer, _cmdBuffer->_debugName);
 }

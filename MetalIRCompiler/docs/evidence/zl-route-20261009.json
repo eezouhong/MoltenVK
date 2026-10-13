@@ -1,0 +1,152 @@
+{
+  "rows": [
+    {
+      "case": "ir-control-905",
+      "source": "09d98ddd5ccf1e3f980ff012ac6b9ed6ae4494a4",
+      "nativeSource": "9a09a595a54792a517c7d34437ad4857a894a685",
+      "nativeSHA": "496b64c6bbb5eb2e7090bb0d1805427afd4cf3eba00c8318fb6ae2f257bfbcd4",
+      "compilerSHA": "32681dddbb824488ed591501de048926ed1bba2ddf15c0d934685184e549f4ca",
+      "compilerLoaded": false,
+      "routeComplete": true,
+      "protocolExact": true,
+      "ACKs": 40,
+      "maximumSubmitLatenessMs": 11.879415949806571,
+      "requestedSeconds": 180,
+      "actualSeconds": 180.01548912504222,
+      "perfWindow": [
+        102773,
+        283442
+      ],
+      "fps": {
+        "samples": 177,
+        "mean": 19.863728878258076,
+        "median": 21.325185918227483,
+        "sampleP05": 3.5146922707151576,
+        "sampleP95": 30.19474296529486,
+        "min": 0,
+        "max": 31.731932190927957
+      },
+      "sampleMeanFrameTimeMs": {
+        "samples": 177,
+        "mean": 74.52322402960027,
+        "median": 45.814250013791025,
+        "sampleP05": 32.90211591545655,
+        "sampleP95": 231.96719802217558,
+        "min": 0,
+        "max": 637.3840556868041
+      },
+      "directionApproxFps": {
+        "forward": {
+          "samples": 78,
+          "mean": 19.210631593997327,
+          "median": 21.35329516927929,
+          "sampleP05": 2.7360509743160626,
+          "sampleP95": 30.150903660565227,
+          "min": 0,
+          "max": 30.972558551273394
+        },
+        "backward": {
+          "samples": 99,
+          "mean": 20.378290374948364,
+          "median": 21.325185918227483,
+          "sampleP05": 3.973257113587528,
+          "sampleP95": 30.3018205475433,
+          "min": 0,
+          "max": 31.731932190927957
+        }
+      },
+      "pipelineCreates": 551,
+      "pipelineCreateMs": 39463.3171,
+      "blockingShaderJoinMs": 13.625,
+      "blockingPipelineJoinMs": 0,
+      "saveManifestSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "coldAppCaches": true,
+      "normalExit": true,
+      "routeScriptSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "performanceSHA": "2bd6da1ce321620df421c2f7eaed3112fcca3f20ae7d5c5b6f762f25a1c878dc"
+    },
+    {
+      "case": "ir-functional-905",
+      "source": "558b568d50935efbdacbc66e98e0c9cf4420299d",
+      "nativeSource": "c2ca76af6dcde4355969ddf2a8933eb51e7f7765",
+      "nativeSHA": "43037ba2c2bf85f3d7a1af31bf5e02e46be901f42c3854a34901dd1fa58b2130",
+      "compilerSHA": "32681dddbb824488ed591501de048926ed1bba2ddf15c0d934685184e549f4ca",
+      "compilerLoaded": true,
+      "routeComplete": true,
+      "protocolExact": true,
+      "ACKs": 40,
+      "maximumSubmitLatenessMs": 10.073584038764238,
+      "requestedSeconds": 180,
+      "actualSeconds": 180.02271729207132,
+      "perfWindow": [
+        83120,
+        262860
+      ],
+      "fps": {
+        "samples": 177,
+        "mean": 25.037774697556337,
+        "median": 25.492943220927273,
+        "sampleP05": 16.8834485224867,
+        "sampleP95": 30.317974588161952,
+        "min": 6.4308947011419715,
+        "max": 31.27269102295973
+      },
+      "sampleMeanFrameTimeMs": {
+        "samples": 177,
+        "mean": 42.321323464780384,
+        "median": 39.226541687783445,
+        "sampleP05": 32.983733695405334,
+        "sampleP95": 59.22960576852067,
+        "min": 31.976781251917902,
+        "max": 155.4993584053591
+      },
+      "directionApproxFps": {
+        "forward": {
+          "samples": 79,
+          "mean": 25.727430586888705,
+          "median": 26.36910401177716,
+          "sampleP05": 17.55029346006979,
+          "sampleP95": 30.530909987042286,
+          "min": 6.4308947011419715,
+          "max": 31.245593693041368
+        },
+        "backward": {
+          "samples": 98,
+          "mean": 24.481827603094533,
+          "median": 24.415504688942605,
+          "sampleP05": 16.845358108377347,
+          "sampleP95": 30.312054348853007,
+          "min": 7.93228428891549,
+          "max": 31.27269102295973
+        }
+      },
+      "pipelineCreates": 391,
+      "pipelineCreateMs": 9011.1525,
+      "blockingShaderJoinMs": 2.7493999999999996,
+      "blockingPipelineJoinMs": 0,
+      "saveManifestSHA": "c3606d8329c500a23e53ca3a720ead10f0d4a217b8b2e55913f903f41a34807d",
+      "coldAppCaches": true,
+      "normalExit": true,
+      "routeScriptSHA": "9ed5b9d7050effca51b5cb91ff1472e7537cf8133cc73179993bcf3255d25109",
+      "performanceSHA": "dca8eaf8d702cb565837772bbe5902d18564b5a1d0b796e4d1a8924d2b243e6b"
+    }
+  ],
+  "scope": "Latest shipping master/pin MSL versus master-merged IR candidate; exact formal180sZL input protocol, independentprofiles/same frozen save, coldappcached/systemMetalcacheuncleared. Fullroute averages are intervalsampleFPS, not individualframe percentile; direction partitions use ACK-associated perf cursors and are approximate, not native inputacceptance windows. Different compile pauses can change realized position; no fixed-input pixel equivalence or isolated compilerflag/performance attribution. All unfavorable data retained.",
+  "protocol": {
+    "name": "canonical TOTK 180-second ZL patrol",
+    "cycles": 10,
+    "cycleSeconds": 18,
+    "forwardSeconds": 8,
+    "backwardSeconds": 10,
+    "screenshotsDuringMeasurement": false,
+    "firmware": "23.0.0",
+    "startClock": "none",
+    "systemMetalCacheCleared": false,
+    "runOrder": [
+      "MSL",
+      "IR"
+    ],
+    "phoneOperations": 0
+  },
+  "boundary": "One ordered host pair; interval-sample FPS, not repeated-run inference or isolated compiler causality. Realized positions and pipeline counts differ. No original game assets, profiles, keys, shader inputs or raw logs are published."
+}

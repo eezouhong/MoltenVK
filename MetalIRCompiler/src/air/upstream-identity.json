@@ -1,0 +1,12 @@
+{
+  "BitcodeWriter.cpp": {
+    "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-17.0.6/llvm/lib/Bitcode/Writer/BitcodeWriter.cpp",
+    "sha256": "db23bc9edcc1904ec06e871d1a9c5c0196011a0071ec198dcaab108eeadbe648",
+    "bytes": 203705
+  },
+  "ValueEnumerator.h": {
+    "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-17.0.6/llvm/lib/Bitcode/Writer/ValueEnumerator.h",
+    "sha256": "0382dbab88495df18ce667ed3c7fb9e0ea8552bc782a513b3494034e154e1430",
+    "bytes": 10605
+  }
+}

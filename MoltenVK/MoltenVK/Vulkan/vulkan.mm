@@ -40,6 +40,7 @@
 #include "MVKSwapchain.h"
 #include "MVKSurface.h"
 #include "MVKFoundation.h"
+#include "MVKShaderRouteConfig.h"
 #include "MVKOSExtensions.h"
 
 #include <pthread.h>
@@ -206,6 +207,7 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkCreateInstance(
 	const VkAllocationCallbacks*                pAllocator,
     VkInstance*                                 pInstance) {
 
+	(void)mvkShaderRouteConfig(); // Freeze before MVKInstance enumerates physical devices.
 	MVKTraceVulkanCallStart();
 	MVKInstance* mvkInst = new MVKInstance(pCreateInfo);
 	*pInstance = mvkInst->getVkInstance();
@@ -321,6 +323,12 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vkGetInstanceProcAddr(
 		func = (PFN_vkVoidFunction)vkEnumerateInstanceLayerProperties;
 	} else if (mvkStringsAreEqual(pName, "vkEnumerateInstanceVersion")) {
 		func = (PFN_vkVoidFunction)vkEnumerateInstanceVersion;
+	} else if (mvkStringsAreEqual(pName, "vkGetShaderCompilerRouteMVK")) {
+		func = (PFN_vkVoidFunction)vkGetShaderCompilerRouteMVK;
+	} else if (mvkStringsAreEqual(pName, "vkGetMetalIRCompilerABIMVK")) {
+		func = (PFN_vkVoidFunction)vkGetMetalIRCompilerABIMVK;
+	} else if (mvkStringsAreEqual(pName, "vkConfigureMetalIRCacheMVK")) {
+		func = (PFN_vkVoidFunction)vkConfigureMetalIRCacheMVK;
 	} else if (mvkStringsAreEqual(pName, "vkGetMoltenVKConfigurationMVK")) {
 		func = (PFN_vkVoidFunction)vkGetMoltenVKConfigurationMVK;
 	} else if (instance) {
@@ -4523,4 +4531,3 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vk_icdGetPhysicalDeviceProcAddr(
 	MVKTraceVulkanCallEnd();
 	return func;
 }
-

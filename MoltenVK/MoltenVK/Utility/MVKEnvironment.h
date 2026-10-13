@@ -358,5 +358,5 @@ void mvkSetConfig(MVKConfiguration& dstMVKConfig, const MVKConfiguration& srcMVK
 
 /** Maximum resident shared shader libraries. Zero keeps all canonical libraries resident. */
 #ifndef MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT
-#   define MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT 0
+#   define MVK_CONFIG_METAL4_SHARED_SHADER_LIBRARY_RESIDENT_LIMIT 512
 #endif

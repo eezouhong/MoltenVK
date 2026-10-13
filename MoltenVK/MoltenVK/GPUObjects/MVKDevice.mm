@@ -25,6 +25,10 @@
 #include "MVKSwapchain.h"
 #include "MVKQueryPool.h"
 #include "MVKShaderModule.h"
+#include "MVKShaderMathPolicy.h"
+#include "MVKMetalIR.h"
+#include "MVKShaderRouteConfig.h"
+#include "MVKShaderBackend.h"
 #include "MVKPipeline.h"
 #include "MVKFramebuffer.h"
 #include "MVKRenderPass.h"
@@ -3407,7 +3411,8 @@ void MVKPhysicalDevice::initFeatures() {
 
 	// Additional non-extension Vulkan 1.4 features.
 	mvkClear(&_vulkan14NoExtFeatures);		// Start with everything cleared
-	_vulkan14NoExtFeatures.pushDescriptor = true;
+	// Physical-device advertising precedes logical MVKDevice and its shader backend.
+	_vulkan14NoExtFeatures.pushDescriptor = MVKShaderRouteCapabilities{mvkMetalIREnabled()}.supportsPushDescriptors();
 
 }
 
@@ -4079,6 +4084,9 @@ void MVKPhysicalDevice::initExternalMemoryProperties() {
 void MVKPhysicalDevice::initExtensions() {
 	MVKExtensionList* pWritableExtns = (MVKExtensionList*)&_supportedExtensions;
 	pWritableExtns->disableAllButEnabledDeviceExtensions();
+	// IR currently rejects push-descriptor layouts; advertise that limitation.
+	// This physical-device extension query has no logical-device backend yet.
+	if (!MVKShaderRouteCapabilities{mvkMetalIREnabled()}.supportsPushDescriptors()) pWritableExtns->vk_KHR_push_descriptor.enabled = false;
 
 	if (!_metalFeatures.subgroupUniformControlFlow) {
 		pWritableExtns->vk_KHR_shader_subgroup_uniform_control_flow.enabled = false;
@@ -5499,16 +5507,7 @@ MTLCompileOptions* MVKDevice::getMTLCompileOptions(uint32_t fpFastMathFlags,
 	MTLCompileOptions* mtlCompOpt = [MTLCompileOptions new];
 	mtlCompOpt.languageVersion = _physicalDevice->_metalFeatures.mslVersionEnum;
 
-	switch (getMVKConfig().fastMathEnabled) {
-		case MVK_CONFIG_FAST_MATH_ALWAYS:
-			fpFastMathFlags = mvk::kSPIRVFPFastMathModesSupported;
-			break;
-		case MVK_CONFIG_FAST_MATH_NEVER:
-			fpFastMathFlags = spv::FPFastMathModeMaskNone;
-			break;
-		default:
-			break;
-	}
+	const auto mathMode = mvkshader::resolveMathMode(getMVKConfig().fastMathEnabled, fpFastMathFlags);
 
 #if MVK_XCODE_16
 	// Match Metal FP options as closely as possible to SPIR-V FPFastMathModeMask flags.
@@ -5517,20 +5516,20 @@ MTLCompileOptions* MVKDevice::getMTLCompileOptions(uint32_t fpFastMathFlags,
 	if ([mtlCompOpt respondsToSelector: @selector(mathMode)]) {
 		MTLMathMode mtlMathMode = MTLMathModeSafe;
 		MTLMathFloatingPointFunctions mtlFPFuncs = MTLMathFloatingPointFunctionsPrecise;
-		if (mvkAreAllFlagsEnabled(fpFastMathFlags, (spv::FPFastMathModeNSZMask | spv::FPFastMathModeAllowRecipMask |
-													spv::FPFastMathModeAllowReassocMask | spv::FPFastMathModeAllowContractMask))) {
+		if (mathMode != mvkshader::MathMode::Safe) {
 			mtlMathMode = MTLMathModeRelaxed;
-			if (mvkAreAllFlagsEnabled(fpFastMathFlags, (spv::FPFastMathModeNotNaNMask | spv::FPFastMathModeNotInfMask))) {
+			if (mathMode == mvkshader::MathMode::Fast) {
 				mtlMathMode = MTLMathModeFast;
 				mtlFPFuncs = MTLMathFloatingPointFunctionsFast;
 			}
 		}
+
 		mtlCompOpt.mathMode = mtlMathMode;
 		mtlCompOpt.mathFloatingPointFunctions = mtlFPFuncs;
 	} else
 #endif
 	{
-		mtlCompOpt.fastMathEnabled = mvkAreAllFlagsEnabled(fpFastMathFlags, mvk::kSPIRVFPFastMathModesSupported);
+		mtlCompOpt.fastMathEnabled = mathMode == mvkshader::MathMode::Fast;
 	}
 
 	if ([mtlCompOpt respondsToSelector: @selector(optimizationLevel)]) {
@@ -5710,6 +5709,10 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 		return;
 	}
 
+	// Stateless route/residency facade must exist before any logical-device helper initialization.
+	_metalIRShaderCompilerEnabled = mvkMetalIREnabled();
+	_shaderBackend = MVKShaderBackend::create(_metalIRShaderCompilerEnabled);
+
 	initPhysicalDevice(physicalDevice, pCreateInfo);
 	initPerformanceTracking();
 	enableExtensions(pCreateInfo);
@@ -5751,6 +5754,9 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 			   _physicalDevice->_isUsingMetalArgumentBuffers ? (_physicalDevice->_metalFeatures.needsArgumentBufferEncoders
 																? "Metal argument buffers" : "Metal3 argument buffers") : "discrete resource indexes");
 
+	reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Shader compiler selected: %s (automatic MSL fallback disabled)",
+	              mvkShaderRouteConfig().selected == MVKShaderCompilerRoute::Unavailable ? "unavailable (requested Metal IR)" :
+	              _metalIRShaderCompilerEnabled ? "Metal IR" : "MSL");
 	_metal4CompilerService = MVKMetal4CompilerService::create(this);
 	_shaderLibraryRepository = MVKShaderLibraryRepository::create(this);
 	_metal4TextureViewPool = MVKMetal4TextureViewPool::create(this);
@@ -6124,6 +6130,8 @@ MVKDevice::~MVKDevice() {
 
 	delete _metal4TextureViewPool;
 	delete _shaderLibraryRepository;
+	mvkMetalIRDestroyDevice(this);
+	delete _shaderBackend;
 	delete _metal4CompilerService;
 	if (_commandResourceFactory) { _commandResourceFactory->destroy(); }
 

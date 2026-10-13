@@ -35,10 +35,19 @@ cache bounds construction objects independently of pipeline metadata. Known
 deterministic MSC failures are cached; unknown/allocation failures remain retryable.
 
 IR reads the same per-device `metal4SharedShaderLibraryResidentLimit` as MSL.
-The common default is 512 artifacts with a 64 MiB serialized-metallib ceiling.
+The common default is 512 artifacts. The native configuration fallback also
+changes MSL consumers that do not supply a resident limit from unlimited to 512;
+MeloNX already supplies 512 explicitly. IR bounded limits additionally use a
+64 MiB serialized-metallib ceiling, which can bind before the count limit for
+large libraries.
 A shared resident limit of zero means unlimited count and serialized bytes.
 `MELONX_METAL_IR_MEMORY_CACHE=0` remains a separate diagnostic switch that
 disables IR retention; it is not the shared resident-limit value.
+
+Run `python3 Scripts/test-metal-ir-resident-cache.py` from the repository root
+for CPU-only count/byte, ownership, and concurrency regression checks. CI runs
+the same script with assertions enabled; it does not enable IR or create a Metal
+device.
 
 `MELONX_METAL_IR_COMPILE_WORKERS` accepts 1–8 (default 2) for process-wide native
 compiler admission. Native memory relief runs once after a quiet completed

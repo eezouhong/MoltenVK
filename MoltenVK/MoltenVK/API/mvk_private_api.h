@@ -603,7 +603,10 @@ VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags);
  * Returns the previous enabled value, or UINT32_MAX for invalid input. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRTelemetryEnabledMVK(uint32_t enabled);
 
-/** Version-1 cache/lifetime snapshot, 37 uint64 fields. Unlike the compiler
+/** Version-1 cache/lifetime snapshot, 40 uint64 fields. Capacities 37–39 retain
+ * the original 37-field return and prefix. The final three fields report
+ * disk-restored Metal library creation count, total ns and maximum ns.
+ * Unlike the compiler
  * counters, the snapshot reports availability and coverage explicitly. Library
  * byte fields measure metallib code, not Metal-private physical memory.
  * See MetalIRCompiler/docs/ir-memory-statistics.json for field order and scope. */

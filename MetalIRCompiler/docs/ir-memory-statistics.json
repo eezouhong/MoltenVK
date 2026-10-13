@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "fieldCount": 37,
+  "fieldCount": 40,
   "fields": [
     {
       "index": 0,
@@ -149,6 +149,18 @@
     {
       "index": 36,
       "name": "diskSuccessfulRestoreMetallibBytes"
+    },
+    {
+      "index": 37,
+      "name": "diskLibraryCreateCount"
+    },
+    {
+      "index": 38,
+      "name": "diskLibraryCreateNs"
+    },
+    {
+      "index": 39,
+      "name": "diskLibraryCreateMaxNs"
     }
   ],
   "flags": {
@@ -161,11 +173,14 @@
     "metallibBytes": "serialized compiler output bytes, not Metal-private library allocation",
     "diskRestore": "successful file validation plus Metal library/function/reflection reconstruction; file hits separately include rejected Metal data",
     "deviceAllocated": "MTLDevice.currentAllocatedSize, overlaps application resources; do not sum with Vulkan requested bytes",
-    "snapshots": "approximate concurrent atomic/locked reads; idle snapshots can validate owned-reference balance"
+    "snapshots": "approximate concurrent atomic/locked reads; idle snapshots can validate owned-reference balance",
+    "diskLibraryCreate": "newLibraryWithData attempts from disk hits only; includes failed Metal library creation, excludes dispatch-data setup, function lookup, file read, reflection and new compiler output; nanoseconds, opt-in"
   },
   "unavailable": {
     "physicalLibraryBytes": null
   },
   "sampling": "app emits low-frequency MELONX_IR_MEMORY_STATS; native API itself is read-only",
-  "lifetime": "device cumulative counters; zero live values after release are valid, missing API/coverage must remain explicit"
+  "lifetime": "device cumulative counters; zero live values after release are valid, missing API/coverage must remain explicit",
+  "legacyFieldCount": 37,
+  "compatibility": "Version-1 prefix fields 0-36 unchanged; capacity 37-39 returns 37, capacity >=40 returns 40. Missing timing tail is unavailable, not zero."
 }

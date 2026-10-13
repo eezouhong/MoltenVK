@@ -30,6 +30,7 @@ def main():
         for mode in ('compute', 'graphics'):
             for epoch in (('cold', 'warm') if route == 'IR' else ('cold',)):
                 env = dict(base, MELONX_EXPERIMENTAL_METAL_IR='1' if route == 'IR' else '0')
+                if route == 'IR': env['MELONX_BASIC_COUNTER_PROBE'] = '1'
                 names = ('runtime.comp.spv', 'unused.comp.spv') if mode == 'compute' else ('runtime.vert.spv', 'runtime.frag.spv')
                 command = [str(build / 'runtime_probe'), mode, *[str(build / p) for p in names]]
                 if route == 'IR': command.append(str(out / (mode + '-cache')))
@@ -38,13 +39,17 @@ def main():
                 label = '-'.join((route, mode, epoch)); (out / (label + '.log')).write_text(log)
                 oracle = [json.loads(s) for s in process.stdout.splitlines() if s.startswith('{')]
                 snapshot = [json.loads(s.partition('MELONX_RESIDENCY ')[2]) for s in process.stderr.splitlines() if s.startswith('MELONX_RESIDENCY ')]
+                memory = [json.loads(s.partition('MELONX_REPLAY_MEMORY ')[2]) for s in process.stderr.splitlines() if s.startswith('MELONX_REPLAY_MEMORY ')]
                 valid = process.returncode == 0 and len(oracle) == len(snapshot) == 1 and oracle[0].get('success') is True
                 valid &= 'Metal GPU Validation Enabled' in log and '[mvk-error]' not in log
                 if snapshot:
                     valid &= snapshot[0]['limit'] == 512
                     valid &= snapshot[0]['readOnly'] and snapshot[0]['trimPreserved']
                     if route == 'IR': valid &= snapshot[0]['restores'] == (2 if epoch == 'warm' else 0)
-                results.append(dict(case=label, valid=bool(valid), exitCode=process.returncode, snapshot=snapshot, oracle=oracle))
+                if route == 'IR':
+                    valid &= len(memory) == 1
+                    if memory: valid &= memory[0]['diskLibraryCreateCount'] == (2 if epoch == 'warm' else 0)
+                results.append(dict(case=label, valid=bool(valid), exitCode=process.returncode, snapshot=snapshot, memory=memory, oracle=oracle))
                 (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
                 print(json.dumps(results[-1]), flush=True)
                 if not valid: raise RuntimeError('Residency probe failed: ' + label)

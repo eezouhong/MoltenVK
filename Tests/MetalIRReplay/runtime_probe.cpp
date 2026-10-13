@@ -12,7 +12,7 @@ static void checkResidency(Context& context) {
         trim(VK_NULL_HANDLE)!=VK_ERROR_INITIALIZATION_FAILED || query(context.device,before,16)!=16 ||
         query(context.device,repeated,16)!=16 || memcmp(before,repeated,sizeof(before)))
         throw std::runtime_error("residency query invalid or mutated state");
-    if (before[0]!=1 || !before[1] || before[2]!=(ir?1:2) || before[4]!=(ir?64:512) ||
+    if (before[0]!=1 || !before[1] || before[2]!=(ir?1:2) || before[4]!=512 ||
         before[13]!=(ir?1:2) || before[14]!=(ir?1:2) || !before[15])
         throw std::runtime_error("residency scope, payload or default changed");
     VK_CHECK(trim(context.device));

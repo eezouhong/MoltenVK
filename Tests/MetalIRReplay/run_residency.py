@@ -30,7 +30,10 @@ def main():
         for mode in ('compute', 'graphics'):
             for epoch in (('cold', 'warm') if route == 'IR' else ('cold',)):
                 env = dict(base, MELONX_EXPERIMENTAL_METAL_IR='1' if route == 'IR' else '0')
-                if route == 'IR': env['MELONX_BASIC_COUNTER_PROBE'] = '1'
+                if route == 'IR':
+                    # runtime_probe verifies disabled first-read, then explicitly
+                    # enables counters before the first cached shader compilation.
+                    env.update(MELONX_BASIC_COUNTER_PROBE='1', MELONX_METAL_IR_TELEMETRY='0')
                 names = ('runtime.comp.spv', 'unused.comp.spv') if mode == 'compute' else ('runtime.vert.spv', 'runtime.frag.spv')
                 command = [str(build / 'runtime_probe'), mode, *[str(build / p) for p in names]]
                 if route == 'IR': command.append(str(out / (mode + '-cache')))

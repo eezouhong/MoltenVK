@@ -48,7 +48,9 @@ def main():
                     if route == 'IR': valid &= snapshot[0]['restores'] == (2 if epoch == 'warm' else 0)
                 if route == 'IR':
                     valid &= len(memory) == 1
-                    if memory: valid &= memory[0]['diskLibraryCreateCount'] == (2 if epoch == 'warm' else 0)
+                    if memory:
+                        attempts = memory[0]['diskLibraryCreateCount']
+                        valid &= (attempts >= memory[0]['successfulRestores'] if epoch == 'warm' else attempts == 0)
                 results.append(dict(case=label, valid=bool(valid), exitCode=process.returncode, snapshot=snapshot, memory=memory, oracle=oracle))
                 (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
                 print(json.dumps(results[-1]), flush=True)

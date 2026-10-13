@@ -59,7 +59,8 @@ static void printCacheStatistics(Context& context) {
         for (unsigned i=0; i<18; ++i)
             if (fields[i]!=legacyMemory[i])
                 throw std::runtime_error("legacy memory statistics prefix changed");
-        if (fields[37]!=fields[34] || (fields[37] && (!fields[38] || !fields[39] || fields[39]>fields[38])) ||
+        // Attempts include rejected Metal libraries; successful restores are a subset.
+        if (fields[37]<fields[34] || (fields[37] && (!fields[38] || !fields[39] || fields[39]>fields[38])) ||
             (!fields[37] && (fields[38] || fields[39])))
             throw std::runtime_error("disk library creation timing missing or inconsistent");
         if (dlsym(RTLD_DEFAULT,"vkGetReplayPhaseStatisticsMVK"))

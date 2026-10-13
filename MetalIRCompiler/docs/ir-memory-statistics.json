@@ -182,5 +182,5 @@
   "sampling": "app emits low-frequency MELONX_IR_MEMORY_STATS; native API itself is read-only",
   "lifetime": "device cumulative counters; zero live values after release are valid, missing API/coverage must remain explicit",
   "legacyFieldCount": 37,
-  "compatibility": "Version-1 prefix fields 0-36 unchanged; capacity 37-39 returns 37, capacity >=40 returns 40. Missing timing tail is unavailable, not zero."
+  "compatibility": "Version-1 prefix fields 0-36 unchanged; capacity 37-39 returns 37, capacity >=40 returns 40. Timing-tail presence indicates support, not observation: timing is available only when flags 2 and 4 are both set. Missing, disabled or partial timing is unavailable, not zero."
 }

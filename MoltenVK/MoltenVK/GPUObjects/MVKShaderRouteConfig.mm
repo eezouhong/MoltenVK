@@ -58,9 +58,12 @@ bool mvkShaderInitialTelemetryEnabled() {
     const char* value = getenv("MELONX_METAL_IR_TELEMETRY");
     return value && !strcmp(value, "1");
 }
-MVKShaderDeviceCacheConfig mvkShaderDeviceCacheConfig() {
+MVKShaderDeviceCacheConfig mvkShaderDeviceCacheConfig(uint32_t sharedResidentLimit) {
     const char* value = getenv("MELONX_METAL_IR_MEMORY_CACHE");
-    return {getenv("MELONX_METAL_IR_CACHE"), value && !strcmp(value, "0") ? 0u : 64u};
+    // This independent diagnostic switch disables retention. The shared MSL/IR
+    // resident-count setting instead defines zero as unlimited.
+    const auto limits = mvkShaderIRResidentLimits(sharedResidentLimit, value && !strcmp(value, "0"));
+    return {getenv("MELONX_METAL_IR_CACHE"), limits.count, limits.bytes};
 }
 MVKShaderCompileConfig mvkShaderCompileConfig() {
     return {getenv("MELONX_METAL_IR_STAGES"), getenv("MELONX_METAL_IR_STRICT_MATH")};

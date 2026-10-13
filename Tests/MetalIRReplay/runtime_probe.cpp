@@ -52,7 +52,7 @@ static void printCacheStatistics(Context& context) {
         auto memory = reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCacheStatisticsMVK"));
         uint64_t fields[37]{};
         if (!memory || memory(context.device,fields,37)!=37 || fields[0]!=1 || (fields[1]&7)!=7 ||
-            fields[2]!=64 || fields[3]!=8*1024*1024 || !fields[5] || !fields[11] || !fields[13])
+            fields[2]!=512 || fields[3]!=64*1024*1024 || !fields[5] || !fields[11] || !fields[13])
             throw std::runtime_error("basic snapshot unavailable, incomplete or budget changed");
         if (dlsym(RTLD_DEFAULT,"vkGetReplayPhaseStatisticsMVK"))
             throw std::runtime_error("basic counter probe requires a trace-disabled native build");

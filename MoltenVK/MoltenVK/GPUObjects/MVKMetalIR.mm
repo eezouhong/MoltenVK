@@ -120,6 +120,7 @@ struct DeviceArtifacts {
     std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0},rejected{0},psoNs{0};
     std::atomic<uint64_t> diskLookupCount{0}, diskLookupNs{0}, diskRestoreNs{0}, diskRestoreBytes{0};
     std::atomic<uint64_t> successfulDiskRestores{0}, successfulDiskRestoreNs{0}, successfulDiskRestoreBytes{0};
+    std::atomic<uint64_t> diskLibraryCreateCount{0}, diskLibraryCreateNs{0}, diskLibraryCreateMaxNs{0};
     std::shared_ptr<MVKMetalIRLifetimeCounters> lifetime = std::make_shared<MVKMetalIRLifetimeCounters>();
     explicit DeviceArtifacts(MVKDevice* device)
         : DeviceArtifacts(mvkShaderDeviceCacheConfig(device->getMVKConfig().metal4SharedShaderLibraryResidentLimit)) {}
@@ -236,9 +237,10 @@ uint32_t mvkMetalIRSetTelemetryEnabled(uint32_t enabled) {
 
 uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
     if (!mvkMetalIRRolloutEnabled()) return 0;
-    constexpr uint32_t fields = 37;
-    if (!device || !output || capacity < fields) return 0;
-    std::fill(output, output + fields, 0);
+    constexpr uint32_t legacyFields = 37, fields = 40;
+    if (!device || !output || capacity < legacyFields) return 0;
+    const uint32_t written = capacity >= fields ? fields : legacyFields;
+    std::fill(output, output + written, 0);
     output[0] = 1;
     output[1] = 1u | (telemetryEnabled() ? 2u : 0u);
     std::shared_ptr<DeviceArtifacts> state;
@@ -272,10 +274,15 @@ uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t
         output[34] = state->successfulDiskRestores.load();
         output[35] = state->successfulDiskRestoreNs.load();
         output[36] = state->successfulDiskRestoreBytes.load();
+        if (written >= fields) {
+            output[37] = state->diskLibraryCreateCount.load(std::memory_order_relaxed);
+            output[38] = state->diskLibraryCreateNs.load(std::memory_order_relaxed);
+            output[39] = state->diskLibraryCreateMaxNs.load(std::memory_order_relaxed);
+        }
     }
     if (@available(macOS 10.15, iOS 13.0, *)) output[32] = device->getPhysicalDevice()->getMTLDevice().currentAllocatedSize;
     output[33] = std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now().time_since_epoch()).count();
-    return fields;
+    return written;
 }
 
 uint32_t mvkMetalIRCompilerStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
@@ -483,7 +490,16 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             libraryBytes.data=dispatch_data_create(result.metallib,result.metallibSize,nullptr,DISPATCH_DATA_DESTRUCTOR_FREE);
             if(!libraryBytes.data)throw std::bad_alloc();
             result.metallib=nullptr; // dispatch_data owns this malloc allocation.
+            const auto diskLibraryStarted = telemetry && fromDisk ? IRClock::now() : IRClock::time_point{};
             { mvkreplay::Timer trace(mvkreplay::IRLibrary); artifact->library=[owner->getMTLDevice() newLibraryWithData:libraryBytes.data error:&error]; }
+            if (telemetry && fromDisk) {
+                const auto duration = elapsedNs(diskLibraryStarted);
+                state->diskLibraryCreateCount.fetch_add(1, std::memory_order_relaxed);
+                state->diskLibraryCreateNs.fetch_add(duration, std::memory_order_relaxed);
+                auto maximum = state->diskLibraryCreateMaxNs.load(std::memory_order_relaxed);
+                while (maximum < duration && !state->diskLibraryCreateMaxNs.compare_exchange_weak(
+                    maximum, duration, std::memory_order_relaxed)) {}
+            }
             if (artifact->library && telemetry) {
                 artifact->lifetimeCounters = state->lifetime;
                 artifact->trackedMetallibBytes = result.metallibSize;

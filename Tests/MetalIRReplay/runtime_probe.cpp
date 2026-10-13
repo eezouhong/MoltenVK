@@ -50,15 +50,25 @@ static void printCacheStatistics(Context& context) {
         (unsigned long long)values[7],(unsigned long long)values[8]);
     if (getenv("MELONX_BASIC_COUNTER_PROBE")) {
         auto memory = reinterpret_cast<uint32_t(*)(VkDevice,uint64_t*,uint32_t)>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCacheStatisticsMVK"));
-        uint64_t fields[37]{};
-        if (!memory || memory(context.device,fields,37)!=37 || fields[0]!=1 || (fields[1]&7)!=7 ||
+        uint64_t fields[40]{}, legacyMemory[37]{};
+        if (!memory || memory(context.device,fields,40)!=40 || memory(context.device,legacyMemory,37)!=37 ||
+            fields[0]!=1 || (fields[1]&7)!=7 ||
             fields[2]!=512 || fields[3]!=64*1024*1024 || !fields[5] || !fields[11] || !fields[13])
             throw std::runtime_error("basic snapshot unavailable, incomplete or budget changed");
+        // Disk-write and device-wide counters can change between read-only calls.
+        for (unsigned i=0; i<18; ++i)
+            if (fields[i]!=legacyMemory[i])
+                throw std::runtime_error("legacy memory statistics prefix changed");
+        // Attempts include rejected Metal libraries; successful restores are a subset.
+        if (fields[37]<fields[34] || (fields[37] && (!fields[38] || !fields[39] || fields[39]>fields[38])) ||
+            (!fields[37] && (fields[38] || fields[39])))
+            throw std::runtime_error("disk library creation timing missing or inconsistent");
         if (dlsym(RTLD_DEFAULT,"vkGetReplayPhaseStatisticsMVK"))
             throw std::runtime_error("basic counter probe requires a trace-disabled native build");
-        fprintf(stderr,"MELONX_REPLAY_MEMORY {\"flags\":%llu,\"retained\":%llu,\"liveLibraries\":%llu,\"created\":%llu,\"successfulRestores\":%llu}\n",
+        fprintf(stderr,"MELONX_REPLAY_MEMORY {\"flags\":%llu,\"retained\":%llu,\"liveLibraries\":%llu,\"created\":%llu,\"successfulRestores\":%llu,\"diskLibraryCreateCount\":%llu,\"diskLibraryCreateNs\":%llu,\"diskLibraryCreateMaxNs\":%llu}\n",
             (unsigned long long)fields[1],(unsigned long long)fields[5],(unsigned long long)fields[11],
-            (unsigned long long)fields[13],(unsigned long long)fields[34]);
+            (unsigned long long)fields[13],(unsigned long long)fields[34],(unsigned long long)fields[37],
+            (unsigned long long)fields[38],(unsigned long long)fields[39]);
     }
 }
 

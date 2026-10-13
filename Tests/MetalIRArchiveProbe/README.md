@@ -32,8 +32,10 @@ python3 /path/to/canonical/tool.py queue exec --label "IR archive smoke" -- \
 ```
 
 After smoke succeeds, run separate bounded `--stage timing` and
-`--stage concurrency` tickets. Default count is 200. Initial 1000 archive loads
-reached 2.5–3.4 GiB footprint on this 16 GiB host; 2000 loading was stopped.
+`--stage concurrency` tickets. Default count is 200. All four initial 1000 archive loads
+reached 1.92–3.78 GiB final footprint, with 3.65–6.69 s open time, on this
+16 GiB host; 2000 loading was stopped. These synthetic stress samples supplement
+the primary 200-exact-descriptor finding: about 215 MiB added during open.
 The runner requires `--allow-large-archive-load` above 200 for lookup-containing
 stages, and the binary refuses files larger than 8 MiB without that explicit
 configuration. These are fixture safety limits based on current observations,
@@ -80,7 +82,10 @@ proof of full driver-cache coldness.
 
 The 32 worker requests may finish before serialization ends. These samples only
 cover their actual intervals, often the early flush phase; they cannot exclude a
-late global compiler lock or establish game frame acceptance. Large archive
+late global compiler lock or establish game frame acceptance. At N=1000 the
+workers are synthetic write-mask variants whose shader stages already occurred
+in population; exclude them from valid cold-compile interference evidence. The
+N=2000 workers also share stages, so their coldness is not established. Large archive
 load memory and time are independent gates even when lookup itself is fast.
 
 ## Scope and gates

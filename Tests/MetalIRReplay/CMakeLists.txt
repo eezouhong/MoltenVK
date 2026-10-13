@@ -119,3 +119,5 @@ target_include_directories(rejection_probe PRIVATE "${VULKAN_HEADERS}")
 target_link_libraries(rejection_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(rejection_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(rejection_probe replay_shaders)
+
+include(correctness_formats.cmake)

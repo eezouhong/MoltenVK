@@ -87,6 +87,12 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR ? fragmentIR->metadata : nullptr;
 			plDesc.vertexFunction = vertexIR->function;
 			plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE
+            // Only identity for the old-API evidence collector. No Metal 4
+            // function descriptor is installed and the IR route stays legacy.
+            _metal4VertexFunctionKey=vertexIR->phase0Key;
+            _metal4FragmentFunctionKey=fragmentIR ? fragmentIR->phase0Key : "";
+#endif
 			_isRasterizing = true;
 			addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
 			shaderConfig.markAllInterfaceVarsAndResourcesUsed();

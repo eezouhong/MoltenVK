@@ -1,6 +1,9 @@
 #include "MVKShaderBackend.h"
 #include "MVKReplayTrace.h"
 #include "MVKMetalIR.h"
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE
+#include "NativeCapture.h"
+#endif
 #include "MVKShaderRouteConfig.h"
 #include "MVKMetalIRCache.h"
 #include "MVKMetalIRResidentCache.h"
@@ -484,6 +487,10 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             (uint64_t)result.threadgroupSize[0]*result.threadgroupSize[1]*result.threadgroupSize[2]<=1024;
         if(compileStatus==0&&validResult) {
             artifact=std::make_shared<MVKMetalIRArtifact>();
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE
+            artifact->phase0Key=key;
+            mvkirphase0::library(key,result.metallib,result.metallibSize);
+#endif
             NSError* error=nil;
             auto libraryStart=telemetry?IRClock::now():IRClock::time_point{};
             libraryBytes.reset();

@@ -8,9 +8,14 @@ file(GLOB_RECURSE SOURCES "MoltenVK/*.c" "MoltenVK/*.cpp" "MoltenVK/*.m" "Molten
 
 option(MVK_REPLAY_TRACE "Compile host replay diagnostics (not for product builds)" OFF)
 option(MVK_ENABLE_EXPERIMENTAL_METAL_IR "Permit explicitly requested IR in test builds" OFF)
+option(MVK_IR_PHASE0_PROBE "Capture IR PSO evidence without changing its route" OFF)
 add_library(MoltenVK SHARED ${SOURCES})
 target_compile_definitions(MoltenVK PRIVATE MVK_REPLAY_TRACE=$<BOOL:${MVK_REPLAY_TRACE}>)
 target_compile_definitions(MoltenVK PRIVATE MVK_ENABLE_EXPERIMENTAL_METAL_IR=$<BOOL:${MVK_ENABLE_EXPERIMENTAL_METAL_IR}>)
+target_compile_definitions(MoltenVK PRIVATE MVK_IR_PHASE0_PROBE=$<BOOL:${MVK_IR_PHASE0_PROBE}>)
+if(MVK_IR_PHASE0_PROBE)
+    target_include_directories(MoltenVK PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../Tests/MetalIRMetal4Probe")
+endif()
 add_library(MoltenVK::MoltenVK ALIAS MoltenVK)
 
 target_include_directories(MoltenVK

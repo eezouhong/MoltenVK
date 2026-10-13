@@ -23,7 +23,11 @@ public:
         if (auto& artifact = result.artifactOwner) {
             result.metadata = artifact->metadata;
             result.function = MVKMTLFunction(artifact->function, {},
-                MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2]));
+                MTLSizeMake(artifact->threadgroupSize[0], artifact->threadgroupSize[1], artifact->threadgroupSize[2])
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE && MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+                ,nil,artifact->phase0Key,{}
+#endif
+            );
         }
         return result;
     }

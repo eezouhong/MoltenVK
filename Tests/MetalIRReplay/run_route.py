@@ -37,6 +37,9 @@ def main():
         if a.rollout=='disabled' and rows:
             passed=passed and rows[0]['reason']==(3 if requested else 0) and rows[0]['compilerABI']==0 and 'MetalIR experimental compiler loaded' not in text
             passed=passed and not any(Path(line.rsplit(' ',1)[-1]).resolve()==a.plugin.resolve() for line in text.splitlines() if line.startswith('dyld['))
+            if results:
+                baseline=results[0]['observed'][0]
+                passed=passed and rows[0]['tessellation']==baseline['tessellation'] and rows[0]['physicalDevices']==baseline['physicalDevices']
         result=dict(case=name,passed=bool(passed),exitCode=process.returncode,binaryVerified=verified,observed=rows)
         results.append(result);(out/'results.json').write_text(json.dumps(results,indent=2)+'\n');print(json.dumps(result),flush=True)
         if not passed:raise RuntimeError('Route matrix failed: '+name)

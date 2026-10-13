@@ -95,7 +95,7 @@ def main():
             'actualNativeLoadedVerified':actual_native,'descriptorRecords':records,
             'actualCompilerLoadedVerified':actual_compiler,'recordedPid':child.pid,
             'metallibFiles':len(list(inputs.glob('*.metallib'))),
-            'errorMarkers':{s:text.count(s) for s in ('MSL fallback disabled','[gfxrecon] ERROR','[gfxrecon] FATAL','IR phase0 library dump failed','IR phase0 render descriptor dump failed','IR phase0 compute descriptor dump failed')},
+            'errorMarkers':{s:text.count(s) for s in ('MetalIR shader rejected:','[gfxrecon] ERROR','[gfxrecon] FATAL','IR phase0 library dump failed','IR phase0 render descriptor dump failed','IR phase0 compute descriptor dump failed')},
             'screenshots':len(list(a.output.glob('*.png')))}
     if (before.st_size,before.st_mtime_ns)!=(capture.stat().st_size,capture.stat().st_mtime_ns):
         raise RuntimeError('capture changed during replay')

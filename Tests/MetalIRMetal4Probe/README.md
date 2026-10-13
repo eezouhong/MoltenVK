@@ -90,3 +90,9 @@ same cohort libraries, with a 1024-entry LRU base cache. Neither policy
 simulates product IR512 residency or service cost-based admission. It retains
 failures instead of dropping inputs and submits no draw/dispatch. Timing still
 needs the game's correctness gate and full product Debug Tool acceptance.
+
+Pass the replay's `result.json` to `make_manifest.py --capture-result` so its
+summary preserves source failures and marks incomplete coverage. A prefix from
+an interrupted replay can diagnose API compatibility and reuse, but its timing
+does not establish the complete capture's performance or pixel gate. Without
+a verified source result, `sourceCaptureComplete` stays false.

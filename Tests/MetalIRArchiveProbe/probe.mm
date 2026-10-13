@@ -96,15 +96,22 @@ int main(int argc,const char* argv[]) {
         result[@"footprintAfterLibrariesBytes"]=footprint() ?: (id)[NSNull null];
         NSError* error=nil; id<MTLBinaryArchive> archive=nil;
         bool capture=[mode isEqual:@"capture"] || [mode hasPrefix:@"concurrent-"];
-        bool lookup=[mode isEqual:@"lookup"] || [mode isEqual:@"miss"] || [mode isEqual:@"corrupt"];
+        bool lookup=[mode isEqual:@"lookup"] || [mode isEqual:@"miss"] || [mode isEqual:@"corrupt"] || [mode isEqual:@"open-only"];
         if(!failed && (capture || lookup)) {
+            if(lookup && ![config[@"allowLargeArchiveLoad"] boolValue]) {
+                NSDictionary* attrs=[[NSFileManager defaultManager] attributesOfItemAtPath:config[@"archive"] error:nil];
+                if([attrs[NSFileSize] unsignedLongLongValue]>8ull*1024*1024)return 78;
+            }
             MTLBinaryArchiveDescriptor* d=[MTLBinaryArchiveDescriptor new];
             if(lookup)d.url=[NSURL fileURLWithPath:config[@"archive"]];
             uint64_t start=ns(); archive=[device newBinaryArchiveWithDescriptor:d error:&error];
             result[@"archiveOpenNs"]=@(ns()-start);result[@"archiveOpened"]=@(archive!=nil);
+            result[@"footprintAfterArchiveOpenBytes"]=footprint() ?: (id)[NSNull null];
+            result[@"deviceClass"]=NSStringFromClass([device class]);
+            if(archive)result[@"archiveClass"]=NSStringFromClass([archive class]);
             if(!archive){result[@"archiveOpenError"]=failure(error);if(![mode isEqual:@"corrupt"])failed=true;}
         }
-        if(!failed && ![mode isEqual:@"corrupt"]) {
+        if(!failed && ![mode isEqual:@"corrupt"] && ![mode isEqual:@"open-only"]) {
             NSUInteger n=[mode isEqual:@"miss"] ? 1:count;
             for(NSUInteger i=0;i<n;i++) {
                 @autoreleasepool {

@@ -59,11 +59,15 @@ def main():
     p.add_argument('--probe', type=Path, required=True)
     p.add_argument('--owner', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--counts', type=int, nargs='+', default=[200, 1000, 2000])
-    p.add_argument('--stage', choices=['smoke', 'timing', 'concurrency'], required=True)
+    p.add_argument('--counts', type=int, nargs='+', default=[200])
+    p.add_argument('--stage', choices=['smoke', 'timing', 'concurrency', 'fill', 'warm'], required=True)
+    p.add_argument('--archive', type=Path, help='existing immutable archive for warm comparison')
+    p.add_argument('--allow-large-archive-load', action='store_true', help='explicitly accept observed multi-GiB archive-load risk')
     a = p.parse_args()
     if not os.environ.get('MELONX_DEBUG_GRAPHICS_LEASE'):
         raise RuntimeError('canonical graphics queue required')
+    if a.stage in ('smoke', 'timing', 'warm') and max(a.counts)>200 and not a.allow_large_archive_load:
+        raise RuntimeError('large archive loading requires explicit opt-in after observed multi-GiB footprint')
     meta = json.loads(a.owner.read_text())
     identifier, effective, targets = ownership(a.probe, meta)
     a.output.mkdir(parents=True, exist_ok=False)
@@ -90,7 +94,7 @@ def main():
             for target in targets:
                 clear(target, a.output, label)
         config = {'inputs': str(inputs), 'mode': mode, 'count': count, 'archive': str(archive),
-                  'secondArchive': str(a.output / (label + '-second.metallib'))}
+                  'allowLargeArchiveLoad': a.allow_large_archive_load}
         cfg = a.output / (label + '-config.json')
         cfg.write_text(json.dumps(config) + '\n')
         result_path = a.output / (label + '.json')
@@ -135,6 +139,16 @@ def main():
                 run(f'{n}-{pair}-lookup-clear', 'lookup', n, archive)
                 run(f'{n}-{pair}-baseline-retain', 'baseline', n, archive, clean=False)
                 run(f'{n}-{pair}-lookup-retain', 'lookup', n, archive, clean=False)
+        elif a.stage == 'fill':
+            for repeat in (1, 2):
+                run(f'{n}-{repeat}-capture-clear', 'capture', n, a.output / f'{n}-{repeat}-archive.metallib')
+        elif a.stage == 'warm':
+            if not a.archive or not a.archive.is_file():
+                raise RuntimeError('warm stage requires an existing archive')
+            # Seed ordinary PSO system caches before measuring retained ABAB.
+            run(f'{n}-warm-seed', 'baseline', n, a.archive, clean=False)
+            for order, mode in enumerate(('baseline', 'lookup', 'baseline', 'lookup'), 1):
+                run(f'{n}-{order}-{mode}-warm-retain', mode, n, a.archive, clean=False)
         else:
             for order, mode in enumerate(('concurrent-control', 'concurrent-flush', 'concurrent-control', 'concurrent-flush'), 1):
                 run(f'{n}-{order}-{mode}', mode, n, a.output / f'{n}-{order}-archive.metallib')

@@ -32,7 +32,13 @@ python3 /path/to/canonical/tool.py queue exec --label "IR archive smoke" -- \
 ```
 
 After smoke succeeds, run separate bounded `--stage timing` and
-`--stage concurrency` tickets for counts `200 1000 2000`. A failure stops the
+`--stage concurrency` tickets. Default count is 200. Initial 1000 archive loads
+reached 2.5–3.4 GiB footprint on this 16 GiB host; 2000 loading was stopped.
+The runner requires `--allow-large-archive-load` above 200 for lookup-containing
+stages, and the binary refuses files larger than 8 MiB without that explicit
+configuration. These are fixture safety limits based on current observations,
+not product budgets. `--stage fill` measures 2000 population/serialization
+without reopening its large file. A failure stops the
 batch, retaining its configuration, stdout, stderr, result and cache deletion
 manifest. The 180-second child alarm bounds an offline diagnostic, not a game
 route. No runner stays live while analysis or approval waits.
@@ -62,12 +68,20 @@ namespace must match the ownership proof. Driver-memory coldness is unknown.
   constructing PSOs, then release another thread to create 32 legacy PSOs outside
   the capture cohort. In the flush arm, serialize concurrently. Preserve absolute
   start/end times and actual overlap; a nonoverlapping run cannot answer blocking.
+- `warm --archive FILE`: seed ordinary PSO system caches, then run retained-cache
+  baseline/strict-archive ABAB. The seed is preserved separately. Retained cache
+  files alone do not prove that the ordinary PSO path is already warm.
 
 Timing runs include two cold-cache A/B pairs with the same frozen inputs, plus
 ordinary and strict-archive requests with retained system caches. The no-archive
 baseline and archived lookup both get their own cache clearance in the cleared
 comparison. Keep all first and repeated samples; never treat a first request as
 proof of full driver-cache coldness.
+
+The 32 worker requests may finish before serialization ends. These samples only
+cover their actual intervals, often the early flush phase; they cannot exclude a
+late global compiler lock or establish game frame acceptance. Large archive
+load memory and time are independent gates even when lookup itself is fast.
 
 ## Scope and gates
 

@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+import statistics
 
 
 def milliseconds(values):
@@ -9,7 +10,7 @@ def milliseconds(values):
     if not values:
         return {'count': 0, 'totalMs': None, 'maxMs': None}
     return {'count': len(values), 'totalMs': sum(values), 'maxMs': values[-1],
-            'medianMs': values[len(values) // 2]}
+            'medianMs': statistics.median(values)}
 
 
 def summarize(path):
@@ -23,6 +24,7 @@ def summarize(path):
               'libraryCreation': milliseconds([r.get('newLibraryWithDataNs') for r in x['loads']]),
               'footprintAfterLibrariesBytes': x['footprintAfterLibrariesBytes'],
               'footprintAfterBytes': x['footprintAfterBytes']}
+    result['footprintAfterArchiveOpenBytes'] = x.get('footprintAfterArchiveOpenBytes')
     samples = [r['footprintBytes'] for r in x.get('memory', []) if isinstance(r['footprintBytes'], int)]
     result['sampledPeakFootprintBytes'] = max(samples) if samples else None
     if 'flush' in x:
@@ -62,7 +64,9 @@ def main():
             continue
         x = json.loads(path.read_text())
         if isinstance(x, dict) and x.get('schemaVersion') == 1 and 'mode' in x and 'loads' in x:
-            rows.append(summarize(path))
+            row = summarize(path)
+            row['relativePath'] = str(path.relative_to(a.directory))
+            rows.append(row)
     a.output.write_text(json.dumps(rows, indent=2) + '\n')
     print(json.dumps({'samples': len(rows), 'output': str(a.output)}))
 

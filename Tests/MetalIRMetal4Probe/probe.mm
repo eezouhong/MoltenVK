@@ -99,8 +99,13 @@ int main(int argc, const char* argv[]) {
         if (@available(macOS 26.0, *)) {} else { return 69; }
         id<MTL4Compiler> compiler=[device newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&error];
         NSMutableArray* rows=[NSMutableArray new]; NSMutableArray* loads=[NSMutableArray new];
+        char cacheDirectory[4096]={}; confstr(_CS_DARWIN_USER_CACHE_DIR,cacheDirectory,sizeof(cacheDirectory));
         NSMutableDictionary* result=[@{ @"schemaVersion":@1, @"mode":mode, @"device":device.name,
             @"os":[NSProcessInfo processInfo].operatingSystemVersionString, @"rows":rows, @"loads":loads,
+            @"darwinUserCacheDirectory":@(cacheDirectory),
+            @"foundationCacheDirectories":NSSearchPathForDirectoriesInDomains(NSCachesDirectory,NSUserDomainMask,YES),
+            @"bundleIdentifier":[NSBundle mainBundle].bundleIdentifier ?: @"unbundled",
+            @"metalFrameworkVersion":[NSBundle bundleForClass:[MTLRenderPipelineDescriptor class]].infoDictionary[@"CFBundleVersion"] ?: @"unavailable",
             @"descriptorScope":@"inferred vertex layout; diagnostic color variants; no captured game descriptor or pixels",
             @"footprintBeforeBytes":footprint() ?: (id)[NSNull null] } mutableCopy];
         if (!compiler) result[@"compilerError"]=failure(error);

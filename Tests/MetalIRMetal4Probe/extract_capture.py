@@ -19,7 +19,8 @@ def main():
         raise RuntimeError('capture identity changed')
     a.output.mkdir(exist_ok=False, parents=True)
     names = (b'vkCreateGraphicsPipelines', b'vkCreateComputePipelines', b'vkCreateShaderModule',
-             b'vkCreateRenderPass', b'vkCreatePipelineLayout')
+             b'vkCreateRenderPass', b'vkCreatePipelineLayout', b'vkCreateDescriptorSetLayout',
+             b'vkCreateSampler', b'vkCmdPushDescriptorSet')
     counts = {name.decode(): 0 for name in names}
     lines = 0
     selected = 0

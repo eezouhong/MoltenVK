@@ -21,6 +21,9 @@
 
 #include "MVKPipeline.h"
 #include "MVKMetalIR.h"
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE
+#include "NativeCapture.h"
+#endif
 #include "MVKCommandBuffer.h"
 #include "MVKInlineObjectConstructor.h"
 #include "MVKImage.h"
@@ -3373,6 +3376,17 @@ id<MTLRenderPipelineState> MVKGraphicsPipeline::getOrCompilePipeline(MTLRenderPi
 	if ( !plState ) {
 		mvkreplay::Timer replayTrace(mvkreplay::MetalGraphicsPSO);
 		MVKMetalIRPSOTimer irPSOTiming(getDevice());
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE && MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+        if(getDevice()->isMetalIRShaderCompilerEnabled() && mvkirphase0::directory()) {
+            if(@available(macOS 26.0, iOS 26.0, *)) {
+                MVKMetal4BaseKeyFingerprints fingerprints;
+                const string key=makeMetal4PipelineBaseKey(plDesc,
+                    _metal4VertexFunctionKey,_metal4FragmentFunctionKey,
+                    _metal4VertexPointerFunctionKey,_metal4FragmentPointerFunctionKey,fingerprints);
+                mvkirphase0::render(plDesc,_metal4VertexFunctionKey,_metal4FragmentFunctionKey,key);
+            }
+        }
+#endif
 #if MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
 		MVKMetal4CompilerService* metal4Compiler = getDevice()->getMetal4CompilerService();
 		bool attemptedMetal4 = false;
@@ -4927,6 +4941,10 @@ MVKComputePipeline::MVKComputePipeline(MVKDevice* device,
 		plDesc.computeFunction = mtlFunc;
 		plDesc.maxTotalThreadsPerThreadgroup = _mtlThreadgroupSize.width * _mtlThreadgroupSize.height * _mtlThreadgroupSize.depth;
 		plDesc.threadGroupSizeIsMultipleOfThreadExecutionWidth = mvkIsAnyFlagEnabled(pCreateInfo->stage.flags, VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT);
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE && MVK_XCODE_26 && !MVK_TVOS && !MVK_VISIONOS && !MVK_OS_SIMULATOR
+        if(device->isMetalIRShaderCompilerEnabled() && mvkirphase0::directory())
+            mvkirphase0::compute(plDesc,func.getMTL4FunctionKey());
+#endif
 
 		// Metal does not allow the name of the pipeline to be changed after it has been created,
 		// and we need to create the Metal pipeline immediately to provide error feedback to app.

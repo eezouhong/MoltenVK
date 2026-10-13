@@ -77,6 +77,9 @@ struct MVKMetalIRMetadata {
 
 // Only construction and the bounded recent-artifact cache own Metal objects.
 struct MVKMetalIRArtifact : MVKMetalIRMetadata {
+#if defined(MVK_IR_PHASE0_PROBE) && MVK_IR_PHASE0_PROBE
+    std::string phase0Key;
+#endif
     id<MTLLibrary> library = nil;
     id<MTLFunction> function = nil;
     std::shared_ptr<const MVKMetalIRMetadata> metadata;

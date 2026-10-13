@@ -47,6 +47,12 @@ is distinct from an observed zero. The PSO comparison includes base cost,
 specialization cost and any fallback work; library load remains separately
 reported. P0's library-restoration counters are reused without modification.
 
+Existing flexible-pipeline `fallbacks` includes intentional direct-legacy
+bypasses: the diagnostic IR run reported 512 fallbacks with zero Metal 4
+attempts. Do not use that counter as the new IR failure count. Count a failure
+fallback only after an attempted Metal 4 compile, with its original reason;
+missing function descriptors and OS/switch bypasses remain distinct.
+
 Task 4 owns serializer attachment, binary capture, archive identity, flush,
 loading, shards/generations and archive telemetry. It can reuse the probe's
 immutable metallib manifest and per-row timings. The current probe exposes no

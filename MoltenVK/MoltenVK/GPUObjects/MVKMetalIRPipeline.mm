@@ -30,7 +30,7 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 			}
 		}
 	}
-	if (tryMetalIR && pCreateInfo->pMultisampleState && !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
+	if (tryMetalIR && _isRasterizing && pCreateInfo->pMultisampleState && !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
         pCreateInfo->pMultisampleState->minSampleShading)) {
         tryMetalIR = false;
         rejectionReason = "sample_shading";
@@ -43,8 +43,8 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
             pCreateInfo->pRasterizationState->polygonMode,
             pCreateInfo->pRasterizationState->rasterizerDiscardEnable,
             viewMask,
-            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->sampleShadingEnable : 0,
-            pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->minSampleShading : 0.0f,
+            _isRasterizing && pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->sampleShadingEnable : 0,
+            _isRasterizing && pCreateInfo->pMultisampleState ? pCreateInfo->pMultisampleState->minSampleShading : 0.0f,
             conflictingVertexBinding, _vertexModule->getKey().codeHash,
             _fragmentModule ? _fragmentModule->getKey().codeHash : 0));
         return false;
@@ -52,10 +52,11 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 	if (tryMetalIR) {
 		uint32_t transforms = (shaderConfig.options.shouldFlipVertexY ? MVK_METAL_IR_FLIP_Y : 0) |
 			(shaderConfig.options.shouldFixupClipSpace ? MVK_METAL_IR_CLIP_HALF_Z : 0);
-        uint32_t rasterOptions = getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint
+        uint32_t rasterOptions = _isRasterizing && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint
             ? MVK_METAL_IR_RENDERING_POINTS : 0;
+        if (!_isRasterizing) rasterOptions |= MVK_METAL_IR_RASTERIZATION_DISABLED;
         auto vertexIR = getDevice()->shaderBackend().compileStage({this, _layout, _vertexModule, pVertexSS, transforms, rasterOptions, {}}).artifactOwner;
-		if (vertexIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
+		if (vertexIR && _isRasterizing && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint &&
             !capabilities.supportsPointSize(vertexIR->runtimeFlags)) {
             mvkMetalIRRecordPipelineRejection(getDevice(), "point_size_semantics");
 			setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
@@ -74,7 +75,9 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 				}
 			}
 		}
-        auto fragmentIR = vertexIR && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
+        // Vertex-only work still writes resources. A discarded fragment stage
+        // is ignored by Vulkan and must not be compiled or encoded.
+        auto fragmentIR = vertexIR && _isRasterizing && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
         if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
             !capabilities.supportsPointCoordinates(fragmentIR->runtimeFlags)) {
             mvkMetalIRRecordPipelineRejection(getDevice(), "point_coordinate_semantics");
@@ -82,12 +85,13 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
                 "MetalIR point coordinates have no native rasterizer input; MSL fallback disabled."));
 			return false;
 		}
-		if (vertexIR && (!pFragmentSS || fragmentIR)) {
+		if (vertexIR && (!_isRasterizing || !pFragmentSS || fragmentIR)) {
 			_stageResources[kMVKShaderStageVertex].metalIR = vertexIR->metadata;
 			_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR ? fragmentIR->metadata : nullptr;
 			plDesc.vertexFunction = vertexIR->function;
 			plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
-			_isRasterizing = true;
+			// Preserve the constructor's static discard/cull decision.
+			plDesc.rasterizationEnabled = _isRasterizing;
 			addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
 			shaderConfig.markAllInterfaceVarsAndResourcesUsed();
 			mvkPopulateMetalIRResidencyOperations(_layout,_stageResources[kMVKShaderStageVertex]);

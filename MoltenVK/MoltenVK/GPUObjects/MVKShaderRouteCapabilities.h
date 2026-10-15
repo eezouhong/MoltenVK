@@ -9,15 +9,15 @@ struct MVKShaderRouteCapabilities {
     bool supportsStageClass(bool vertexFragmentCompute) const { return !metalIR || vertexFragmentCompute; }
     bool supportsPushDescriptors() const { return !metalIR; }
     bool supportsStages(bool tessellation, bool mesh) const { return !metalIR || (!tessellation && !mesh); }
-    bool supportsGraphics(bool tessellation, bool mesh, bool discard, bool multiview) const {
-        return !metalIR || (!tessellation && !mesh && !discard && !multiview);
+    bool supportsGraphics(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
+        // Discard suppresses rasterization, not vertex-stage storage writes.
+        return !metalIR || (!tessellation && !mesh && !multiview);
     }
     // Deterministic diagnostic classification only; supportsGraphics stays authoritative.
-    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool discard, bool multiview) const {
+    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
         if (!metalIR) return nullptr;
         if (tessellation) return "tessellation_stage";
         if (mesh) return "mesh_stage";
-        if (discard) return "rasterizer_discard";
         if (multiview) return "multiview";
         return nullptr;
     }

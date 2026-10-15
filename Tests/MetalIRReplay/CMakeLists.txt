@@ -119,3 +119,65 @@ target_include_directories(rejection_probe PRIVATE "${VULKAN_HEADERS}")
 target_link_libraries(rejection_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(rejection_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(rejection_probe replay_shaders)
+add_executable(layer_probe layer_probe.cpp)
+target_compile_features(layer_probe PRIVATE cxx_std_17)
+target_include_directories(layer_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(layer_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(layer_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+set(LAYER_SHADERS)
+foreach(SHADER layer.vert viewport.vert layer.frag)
+    set(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv")
+    add_custom_command(OUTPUT "${OUTPUT}" COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.2 "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}" -o "${OUTPUT}" DEPENDS "${SHADER}" VERBATIM)
+    list(APPEND LAYER_SHADERS "${OUTPUT}")
+endforeach()
+add_custom_target(layer_shaders ALL DEPENDS ${LAYER_SHADERS})
+add_dependencies(layer_probe layer_shaders)
+add_executable(discard_probe discard_probe.cpp)
+target_compile_features(discard_probe PRIVATE cxx_std_17)
+target_include_directories(discard_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(discard_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(discard_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+set(DISCARD_SHADERS)
+foreach(SHADER discard_producer.vert discard_positionless.vert discard_consumer.vert discard_guard.frag discard_consumer.frag)
+    set(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv")
+    add_custom_command(OUTPUT "${OUTPUT}" COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1 "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}" -o "${OUTPUT}" DEPENDS "${SHADER}" VERBATIM)
+    list(APPEND DISCARD_SHADERS "${OUTPUT}")
+endforeach()
+add_custom_target(discard_shaders ALL DEPENDS ${DISCARD_SHADERS})
+add_dependencies(discard_probe discard_shaders)
+
+# This probe requires the actual Vulkan Loader instead of direct MoltenVK entrypoints.
+set(VULKAN_LOADER_LIBRARY "" CACHE FILEPATH "Optional macOS Vulkan Loader for dispatch-lifetime regression")
+if(APPLE AND EXISTS "${VULKAN_LOADER_LIBRARY}")
+    enable_language(OBJCXX)
+    add_executable(loader_handle_probe loader_handle_probe.mm)
+    target_compile_features(loader_handle_probe PRIVATE cxx_std_17)
+    target_compile_options(loader_handle_probe PRIVATE -fno-rtti)
+    target_include_directories(loader_handle_probe PRIVATE "${VULKAN_HEADERS}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../Common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/GPUObjects"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/Utility"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/OS"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/API"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/Vulkan")
+    target_link_libraries(loader_handle_probe PRIVATE "${VULKAN_LOADER_LIBRARY}" "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+endif()
+
+add_executable(varying_probe varying_probe.cpp)
+target_compile_features(varying_probe PRIVATE cxx_std_17)
+target_include_directories(varying_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(varying_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(varying_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+set(VARYING_SHADERS)
+foreach(KIND sparse reordered high array components flat gradient)
+    foreach(STAGE vert frag)
+        list(APPEND VARYING_SHADERS "${CMAKE_CURRENT_BINARY_DIR}/varying-${KIND}.${STAGE}.spv")
+    endforeach()
+endforeach()
+add_custom_command(OUTPUT ${VARYING_SHADERS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_varyings.py"
+        --output "${CMAKE_CURRENT_BINARY_DIR}" --glslang "${GLSLANG_VALIDATOR}" --validator "${SPIRV_VAL}"
+    DEPENDS prepare_varyings.py VERBATIM)
+add_custom_target(varying_shaders ALL DEPENDS ${VARYING_SHADERS})
+add_dependencies(varying_probe varying_shaders)

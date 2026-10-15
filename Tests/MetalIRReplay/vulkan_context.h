@@ -45,10 +45,16 @@ public:
     VkPipelineCache residencyCache{};
 
     explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
-                     bool floatControls2 = false, bool fragmentStorageMode = false)
+                     bool floatControls2 = false, bool fragmentStorageMode = false, bool layeredOutputs = false,
+                     bool portableLoader = false)
         : negativeDepth(negativeDepthMode), fragmentStorage(fragmentStorageMode) {
-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 || layeredOutputs ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
         VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
+        const char* portabilityExtension=VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        if(portableLoader) {
+            info.flags=VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+            info.enabledExtensionCount=1;info.ppEnabledExtensionNames=&portabilityExtension;
+        }
         VK_CHECK(vkCreateInstance(&info, nullptr, &instance));
         uint32_t count{}; VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
         if (!count) throw std::runtime_error("no GPU");
@@ -68,6 +74,7 @@ public:
         VkPhysicalDeviceFeatures features{}; features.vertexPipelineStoresAndAtomics=VK_TRUE;
         features.fragmentStoresAndAtomics=fragmentStorage;
         features.largePoints=largePoints;
+        features.multiViewport=layeredOutputs;
         features.multiDrawIndirect=VK_TRUE; features.drawIndirectFirstInstance=VK_TRUE;
         const char* extensions[]={"VK_KHR_portability_subset", floatControls2 ? VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME : VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
                                   VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME};
@@ -75,6 +82,8 @@ public:
         VkPhysicalDeviceShaderFloatControls2FeaturesKHR math{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR}; math.shaderFloatControls2=VK_TRUE;
         if(floatControls2) { draw.pNext=&math; if(negativeDepth) math.pNext=&depth; }
         else if(negativeDepth) draw.pNext=&depth;
+        VkPhysicalDeviceVulkan12Features layered{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        if(layeredOutputs) { layered.shaderOutputLayer=VK_TRUE;layered.shaderOutputViewportIndex=VK_TRUE;layered.pNext=draw.pNext;draw.pNext=&layered; }
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&draw; dc.pEnabledFeatures=&features;
         dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qi; dc.enabledExtensionCount=1+unsigned(floatControls2)+unsigned(negativeDepth); dc.ppEnabledExtensionNames=extensions;
         VK_CHECK(vkCreateDevice(physical, &dc, nullptr, &device)); vkGetDeviceQueue(device, family, 0, &queue);
@@ -152,12 +161,12 @@ public:
         VK_CHECK(vkQueueSubmit(queue,1,&submit,fence)); VK_CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,15ull*1000000000));
         vkDestroyFence(device,fence,nullptr);
     }
-    void target(bool readback = false) {
+    void target(bool readback = false, uint32_t layers = 1) {
         VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; ii.imageType=VK_IMAGE_TYPE_2D; ii.format=VK_FORMAT_R8G8B8A8_UNORM;
-        ii.extent={16,16,1}; ii.mipLevels=ii.arrayLayers=1; ii.samples=VK_SAMPLE_COUNT_1_BIT; ii.tiling=VK_IMAGE_TILING_OPTIMAL; ii.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|(readback?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0);
+        ii.extent={16,16,1}; ii.mipLevels=1;ii.arrayLayers=layers; ii.samples=VK_SAMPLE_COUNT_1_BIT; ii.tiling=VK_IMAGE_TILING_OPTIMAL; ii.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|(readback?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0);
         VK_CHECK(vkCreateImage(device,&ii,nullptr,&image)); VkMemoryRequirements requirements; vkGetImageMemoryRequirements(device,image,&requirements);
         imageMemory=allocate(requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT); VK_CHECK(vkBindImageMemory(device,image,imageMemory,0));
-        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; vi.image=image; vi.viewType=VK_IMAGE_VIEW_TYPE_2D; vi.format=ii.format; vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; vi.image=image; vi.viewType=layers>1?VK_IMAGE_VIEW_TYPE_2D_ARRAY:VK_IMAGE_VIEW_TYPE_2D; vi.format=ii.format; vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,layers};
         VK_CHECK(vkCreateImageView(device,&vi,nullptr,&view));
         VkAttachmentDescription attachment{}; attachment.format=ii.format; attachment.samples=ii.samples; attachment.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; attachment.storeOp=readback?VK_ATTACHMENT_STORE_OP_STORE:VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachment.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED; attachment.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -165,10 +174,10 @@ public:
         VkSubpassDependency dependency{VK_SUBPASS_EXTERNAL,0,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT|VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT|VK_ACCESS_SHADER_READ_BIT,0};
         VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO}; rp.attachmentCount=1; rp.pAttachments=&attachment; rp.subpassCount=1; rp.pSubpasses=&subpass; rp.dependencyCount=1; rp.pDependencies=&dependency;
         VK_CHECK(vkCreateRenderPass(device,&rp,nullptr,&renderPass));
-        VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; fb.renderPass=renderPass; fb.attachmentCount=1; fb.pAttachments=&view; fb.width=fb.height=16; fb.layers=1;
+        VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; fb.renderPass=renderPass; fb.attachmentCount=1; fb.pAttachments=&view; fb.width=fb.height=16; fb.layers=layers;
         VK_CHECK(vkCreateFramebuffer(device,&fb,nullptr,&framebuffer));
     }
-    VkPipeline graphics(VkShaderModule vertex,VkShaderModule fragment,VkPrimitiveTopology topology, bool threeInputs=false) {
+    VkPipeline graphics(VkShaderModule vertex,VkShaderModule fragment,VkPrimitiveTopology topology, bool threeInputs=false, bool twoViewports=false, bool discard=false) {
         VkPipelineShaderStageCreateInfo stages[2]={{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
         stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT; stages[0].module=vertex; stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module=fragment;
         for(auto& stage:stages) stage.pName="main";
@@ -177,16 +186,18 @@ public:
         VkVertexInputAttributeDescription attributes[]={{0,0,VK_FORMAT_R32G32B32A32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32A32_SFLOAT,16},{2,0,VK_FORMAT_R32G32B32A32_SFLOAT,32}};
         if (threeInputs) { input.vertexBindingDescriptionCount=1; input.pVertexBindingDescriptions=&binding; input.vertexAttributeDescriptionCount=3; input.pVertexAttributeDescriptions=attributes; }
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology=topology;
-        VkViewport viewport{0,0,16,16,0,1}; VkRect2D scissor{{0,0},{16,16}};
-        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; vp.viewportCount=vp.scissorCount=1; vp.pViewports=&viewport; vp.pScissors=&scissor;
+        VkViewport viewport[2]={{0,0,twoViewports?8.0f:16.0f,16,0,1},{8,0,8,16,0,1}}; VkRect2D scissor[2]={{{0,0},{twoViewports?8u:16u,16}},{{8,0},{8,16}}};
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; vp.viewportCount=vp.scissorCount=twoViewports?2:1; vp.pViewports=viewport; vp.pScissors=scissor;
         VkPipelineViewportDepthClipControlCreateInfoEXT depth{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT}; depth.negativeOneToOne=VK_TRUE;
         if(negativeDepth) vp.pNext=&depth;
-        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode=VK_POLYGON_MODE_FILL; raster.cullMode=VK_CULL_MODE_NONE; raster.lineWidth=1;
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode=VK_POLYGON_MODE_FILL; raster.cullMode=VK_CULL_MODE_NONE; raster.lineWidth=1; raster.rasterizerDiscardEnable=discard;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState attachment{}; attachment.colorWriteMask=15;
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blend.attachmentCount=1; blend.pAttachments=&attachment;
-        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount=2; info.pStages=stages; info.pVertexInputState=&input; info.pInputAssemblyState=&assembly;
+        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount=fragment?2:1; info.pStages=stages; info.pVertexInputState=&input; info.pInputAssemblyState=&assembly;
         info.pViewportState=&vp; info.pRasterizationState=&raster; info.pMultisampleState=&ms; info.pColorBlendState=&blend; info.layout=layout; info.renderPass=renderPass;
+        // These states are ignored by Vulkan when static discard is enabled.
+        if(discard) { info.pViewportState=nullptr;info.pMultisampleState=nullptr;info.pColorBlendState=nullptr; }
         ensureResidencyCache();
         VkPipeline result; VK_CHECK(vkCreateGraphicsPipelines(device,residencyCache,1,&info,nullptr,&result)); pipelines.push_back(result); return result;
     }

@@ -10,4 +10,8 @@ enum NativeRasterIO : uint32_t { PointSize=1,PointCoordinates=2,VertexID=4,Insta
 bool restoreNativeRasterIO(const void* metallib,size_t size,uint32_t execution,
                           uint32_t requiredIO,std::vector<uint8_t>& output,
                           std::string& error);
+// Static rasterizer discard still executes the complete vertex body. Metal
+// requires a void entry and no raster outputs for that pipeline variant.
+bool discardVertexOutputs(const void* metallib,size_t size,
+                          std::vector<uint8_t>& output,std::string& error);
 }

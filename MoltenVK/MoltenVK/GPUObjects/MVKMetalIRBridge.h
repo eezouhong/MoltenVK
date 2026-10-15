@@ -12,6 +12,10 @@ enum : uint32_t { MVK_METAL_IR_UNIT_POINT_SIZE = 4 };
 enum : uint32_t { MVK_METAL_IR_DRAW_BASES = 32, MVK_METAL_IR_DISPATCH_GROUPS = 64 };
 enum : uint32_t { MVK_METAL_IR_NATIVE_POINT_SIZE = 8, MVK_METAL_IR_NATIVE_POINT_COORDINATES = 16 };
 enum : uint32_t { MVK_METAL_IR_ALLOW_DISPATCH_BASE = 1, MVK_METAL_IR_RENDERING_POINTS = 2 };
+// ABI 9 additive option. The matching result bit proves that the compiler
+// produced a void vertex entry; an older plugin is rejected explicitly.
+enum : uint32_t { MVK_METAL_IR_RASTERIZATION_DISABLED = 4 };
+enum : uint32_t { MVK_METAL_IR_VOID_VERTEX = 128 };
 struct MVKMetalIRBinding {
     uint32_t set;
     uint32_t binding;

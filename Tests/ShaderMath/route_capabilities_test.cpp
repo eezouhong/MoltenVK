@@ -9,7 +9,7 @@ int main() {
     for (unsigned mask=0; mask<64; ++mask) {
         bool tess=mask&1, mesh=mask&2, discard=mask&4, views=mask&8, sample=mask&16;
         for (float minimum : {0.0f, 0.5f, std::numeric_limits<float>::quiet_NaN()}) {
-            assert(ir.supportsGraphics(tess,mesh,discard,views)==(!tess&&!mesh&&!discard&&!views));
+            assert(ir.supportsGraphics(tess,mesh,discard,views)==(!tess&&!mesh&&!views));
             assert(ir.supportsSampleShading(sample,minimum)==!(sample&&minimum!=0.0f));
             assert(msl.supportsGraphics(tess,mesh,discard,views));
             assert((ir.graphicsRejectionReason(tess,mesh,discard,views) == nullptr) == ir.supportsGraphics(tess,mesh,discard,views));
@@ -29,7 +29,9 @@ int main() {
         assert(ir.supportsPointCoordinates(flags)==bool(flags&MVK_METAL_IR_NATIVE_POINT_COORDINATES));
     }
     assert(!ir.supportsDescriptorSets(9) && ir.supportsDescriptorSets(8));
-    assert(std::strcmp(ir.graphicsRejectionReason(false,false,true,false), "rasterizer_discard") == 0);
+    // Static discard is executable on IR (vertex storage writes still run).
+    assert(ir.graphicsRejectionReason(false,false,true,false) == nullptr);
+    assert(std::strcmp(ir.graphicsRejectionReason(false,false,true,true), "multiview") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(true,false,true,false), "tessellation_stage") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(false,true,false,false), "mesh_stage") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(false,false,false,true), "multiview") == 0);

@@ -92,6 +92,12 @@ proves its sentinel differs from FMA. Cases that permit contraction use a finite
 tolerance for the corresponding output. This does not turn a legal optimization
 into a precision failure.
 
+`fma_probe` and `run_fma.py` take the same arguments as `run_math.py` and must
+run through the queue. Every Safe/Relaxed/Fast policy on MSL and IR must match
+the CPU's single-rounding `std::fma` bit for bit, for scalar cases and for a
+material-depth chain that the former Relaxed multiply/add regrouping changed.
+The probe first proves both sentinels are sensitive.
+
 `run_msc_negative.py` sends the same structurally valid FP64 compute shader
 through two separate shader modules and pipeline requests. The pinned MSC
 3.1.1 must reject it with `IRErrorCodeFP64Usage` (19), and native telemetry must

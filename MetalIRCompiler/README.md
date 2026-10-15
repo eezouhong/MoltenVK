@@ -20,6 +20,12 @@ permission adapter adds `reassoc/contract` to those operations. It does not add
 `nnan`, `ninf`, approximate-function or legacy unsafe-algebra permissions.
 Operation-level `NoContraction` remains in the original SPIR-V.
 
+Patch 0010 keeps source fp32 `fma` fused. Upstream DXIL options split it into a
+multiply and add, which Relaxed contraction may regroup into a different single
+rounding than the guest's FFMA. It is emitted as DXIL `FMad` because MSC 3.1.1
+rejects f32 `Fma`; MSC lowers `FMad` to `air.fma.f32`, the same fused operation
+MSL's `fma()` uses. Separate source multiply/add operations are not fused.
+
 The adapter edits fixed-width flag fields in the original MSC bitstream and
 updates its checksum. It preserves the type graph, metadata and offsets, avoiding
 LLVM 17's upgrade from legacy typed pointers to opaque pointers. Unknown flag

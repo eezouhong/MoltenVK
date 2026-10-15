@@ -84,6 +84,26 @@ target_link_libraries(math_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(math_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(math_probe math_shaders)
 
+set(FMA_LEGACY "${CMAKE_CURRENT_BINARY_DIR}/fma-legacy.spv")
+set(FMA_VARIANTS "${CMAKE_CURRENT_BINARY_DIR}/fma-relaxed.spv" "${CMAKE_CURRENT_BINARY_DIR}/fma-fast.spv")
+add_custom_command(OUTPUT "${FMA_LEGACY}"
+    COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
+        "${CMAKE_CURRENT_SOURCE_DIR}/fused_fma.comp" -o "${FMA_LEGACY}"
+    DEPENDS fused_fma.comp VERBATIM)
+add_custom_command(OUTPUT ${FMA_VARIANTS}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_fma.py"
+        --input "${FMA_LEGACY}" --output "${CMAKE_CURRENT_BINARY_DIR}"
+        --disassembler "${SPIRV_DIS}" --assembler "${SPIRV_AS}" --validator "${SPIRV_VAL}"
+    DEPENDS "${FMA_LEGACY}" prepare_fma.py VERBATIM)
+add_custom_target(fma_shaders ALL DEPENDS "${FMA_LEGACY}" ${FMA_VARIANTS})
+add_executable(fma_probe fma_probe.cpp)
+target_compile_features(fma_probe PRIVATE cxx_std_17)
+target_compile_options(fma_probe PRIVATE -ffp-contract=off)
+target_include_directories(fma_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(fma_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(fma_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(fma_probe fma_shaders)
+
 set(GRAPHICS_MATH_OUTPUTS)
 foreach(STAGE vert frag)
     list(APPEND GRAPHICS_MATH_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/math_plain.${STAGE}.spv")

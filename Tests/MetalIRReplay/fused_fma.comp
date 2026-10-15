@@ -1,0 +1,14 @@
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std430) buffer Data { uint words[]; } data;
+void main() {
+    uint i=gl_GlobalInvocationID.x*5;
+    float a=uintBitsToFloat(data.words[i]);
+    float b=uintBitsToFloat(data.words[i+1]);
+    float c=uintBitsToFloat(data.words[i+2]);
+    // The material-depth encoding a guest wrote with one FFMA: the D16 result
+    // is an exact rounding tie, so only the fused rounding matches the guest.
+    float scaled=a*0.0039215688593685626983642578125;
+    data.words[i+3]=floatBitsToUint(fma(a,b,c));
+    data.words[i+4]=floatBitsToUint(fma(scaled,-c,scaled)+c);
+}

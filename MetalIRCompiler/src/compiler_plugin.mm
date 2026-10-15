@@ -18,8 +18,35 @@
 #ifndef MELONX_METAL_IR_DEPENDENCY_IDENTITY
 #error "Build with the SHA-256 identity of the pinned Mesa and MSC binaries"
 #endif
+// Every shader is first converted for the iOS 17.0 target, whose AIR 2.6
+// output is the verified adapter path. A shader that MSC rejects only because
+// it needs an iOS 18 target (e.g. globally coherent texture access) is
+// converted again for iOS 18.0, and only when this device runs iOS 18+.
+static bool iOS18TargetRetryAvailable() {
+#if TARGET_OS_IPHONE
+    static const bool available=[]() -> bool {
+        if(@available(iOS 18.0, *))return true;
+        return false;
+    }();
+    return available;
+#else
+    return false;
+#endif
+}
+static bool mscRequiresIOS18Target(IRError* error) {
+    if(!error)return false;
+    const char* text=(const char*)IRErrorGetPayload(error);
+    return text&&strstr(text,"iOS 18");
+}
+// MoltenVK folds this into the IR cache key. Retry-path artifacts exist only
+// on iOS 18+ devices, so the target policy is part of the identity and an OS
+// upgrade does not reuse results produced under the iOS 17-only policy.
 extern "C" __attribute__((visibility("default")))
-const char* MeloNXMetalIRDependencyIdentity() { return MELONX_METAL_IR_DEPENDENCY_IDENTITY; }
+const char* MeloNXMetalIRDependencyIdentity() {
+    static const std::string identity=std::string(MELONX_METAL_IR_DEPENDENCY_IDENTITY)+
+        (iOS18TargetRetryAvailable() ? "+target=ios17.0,ios18.0-retry" : "+target=ios17.0");
+    return identity.c_str();
+}
 extern "C" __attribute__((visibility("default")))
 uint32_t MeloNXMetalIRABIVersion() { return MVK_METAL_IR_ABI_VERSION; }
 
@@ -208,6 +235,16 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
         if(request->preserveInvariance)flags|=IRCompatibilityFlagPositionInvariance;
         IRCompilerSetCompatibilityFlags(compiler,(IRCompatibilityFlags)flags);
         start=std::chrono::steady_clock::now(); { ReplayCompilerPhase trace("apple_converter",request->executionModel); output=IRCompilerAllocCompileAndLink(compiler,nullptr,input,&error); } result->converterMs=elapsed(start);
+#if TARGET_OS_IPHONE
+        if(!output&&iOS18TargetRetryAvailable()&&mscRequiresIOS18Target(error)) {
+            IRErrorDestroy(error);error=nullptr;
+            IRCompilerSetMinimumDeploymentTarget(compiler,IROperatingSystem_iOS,"18.0");
+            start=std::chrono::steady_clock::now();
+            { ReplayCompilerPhase trace("apple_converter_ios18",request->executionModel); output=IRCompilerAllocCompileAndLink(compiler,nullptr,input,&error); }
+            result->converterMs+=elapsed(start);
+            fprintf(stderr,"MetalIR iOS 18 target retry: stage=%u %s\n",request->executionModel,output?"converted":"rejected");
+        }
+#endif
         if(output) {
             auto actualStage=IRObjectGetMetalIRShaderStage(output);
             reflection=IRShaderReflectionCreate();

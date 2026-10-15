@@ -29,7 +29,9 @@ int main() {
         assert(ir.supportsPointCoordinates(flags)==bool(flags&MVK_METAL_IR_NATIVE_POINT_COORDINATES));
     }
     assert(!ir.supportsDescriptorSets(9) && ir.supportsDescriptorSets(8));
-    assert(std::strcmp(ir.graphicsRejectionReason(false,false,true,false), "rasterizer_discard") == 0);
+    // Static discard is executable on IR (vertex storage writes still run).
+    assert(ir.graphicsRejectionReason(false,false,true,false) == nullptr);
+    assert(std::strcmp(ir.graphicsRejectionReason(false,false,true,true), "multiview") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(true,false,true,false), "tessellation_stage") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(false,true,false,false), "mesh_stage") == 0);
     assert(std::strcmp(ir.graphicsRejectionReason(false,false,false,true), "multiview") == 0);

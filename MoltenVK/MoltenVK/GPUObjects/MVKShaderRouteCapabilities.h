@@ -14,11 +14,10 @@ struct MVKShaderRouteCapabilities {
         return !metalIR || (!tessellation && !mesh && !multiview);
     }
     // Deterministic diagnostic classification only; supportsGraphics stays authoritative.
-    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool discard, bool multiview) const {
+    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
         if (!metalIR) return nullptr;
         if (tessellation) return "tessellation_stage";
         if (mesh) return "mesh_stage";
-        if (discard) return "rasterizer_discard";
         if (multiview) return "multiview";
         return nullptr;
     }

@@ -13,7 +13,7 @@ if a.baseline_native:files.append(a.baseline_native)
 env={k:v for k,v in os.environ.items() if not k.startswith(('MELONX_','MVK_CONFIG_','DYLD_','MTL_'))}
 env.update(MELONX_EXPERIMENTAL_METAL_IR='1',MELONX_METAL_IR_PLUGIN=str(a.plugin.resolve()),MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS='1',MVK_CONFIG_METAL4_COMPILER='0',MVK_CONFIG_LOG_LEVEL='4',MTL_ENABLE_DEBUG_LAYER='1',MTL_SHADER_VALIDATION='1',DYLD_PRINT_LIBRARIES='1')
 results=[]
-cases=[('layout-candidate',a.native,'layout-only',1),('discard-candidate',a.native,None,1)]
+cases=[('layout-candidate',a.native,'layout-only',1),('binding-candidate',a.native,None,1)]
 if a.baseline_native:cases.insert(0,('layout-baseline',a.baseline_native,'layout-only',1))
 for label,native,mode,expected in cases:
  command=[str(a.build/'rejection_probe'),str(a.build/'runtime.vert.spv'),str(a.build/'runtime.frag.spv')]
@@ -25,7 +25,7 @@ for label,native,mode,expected in cases:
  binary_ok=len(loaded)==1 and Path(loaded[0]).resolve()==native.resolve()
  valid=z.returncode==0 and len(rows)==1 and rows[0].get('counter')==expected and binary_ok and 'Metal GPU Validation Enabled' in log
  if mode:valid &= rows[0].get('layoutRejected') is True and 'reason=descriptor_layout_capability' in log
- else:valid &= rows[0].get('rejected') is True and 'reason=rasterizer_discard' in log
+ else:valid &= rows[0].get('rejected') is True and 'reason=vertex_binding_conflict' in log
  result={'case':label,'passed':bool(valid),'binaryVerified':binary_ok,'exitCode':z.returncode,'expectedCounter':expected,'oracle':rows};results.append(result)
  (out/'results.json').write_text(json.dumps(results,indent=2));print(json.dumps(result),flush=True)
  if not valid:raise RuntimeError('Rejection fixture failed: '+label)

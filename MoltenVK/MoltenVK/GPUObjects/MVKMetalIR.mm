@@ -10,6 +10,7 @@
 #include "MVKShaderMathPolicy.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
+#include <mach-o/loader.h>
 #include <mutex>
 #include <condition_variable>
 #include <unordered_map>
@@ -50,6 +51,43 @@ mvkir::CompilerLimit& compilerLimit() {
     static mvkir::CompilerLimit limit(mvkShaderCompilerWorkerLimit());
     return limit;
 }
+// Identity of linked code that survives re-signing. Xcode re-signs embedded
+// frameworks on every app build, which changes their file bytes (and so a file
+// hash) while the code is unchanged; hashing the file therefore discarded the
+// whole IR disk cache on every app update. The linker derives LC_UUID from the
+// linked contents, so it changes exactly when the code does.
+static bool linkedCodeIdentity(const void* imageBase, std::string& identity) {
+    auto header=static_cast<const mach_header_64*>(imageBase);
+    if(!header||header->magic!=MH_MAGIC_64)return false;
+    auto command=reinterpret_cast<const load_command*>(header+1);
+    for(uint32_t i=0;i<header->ncmds;++i) {
+        if(command->cmd==LC_UUID) {
+            auto uuid=reinterpret_cast<const uuid_command*>(command);
+            char text[33];for(int b=0;b<16;++b)snprintf(text+b*2,3,"%02x",uuid->uuid[b]);
+            identity=std::string("uuid:")+text;return true;
+        }
+        command=reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(command)+command->cmdsize);
+    }
+    return false;
+}
+static bool fileIdentity(const char* path, std::string& identity) {
+    std::ifstream file(path,std::ios::binary);
+    CC_SHA256_CTX hash;CC_SHA256_Init(&hash);
+    char chunk[64*1024];uint64_t size=0;
+    while(file.read(chunk,sizeof(chunk)) || file.gcount()) {
+        auto count=file.gcount();size+=count;CC_SHA256_Update(&hash,chunk,CC_LONG(count));
+    }
+    if(!size || file.bad())return false;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256_Final(digest,&hash);
+    char hex[65];for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",digest[i]);identity=hex;return true;
+}
+// Prefers the linked-code UUID of the image containing symbol; falls back to the file hash.
+static bool imageIdentity(void* symbol, const char* fallbackPath, std::string& identity) {
+    Dl_info image{};
+    if(symbol && dladdr(symbol,&image) && linkedCodeIdentity(image.dli_fbase,identity))return true;
+    const char* path=image.dli_fname?image.dli_fname:fallbackPath;
+    return path && fileIdentity(path,identity);
+}
 struct Plugin {
     void* library=nullptr;MVKMetalIRCompileFunction compile=nullptr;MVKMetalIRReleaseFunction release=nullptr;
     std::string identity;
@@ -70,10 +108,7 @@ Plugin& plugin() {
             fprintf(stderr,"MetalIR compiler ABI mismatch; IR unavailable\n");
             dlclose(p.library);return Plugin{};
         }
-        std::ifstream file(path,std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(file)),{});
-        if(bytes.empty()){dlclose(p.library);return Plugin{};}
-        unsigned char hash[CC_SHA256_DIGEST_LENGTH];CC_SHA256(bytes.data(),(CC_LONG)bytes.size(),hash);
-        char hex[65];for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",hash[i]);p.identity=hex;
+        if(!imageIdentity((void*)p.compile,path,p.identity)){dlclose(p.library);return Plugin{};}
         p.identity+=dependencyIdentity();
         for(const char* symbol:{"spirv_to_dxil", "IRCompilerCreate"}) {
             Dl_info dependency{};
@@ -83,20 +118,13 @@ Plugin& plugin() {
             if(!address && !strcmp(symbol,"spirv_to_dxil")) {
                 p.identity+="embedded-mesa";continue;
             }
-            if(!address || !dladdr(address,&dependency) || !dependency.dli_fname) {
+            std::string identity;
+            if(!address || !dladdr(address,&dependency) || !dependency.dli_fname ||
+               !imageIdentity(address,dependency.dli_fname,identity)) {
                 fprintf(stderr,"MetalIR dependency identity unavailable: %s\n",symbol);
                 dlclose(p.library);return Plugin{};
             }
-            std::ifstream sidecar(dependency.dli_fname,std::ios::binary);
-            CC_SHA256_CTX sidecarHash;CC_SHA256_Init(&sidecarHash);
-            char chunk[64*1024];uint64_t size=0;
-            while(sidecar.read(chunk,sizeof(chunk)) || sidecar.gcount()) {
-                auto count=sidecar.gcount();size+=count;CC_SHA256_Update(&sidecarHash,chunk,CC_LONG(count));
-            }
-            if(!size || sidecar.bad()){dlclose(p.library);return Plugin{};}
-            CC_SHA256_Final(hash,&sidecarHash);
-            for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",hash[i]);
-            p.identity+=hex;
+            p.identity+=identity;
         }
         fprintf(stderr,"MetalIR experimental compiler loaded; ABI %u\n",MVK_METAL_IR_ABI_VERSION);
         return p;

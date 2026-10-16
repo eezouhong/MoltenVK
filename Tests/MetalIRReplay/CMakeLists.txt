@@ -74,7 +74,7 @@ target_link_libraries(signed_modulo_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(signed_modulo_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(signed_modulo_probe signed_modulo_shader)
 
-foreach(NAME strong_fma nocontraction_vector)
+foreach(NAME strong_fma nocontraction_vector nan_default)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
         COMMAND "${SPIRV_AS}" --target-env spv1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${NAME}.spvasm"
             -o "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"

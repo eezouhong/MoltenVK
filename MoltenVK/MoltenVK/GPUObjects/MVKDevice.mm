@@ -5757,7 +5757,15 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
 	reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Shader compiler selected: %s (automatic MSL fallback disabled)",
 	              mvkShaderRouteConfig().selected == MVKShaderCompilerRoute::Unavailable ? "unavailable (requested Metal IR)" :
 	              _metalIRShaderCompilerEnabled ? "Metal IR" : "MSL");
-	_metal4CompilerService = MVKMetal4CompilerService::create(this);
+	// Metal IR functions carry no Metal 4 function descriptors, so the Metal 4
+	// compiler and flexible pipelines can never be used with IR: every pipeline
+	// would only count a legacy fallback. When IR is selected, ignore the Metal 4
+	// compiler request so pipelines take the ordinary path directly.
+	if (_metalIRShaderCompilerEnabled) {
+		reportMessage(MVK_CONFIG_LOG_LEVEL_INFO, "Metal 4 compiler ignored: Metal IR selected.");
+	} else {
+		_metal4CompilerService = MVKMetal4CompilerService::create(this);
+	}
 	_shaderLibraryRepository = MVKShaderLibraryRepository::create(this);
 	_metal4TextureViewPool = MVKMetal4TextureViewPool::create(this);
 	_commandResourceFactory = new MVKCommandResourceFactory(this);

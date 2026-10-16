@@ -9,13 +9,6 @@ const MVKShaderRouteConfig& mvkShaderRouteConfig() {
         MVKShaderRouteConfig result;
         const char* request = getenv("MELONX_EXPERIMENTAL_METAL_IR");
         result.requested = request && !strcmp(request, "1");
-        if (!mvkMetalIRRolloutEnabled()) {
-            result.failureReason = result.requested ? 3 : 0;
-            result.requested = false;
-            // The route is unavailable by product policy, without probing the
-            // compiler or changing the ordinary MSL physical-device features.
-            result.available = MVKShaderCompilerAvailability::Unavailable;
-        }
         if (result.requested) {
             result.available = MVKShaderCompilerAvailability::Unavailable;
             result.selected = MVKShaderCompilerRoute::Unavailable;
@@ -54,7 +47,6 @@ const std::string& mvkShaderCompilerPluginPath() {
     return path;
 }
 bool mvkShaderInitialTelemetryEnabled() {
-    if (!mvkMetalIRRolloutEnabled()) return false;
     const char* value = getenv("MELONX_METAL_IR_TELEMETRY");
     return value && !strcmp(value, "1");
 }

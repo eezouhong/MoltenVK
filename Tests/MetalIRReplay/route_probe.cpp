@@ -12,8 +12,6 @@ int main(int argc, char** argv) {
         dlsym(RTLD_DEFAULT, "vkGetShaderCompilerRouteMVK"));
     auto abi = reinterpret_cast<uint32_t(*)()>(dlsym(RTLD_DEFAULT,"vkGetMetalIRCompilerABIMVK"));
     if (!get || !abi) return 1;
-    // Probe availability independently; dormant binaries must never load even
-    // a valid plugin through this exported preflight API.
     // Simulate Swift's prewarm: validating ABI must not freeze the route before
     // the launch request has been applied.
     if (!strcmp(argv[2], "prewarm")) (void)abi();

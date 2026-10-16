@@ -1,0 +1,53 @@
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -2406,6 +2406,41 @@
+ }
+ 
+ static bool
++emit_imod(struct ntd_context *ctx, nir_alu_instr *alu,
++          const struct dxil_value *dividend, const struct dxil_value *divisor)
++{
++   /* OpSMod has the divisor's sign; DXIL srem has the dividend's sign.
++    * Correct only nonzero remainders with opposite signs. In particular,
++    * an exact division with operands of different signs must still yield 0.
++    */
++   const struct dxil_value *remainder =
++      dxil_emit_binop(&ctx->mod, DXIL_BINOP_SREM, dividend, divisor, 0);
++   const struct dxil_value *zero =
++      dxil_module_get_int_const(&ctx->mod, 0, alu->def.bit_size);
++   if (!remainder || !zero)
++      return false;
++   const struct dxil_value *signs =
++      dxil_emit_binop(&ctx->mod, DXIL_BINOP_XOR, remainder, divisor, 0);
++   const struct dxil_value *nonzero =
++      dxil_emit_cmp(&ctx->mod, DXIL_ICMP_NE, remainder, zero);
++   if (!signs || !nonzero)
++      return false;
++   const struct dxil_value *opposite =
++      dxil_emit_cmp(&ctx->mod, DXIL_ICMP_SLT, signs, zero);
++   if (!opposite)
++      return false;
++   const struct dxil_value *adjust =
++      dxil_emit_binop(&ctx->mod, DXIL_BINOP_AND, nonzero, opposite, 0);
++   if (!adjust)
++      return false;
++   const struct dxil_value *bias =
++      dxil_emit_select(&ctx->mod, adjust, divisor, zero);
++   if (!bias)
++      return false;
++   return emit_binop(ctx, alu, DXIL_BINOP_ADD, remainder, bias);
++}
++
++static bool
+ emit_shift(struct ntd_context *ctx, nir_alu_instr *alu,
+            enum dxil_bin_opcode opcode,
+            const struct dxil_value *op0, const struct dxil_value *op1)
+@@ -3052,7 +3087,7 @@
+       return emit_binop(ctx, alu, alu->op == nir_op_idiv ? DXIL_BINOP_SDIV : DXIL_BINOP_UDIV, src[0], src[1]);
+ 
+    case nir_op_irem: return emit_binop(ctx, alu, DXIL_BINOP_SREM, src[0], src[1]);
+-   case nir_op_imod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
++   case nir_op_imod: return emit_imod(ctx, alu, src[0], src[1]);
+    case nir_op_umod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
+    case nir_op_ishl: return emit_shift(ctx, alu, DXIL_BINOP_SHL, src[0], src[1]);
+    case nir_op_ishr: return emit_shift(ctx, alu, DXIL_BINOP_ASHR, src[0], src[1]);

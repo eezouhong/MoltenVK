@@ -1,0 +1,49 @@
+; Dynamic inputs prevent constant folding. OpSRem is the dividend-sign control.
+OpCapability Shader
+OpCapability FloatControls2
+OpExtension "SPV_KHR_float_controls2"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gid
+OpExecutionMode %main LocalSize 1 1 1
+OpExecutionModeId %main FPFastMathDefault %float %flags
+OpDecorate %gid BuiltIn GlobalInvocationId
+OpDecorate %rows ArrayStride 16
+OpMemberDecorate %Storage 0 Offset 0
+OpDecorate %Storage Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%flags = OpConstant %uint 196620
+%u0 = OpConstant %uint 0
+%u1 = OpConstant %uint 1
+%u2 = OpConstant %uint 2
+%u3 = OpConstant %uint 3
+%v3uint = OpTypeVector %uint 3
+%v4int = OpTypeVector %int 4
+%rows = OpTypeRuntimeArray %v4int
+%Storage = OpTypeStruct %rows
+%pInput = OpTypePointer Input %v3uint
+%pStorage = OpTypePointer StorageBuffer %Storage
+%pInt = OpTypePointer StorageBuffer %int
+%gid = OpVariable %pInput Input
+%storage = OpVariable %pStorage StorageBuffer
+%main = OpFunction %void None %function
+%entry = OpLabel
+%xyz = OpLoad %v3uint %gid
+%index = OpCompositeExtract %uint %xyz 0
+%pa = OpAccessChain %pInt %storage %u0 %index %u0
+%pb = OpAccessChain %pInt %storage %u0 %index %u1
+%a = OpLoad %int %pa
+%b = OpLoad %int %pb
+%mod = OpSMod %int %a %b
+%rem = OpSRem %int %a %b
+%pm = OpAccessChain %pInt %storage %u0 %index %u2
+%pr = OpAccessChain %pInt %storage %u0 %index %u3
+OpStore %pm %mod
+OpStore %pr %rem
+OpReturn
+OpFunctionEnd

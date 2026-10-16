@@ -4,12 +4,6 @@
 #include <string>
 #include <limits>
 
-// Product and Xcode builds stay dormant unless explicitly built for IR testing.
-#ifndef MVK_ENABLE_EXPERIMENTAL_METAL_IR
-#define MVK_ENABLE_EXPERIMENTAL_METAL_IR 0
-#endif
-inline constexpr bool mvkMetalIRRolloutEnabled() { return MVK_ENABLE_EXPERIMENTAL_METAL_IR != 0; }
-
 enum class MVKShaderCompilerRoute : uint32_t { MSL, MetalIR, Unavailable };
 enum class MVKShaderCompilerAvailability : uint32_t { Unavailable, Available, NotProbed };
 
@@ -17,7 +11,7 @@ struct MVKShaderRouteConfig {
     bool requested = false;
     MVKShaderCompilerAvailability available = MVKShaderCompilerAvailability::NotProbed;
     MVKShaderCompilerRoute selected = MVKShaderCompilerRoute::MSL;
-    uint32_t failureReason = 0; // 0 none, 1 plugin/ABI, 2 hardware, 3 rollout disabled.
+    uint32_t failureReason = 0; // 0 none, 1 plugin/ABI, 2 hardware.
     // Preserve explicit IR's existing failure path: unavailable never means
     // silently compiling MSL. Swift still gates an unavailable launch.
     bool usesIRPath() const { return requested; }

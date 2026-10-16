@@ -95,7 +95,6 @@ struct Plugin {
 Plugin& plugin() {
     static Plugin result=[] {
         Plugin p;
-        if (!mvkMetalIRRolloutEnabled()) return p;
         fprintf(stderr,"MetalIR native base MoltenVK %s %s (local experimental changes)\n",MVK_VERSION_STRING,mvkRevString);
         const char* path=mvkShaderCompilerPluginPath().c_str();if(!*path)return p;
         p.library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
@@ -227,7 +226,6 @@ VkResult mvkMetalIRConfigureCache(MVKDevice* device,const char* directory,uint64
 }
 
 uint64_t mvkMetalIRRelieveCompilerMemory() {
-    if (!mvkMetalIRRolloutEnabled()) return 0;
     uint64_t released=0;
     compilerLimit().relieveWhenIdle(std::chrono::milliseconds(500),[&] {
         released=malloc_zone_pressure_relief(nullptr,0);
@@ -236,7 +234,6 @@ uint64_t mvkMetalIRRelieveCompilerMemory() {
 }
 
 uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacity) {
-    if (!mvkMetalIRRolloutEnabled()) return 0;
     if (!output || capacity<6) return 0;
     auto value=compilerLimit().stats();
     output[0]=value.active;output[1]=value.waiting;output[2]=value.peak;output[3]=value.limit;
@@ -245,7 +242,6 @@ uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacit
 }
 
 uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
-    if (!mvkMetalIRRolloutEnabled()) return UINT32_MAX;
     // The probe runs outside a game. Return a token for exact restoration;
     // never leave detailed timers enabled for subsequent game sessions.
     if ((flags & ~7u) || (flags & 6u) == 6u) return UINT32_MAX;
@@ -259,12 +255,10 @@ uint32_t mvkMetalIRSetProbeDiagnostics(uint32_t flags) {
 
 uint32_t mvkMetalIRSetTelemetryEnabled(uint32_t enabled) {
     if (enabled > 1) return UINT32_MAX;
-    if (!mvkMetalIRRolloutEnabled()) return 0;
     return telemetryStorage().exchange(enabled != 0, std::memory_order_relaxed) ? 1 : 0;
 }
 
 uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
-    if (!mvkMetalIRRolloutEnabled()) return 0;
     constexpr uint32_t legacyFields = 37, fields = 40;
     if (!device || !output || capacity < legacyFields) return 0;
     const uint32_t written = capacity >= fields ? fields : legacyFields;

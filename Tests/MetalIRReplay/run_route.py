@@ -11,7 +11,6 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('build','native','plugin','wrong-abi','output'):
         p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--rollout',choices=('enabled','disabled'),default='enabled')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     paths=[a.build/'route_probe',a.native,a.plugin,a.wrong_abi]
     identity={str(x.resolve()):hashlib.sha256(x.read_bytes()).hexdigest() for x in paths}
@@ -29,17 +28,7 @@ def main():
         rows=[json.loads(x) for x in process.stdout.splitlines() if x.startswith('{')]
         loaded=re.findall(r'^dyld\[\d+\]: <[^>]+> (.+/libMoltenVK[^/]*\.dylib)$',text,re.M)
         verified=len(loaded)==1 and Path(loaded[0]).resolve()==a.native.resolve()
-        if a.rollout=='disabled':
-            expectedRequest,available,selected=0,0,0
-        else:
-            expectedRequest=requested
-        passed=process.returncode==0 and len(rows)==1 and rows[0]['immutable'] and rows[0]['requested']==expectedRequest and rows[0]['available']==available and rows[0]['selected']==selected and verified
-        if a.rollout=='disabled' and rows:
-            passed=passed and rows[0]['reason']==(3 if requested else 0) and rows[0]['compilerABI']==0 and 'MetalIR experimental compiler loaded' not in text
-            passed=passed and not any(Path(line.rsplit(' ',1)[-1]).resolve()==a.plugin.resolve() for line in text.splitlines() if line.startswith('dyld['))
-            if results:
-                baseline=results[0]['observed'][0]
-                passed=passed and rows[0]['tessellation']==baseline['tessellation'] and rows[0]['physicalDevices']==baseline['physicalDevices']
+        passed=process.returncode==0 and len(rows)==1 and rows[0]['immutable'] and rows[0]['requested']==requested and rows[0]['available']==available and rows[0]['selected']==selected and verified
         result=dict(case=name,passed=bool(passed),exitCode=process.returncode,binaryVerified=verified,observed=rows)
         results.append(result);(out/'results.json').write_text(json.dumps(results,indent=2)+'\n');print(json.dumps(result),flush=True)
         if not passed:raise RuntimeError('Route matrix failed: '+name)

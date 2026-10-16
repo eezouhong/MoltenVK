@@ -85,36 +85,31 @@ def main():
             (directory/name).write_bytes((source/name).read_bytes())
         (directory/'MVKMetalIR.h').write_text(STUB)
         (directory/'probe.mm').write_text(PROBE)
-        for enabled in (False,True):
-            exe=directory/('enabled' if enabled else 'default-disabled')
-            command=['clang++','-std=c++17','-O2','-fno-objc-arc','-framework','Foundation',
-                     str(directory/'MVKShaderRouteConfig.mm'),str(directory/'probe.mm'),'-o',str(exe)]
-            if enabled:command.insert(1,'-DMVK_ENABLE_EXPERIMENTAL_METAL_IR=1')
-            built=subprocess.run(command,capture_output=True,text=True)
-            (output/('build-'+str(enabled)+'.log')).write_text(built.stdout+built.stderr)
-            built.check_returncode()
-            linked=subprocess.check_output(['otool','-L',str(exe)],text=True)
-            assert '/Metal.framework/' not in linked and 'MoltenVK' not in linked
-            for name,request,plugin,hardware in cases:
-                run=subprocess.run([str(exe),str(request),str(plugin),str(hardware)],capture_output=True,text=True,timeout=10)
-                observed=json.loads(run.stdout)
-                if not enabled:
-                    expected=dict(requested=0,available=0,selected=0,reason=3 if request else 0,
-                                  usesIRPath=0,compilerProbes=0,hardwareProbes=0,immutable=1,telemetry=0)
-                elif not request:
-                    expected=dict(requested=0,available=2,selected=0,reason=0,usesIRPath=0,
-                                  compilerProbes=0,hardwareProbes=0,immutable=1,telemetry=1)
-                else:
-                    ok=plugin and hardware==1
-                    expected=dict(requested=1,available=1 if ok else 0,selected=1 if ok else 2,
-                                  reason=0 if ok else (2 if plugin else 1),usesIRPath=1,
-                                  compilerProbes=1,hardwareProbes=1 if plugin else 0,immutable=1,telemetry=1)
-                passed=run.returncode==0 and observed==expected
-                result=dict(rollout=enabled,case=name,passed=passed,observed=observed)
-                results.append(result)
-                (output/'results.json').write_text(json.dumps(results,indent=2)+'\n')
-                print(json.dumps(result),flush=True)
-                if not passed:raise RuntimeError('CPU route fixture failed: '+name)
+        exe=directory/'route'
+        command=['clang++','-std=c++17','-O2','-fno-objc-arc','-framework','Foundation',
+                 str(directory/'MVKShaderRouteConfig.mm'),str(directory/'probe.mm'),'-o',str(exe)]
+        built=subprocess.run(command,capture_output=True,text=True)
+        (output/'build.log').write_text(built.stdout+built.stderr)
+        built.check_returncode()
+        linked=subprocess.check_output(['otool','-L',str(exe)],text=True)
+        assert '/Metal.framework/' not in linked and 'MoltenVK' not in linked
+        for name,request,plugin,hardware in cases:
+            run=subprocess.run([str(exe),str(request),str(plugin),str(hardware)],capture_output=True,text=True,timeout=10)
+            observed=json.loads(run.stdout)
+            if not request:
+                expected=dict(requested=0,available=2,selected=0,reason=0,usesIRPath=0,
+                              compilerProbes=0,hardwareProbes=0,immutable=1,telemetry=1)
+            else:
+                ok=plugin and hardware==1
+                expected=dict(requested=1,available=1 if ok else 0,selected=1 if ok else 2,
+                              reason=0 if ok else (2 if plugin else 1),usesIRPath=1,
+                              compilerProbes=1,hardwareProbes=1 if plugin else 0,immutable=1,telemetry=1)
+            passed=run.returncode==0 and observed==expected
+            result=dict(case=name,passed=passed,observed=observed)
+            results.append(result)
+            (output/'results.json').write_text(json.dumps(results,indent=2)+'\n')
+            print(json.dumps(result),flush=True)
+            if not passed:raise RuntimeError('CPU route fixture failed: '+name)
     assert all(hashlib.sha256((source/name).read_bytes()).hexdigest()==digest for name,digest in identity.items())
     (output/'identity.json').write_text(json.dumps({'sourceSHA256':identity,
         'scope':'byte-identical production route source; Foundation-only fake device/plugin probes; not full dylib loading acceptance'},indent=2)+'\n')

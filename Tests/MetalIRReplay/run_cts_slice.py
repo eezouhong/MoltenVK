@@ -19,6 +19,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('binary','native','plugin','control','cases','archive','output'):
         parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--debug-tool',type=Path,required=True,help='canonical Debug Tool tool.py that owns the queue')
     parser.add_argument('--route',choices=('MSL','IR'),required=True)
     parser.add_argument('--mode',type=int,choices=(0,1,2),required=True)
     parser.add_argument('--budget-seconds',type=int,default=240)
@@ -26,6 +27,7 @@ def main():
     lease=os.environ.get('MELONX_DEBUG_GRAPHICS_LEASE')
     if not lease:parser.error('use the canonical graphics queue')
     paths={n:getattr(args,n).resolve(strict=True) for n in ('binary','native','plugin','control','cases','archive')}
+    tool=args.debug_tool.resolve(strict=True)
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     identities={str(p):sha(p) for p in [paths[n] for n in ('binary','native','plugin','control','cases')]+list(paths['plugin'].parent.glob('*.dylib'))+[Path(__file__),Path(__file__).with_name('cts_math_control.mm')]}
     (out/'identity.json').write_text(json.dumps(identities,indent=2)+'\n')
@@ -55,7 +57,7 @@ def main():
             (out/'budget-stop.json').write_text(json.dumps({'seconds':args.budget_seconds,'queueTicket':json.loads(lease)['ticket']})+'\n')
             # Never signal the GPU child directly; let its canonical supervisor
             # verify process identity and stop/reap the complete owned tree.
-            subprocess.run(['python3','/Users/kyle/Documents/MeloNX-debug/hogwarts-sky/tool/tool.py','queue','cancel',str(json.loads(lease)['ticket']),'--stop'],check=True)
+            subprocess.run(['python3',str(tool),'queue','cancel',str(json.loads(lease)['ticket']),'--stop'],check=True)
             raise RuntimeError('queue stop requested after slice budget')
     text=(out/'stdout.log').read_text(errors='replace')+(out/'stderr.log').read_text(errors='replace')
     qpa=(out/'results.qpa').read_text(errors='replace') if (out/'results.qpa').exists() else ''

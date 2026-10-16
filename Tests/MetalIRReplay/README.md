@@ -148,9 +148,9 @@ Never include this library in an app or release build.
 
 Run one route/mode slice through the queue using `run_cts_slice.py` with
 `--binary`, `--native`, `--plugin`, `--control`, `--cases`, `--archive`, `--output`,
-`--route MSL|IR`, and `--mode 0|1|2`. The 240-second slice budget requests a stop
-from the canonical queue supervisor; it never directly kills the GPU child.
-The current supervisor path is the documented canonical path on the audit host.
+`--debug-tool "$DEBUG_TOOL"`, `--route MSL|IR`, and `--mode 0|1|2`. The 240-second
+slice budget requests a stop from that canonical queue supervisor; it never directly
+kills the GPU child.
 Each result preserves official case statuses, effective-mode markers and actual
 library identities. A process exit of 1 from CTS may contain valid failing tests;
 it is not a success result. OnDemand alone is not a forced Relaxed experiment.

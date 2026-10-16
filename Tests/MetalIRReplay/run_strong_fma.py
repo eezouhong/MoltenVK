@@ -18,14 +18,16 @@ def main():
     for name in ('build','native','plugin','output'):
         parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--half',action='store_true')
+    parser.add_argument('--rules',action='store_true',help='Signed-zero, constant, negation, chain and vector rows')
     args=parser.parse_args()
     if 'MELONX_DEBUG_GRAPHICS_LEASE' not in os.environ:
         parser.error('launch through the canonical Debug Tool queue')
     build,native,plugin=(p.resolve(strict=True) for p in (args.build,args.native,args.plugin))
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    shader='strong_fma16' if args.half else 'strong_fma'
-    files=[native,plugin,*plugin.parent.glob('*.dylib'),build/'strong_fma_probe',build/(shader+'.spv'),
-           Path(__file__),*[Path(__file__).with_name(n) for n in ('strong_fma_probe.cpp',shader+'.spvasm','vulkan_context.h')]]
+    probe='strong_fma_rules_probe' if args.rules else 'strong_fma_probe'
+    shader=('strong_fma_rules' if args.rules else 'strong_fma')+('16' if args.half else '')
+    files=[native,plugin,*plugin.parent.glob('*.dylib'),build/probe,build/(shader+'.spv'),
+           Path(__file__),*[Path(__file__).with_name(n) for n in (probe+'.cpp',shader+'.spvasm','vulkan_context.h')]]
     identity={str(p):sha(p) for p in files}
     (out/'identity.json').write_text(json.dumps(identity,indent=2)+'\n')
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
@@ -39,7 +41,7 @@ def main():
             label=f'{route}-{expected}'
             # No subprocess timeout/kill for queued GPU work. A forced stop must
             # use queue cancel --stop so the supervisor owns process cleanup.
-            process=subprocess.run([str(build/'strong_fma_probe'),str(build/(shader+'.spv'))]+(['half'] if args.half else []),
+            process=subprocess.run([str(build/probe),str(build/(shader+'.spv'))]+(['half'] if args.half else []),
                 env=dict(env,MELONX_EXPERIMENTAL_METAL_IR=str(int(route=='IR')),
                          MVK_CONFIG_FAST_MATH_ENABLED=str(preference)),capture_output=True,text=True)
             text=process.stdout+process.stderr;(out/(label+'.log')).write_text(text)

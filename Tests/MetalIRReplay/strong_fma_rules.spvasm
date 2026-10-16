@@ -1,0 +1,151 @@
+; OpFmaKHR beyond the rounding sentinel: constant operands, signed zero,
+; negation, chaining and vector lanes. FPFastMathDefault None forbids NSZ,
+; contraction and reassociation, so every row has a single exact answer.
+OpCapability Shader
+OpCapability FloatControls2
+OpCapability FMAKHR
+OpExtension "SPV_KHR_float_controls2"
+OpExtension "SPV_KHR_fma"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpExecutionModeId %main FPFastMathDefault %float %u0
+OpDecorate %values ArrayStride 4
+OpMemberDecorate %Storage 0 Offset 0
+OpDecorate %Storage Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%u0 = OpConstant %uint 0
+%u1 = OpConstant %uint 1
+%u2 = OpConstant %uint 2
+%u3 = OpConstant %uint 3
+%u4 = OpConstant %uint 4
+%u5 = OpConstant %uint 5
+%u6 = OpConstant %uint 6
+%u7 = OpConstant %uint 7
+%u8 = OpConstant %uint 8
+%u9 = OpConstant %uint 9
+%u10 = OpConstant %uint 10
+%u11 = OpConstant %uint 11
+%u12 = OpConstant %uint 12
+%u13 = OpConstant %uint 13
+%u14 = OpConstant %uint 14
+%u15 = OpConstant %uint 15
+%u16 = OpConstant %uint 16
+%u17 = OpConstant %uint 17
+%u18 = OpConstant %uint 18
+%u19 = OpConstant %uint 19
+%u32 = OpConstant %uint 32
+%u33 = OpConstant %uint 33
+%u34 = OpConstant %uint 34
+%u35 = OpConstant %uint 35
+%u36 = OpConstant %uint 36
+%u37 = OpConstant %uint 37
+%u38 = OpConstant %uint 38
+%u39 = OpConstant %uint 39
+%u40 = OpConstant %uint 40
+%u41 = OpConstant %uint 41
+%u42 = OpConstant %uint 42
+%u43 = OpConstant %uint 43
+%zero = OpConstant %float 0
+%one = OpConstant %float 1
+%ka = OpConstant %float 0x1.000002p+0
+%kb = OpConstant %float 0x1.000002p+0
+%kc = OpConstant %float -0x1.000004p+0
+%values = OpTypeRuntimeArray %float
+%Storage = OpTypeStruct %values
+%pStorage = OpTypePointer StorageBuffer %Storage
+%pFloat = OpTypePointer StorageBuffer %float
+%storage = OpVariable %pStorage StorageBuffer
+%main = OpFunction %void None %function
+%entry = OpLabel
+%p0 = OpAccessChain %pFloat %storage %u0 %u0
+%p1 = OpAccessChain %pFloat %storage %u0 %u1
+%p2 = OpAccessChain %pFloat %storage %u0 %u2
+%p3 = OpAccessChain %pFloat %storage %u0 %u3
+%p4 = OpAccessChain %pFloat %storage %u0 %u4
+%p5 = OpAccessChain %pFloat %storage %u0 %u5
+%p6 = OpAccessChain %pFloat %storage %u0 %u6
+%p7 = OpAccessChain %pFloat %storage %u0 %u7
+%p8 = OpAccessChain %pFloat %storage %u0 %u8
+%p9 = OpAccessChain %pFloat %storage %u0 %u9
+%p10 = OpAccessChain %pFloat %storage %u0 %u10
+%p11 = OpAccessChain %pFloat %storage %u0 %u11
+%p12 = OpAccessChain %pFloat %storage %u0 %u12
+%p13 = OpAccessChain %pFloat %storage %u0 %u13
+%p14 = OpAccessChain %pFloat %storage %u0 %u14
+%p15 = OpAccessChain %pFloat %storage %u0 %u15
+%p16 = OpAccessChain %pFloat %storage %u0 %u16
+%p17 = OpAccessChain %pFloat %storage %u0 %u17
+%p18 = OpAccessChain %pFloat %storage %u0 %u18
+%p19 = OpAccessChain %pFloat %storage %u0 %u19
+%x0 = OpLoad %float %p0
+%x1 = OpLoad %float %p1
+%x2 = OpLoad %float %p2
+%x3 = OpLoad %float %p3
+%x4 = OpLoad %float %p4
+%x5 = OpLoad %float %p5
+%x6 = OpLoad %float %p6
+%x7 = OpLoad %float %p7
+%x8 = OpLoad %float %p8
+%x9 = OpLoad %float %p9
+%x10 = OpLoad %float %p10
+%x11 = OpLoad %float %p11
+%x12 = OpLoad %float %p12
+%x13 = OpLoad %float %p13
+%x14 = OpLoad %float %p14
+%x15 = OpLoad %float %p15
+%x16 = OpLoad %float %p16
+%x17 = OpLoad %float %p17
+%x18 = OpLoad %float %p18
+%x19 = OpLoad %float %p19
+%r0 = OpFmaKHR %float %x0 %x1 %x2
+%r1 = OpFmaKHR %float %x3 %x4 %zero
+%r2 = OpFmaKHR %float %x3 %one %zero
+%r3 = OpFmaKHR %float %x3 %x4 %x7
+%r4 = OpFmaKHR %float %x0 %kb %kc
+%r5 = OpFmaKHR %float %ka %kb %kc
+%n0 = OpFNegate %float %x0
+%n2 = OpFNegate %float %x2
+%r6 = OpFmaKHR %float %n0 %x1 %n2
+%t7 = OpFmaKHR %float %x0 %x1 %x2
+%r7 = OpFmaKHR %float %t7 %x5 %x6
+%va = OpCompositeConstruct %v4float %x8 %x9 %x10 %x11
+%vb = OpCompositeConstruct %v4float %x12 %x13 %x14 %x15
+%vc = OpCompositeConstruct %v4float %x16 %x17 %x18 %x19
+%vr = OpFmaKHR %v4float %va %vb %vc
+%r8 = OpCompositeExtract %float %vr 0
+%r9 = OpCompositeExtract %float %vr 1
+%r10 = OpCompositeExtract %float %vr 2
+%r11 = OpCompositeExtract %float %vr 3
+%o0 = OpAccessChain %pFloat %storage %u0 %u32
+%o1 = OpAccessChain %pFloat %storage %u0 %u33
+%o2 = OpAccessChain %pFloat %storage %u0 %u34
+%o3 = OpAccessChain %pFloat %storage %u0 %u35
+%o4 = OpAccessChain %pFloat %storage %u0 %u36
+%o5 = OpAccessChain %pFloat %storage %u0 %u37
+%o6 = OpAccessChain %pFloat %storage %u0 %u38
+%o7 = OpAccessChain %pFloat %storage %u0 %u39
+%o8 = OpAccessChain %pFloat %storage %u0 %u40
+%o9 = OpAccessChain %pFloat %storage %u0 %u41
+%o10 = OpAccessChain %pFloat %storage %u0 %u42
+%o11 = OpAccessChain %pFloat %storage %u0 %u43
+OpStore %o0 %r0
+OpStore %o1 %r1
+OpStore %o2 %r2
+OpStore %o3 %r3
+OpStore %o4 %r4
+OpStore %o5 %r5
+OpStore %o6 %r6
+OpStore %o7 %r7
+OpStore %o8 %r8
+OpStore %o9 %r9
+OpStore %o10 %r10
+OpStore %o11 %r11
+OpReturn
+OpFunctionEnd

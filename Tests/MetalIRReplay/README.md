@@ -114,3 +114,47 @@ sentinels. MSL and IR must match the independent CPU oracle with Metal API/GPU
 validation. IR must compile the stage without runtime-data/draw-parameters/
 draw-bases flags. This does not replace the mixed BaseVertex/BaseInstance/
 DrawID suite, and makes no whole-game CPU claim.
+# Rule-audit fixtures
+
+The audit adds these explicit targets and queued runners:
+
+| Target | Runner | Contract |
+| --- | --- | --- |
+| `signed_modulo_probe` | `run_signed_modulo.py` | Dynamic SMod/SRem; maintenance8 queried and enabled |
+| `strong_fma_probe` | `run_strong_fma.py`, optionally `--half` | Explicit FMAKHR feature; fp32/fp16 rounding-sensitive inputs |
+| `nocontraction_vector_probe` | `run_nocontraction_vector.py` | Exact vector operations beside permitted non-exact operations |
+| `minmax_probe` | `run_minmax.py` | F and N variants, NaN permitted sets, zero-sign permissions and saturation |
+
+Each runner takes the existing `--build`, `--native`, `--plugin`, and new-output
+`--output` arguments and must run under the host's canonical graphics queue.
+Known REDs stay RED: strong FMA aborts with the baseline MSC path, and both routes
+have strict signed-zero min/max failures. Do not interpret a successful build or
+a completed test process as an all-green suite. The corpus tools have their own
+[build and scope documentation](corpus/README.md).
+
+`cts-audit-cases.txt` is a 126-case slice of official VK-GL-CTS commit
+`bee83722547054754049485ae6ae8344496c02a6`. Build `deqp-vk` with that revision's
+dependencies (`external/fetch_sources.py`), macOS target and video tests disabled.
+Retain the executable, `external/vulkancts/data`, dependency pins and build logs.
+
+`cts_math_control.mm` is a **test-only** library. Build it with the ABI header,
+Metal and Foundation frameworks, and a needed-library dependency on the exact
+real compiler plugin (`-Wl,-needed_library,<plugin>` plus its directory as rpath).
+That linked dependency is necessary for MoltenVK's normal dependency identity
+checks. The forwarding ABI uses `IR_AUDIT_REAL_PLUGIN` and `IR_AUDIT_FORCE_MODE`;
+the MSL setter hook uses `IR_AUDIT_MSL_MODE`. The mode numbers are bridge values
+Fast=0, Safe=1, Relaxed=2, explicitly translated to Metal's different enum values.
+Never include this library in an app or release build.
+
+Run one route/mode slice through the queue using `run_cts_slice.py` with
+`--binary`, `--native`, `--plugin`, `--control`, `--cases`, `--archive`, `--output`,
+`--route MSL|IR`, and `--mode 0|1|2`. The 240-second slice budget requests a stop
+from the canonical queue supervisor; it never directly kills the GPU child.
+The current supervisor path is the documented canonical path on the audit host.
+Each result preserves official case statuses, effective-mode markers and actual
+library identities. A process exit of 1 from CTS may contain valid failing tests;
+it is not a success result. OnDemand alone is not a forced Relaxed experiment.
+
+`inspect_fma_air.cpp` uses pinned LLVM 17 to inspect an MSC-produced metallib
+without running Metal. It reports FMA calls and their flags; flags need comparison
+with source permissions and are not themselves a complete numerical oracle.

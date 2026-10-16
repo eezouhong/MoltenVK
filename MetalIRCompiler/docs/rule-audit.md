@@ -1,8 +1,9 @@
-# IR compilation rule audit: A0/A review checkpoint
+# IR compilation rule audit: A0 through C0 follow-up
 
-Date: 2026-10-15. This is a source audit and an oracle backlog, **not a Vulkan
-conformance certificate**. No GPU, replay, CTS, game, iOS build, or phone lifecycle
-operation was executed for this audit. No production compilation behavior changed.
+Date: 2026-10-15/16. This combines the original source audit with the approved
+B4, numerical-oracle and first CTS slice follow-up. It is **not a Vulkan
+conformance certificate**. GPU work used the shared queue; no phone lifecycle or
+release action occurred. The production repair is isolated in [PR #50](https://github.com/eezouhong/MoltenVK/pull/50).
 
 The rejected shared-SPIR-V workaround, MeloNX #417, is closed. Keep Ryujinx output
 unchanged. Further behavioral repairs belong in MetalIRCompiler and require a
@@ -126,7 +127,8 @@ format design; the shared TOCS holds the frontend codegen version.
 These are static-site/module counts, not draw frequency or performance hotness.
 Raw modules, manifests, source mappings, validation logs, and full statistics are
 private. Zero observations do not establish support for an unexercised instruction.
-B4 three-mode IR/SPIRV-Cross compilation has **not** been run at this checkpoint.
+B4 now has a complete three-mode IR/SPIRV-Cross result; see the follow-up below.
+MSL here means source generation, not Metal-library compilation.
 The plugin body calls Mesa/MSC and does not directly create an MTLDevice; that alone
 does not prove a closed-source MSC implementation never initializes Metal. Any
 future harness that loads MoltenVK's route selector creates a device and must queue.
@@ -417,7 +419,7 @@ those individual pattern records.
 | fmod/frem | quotient-floor/trunc-subtract | same | same | Test discontinuities with the operation's allowed approximation, not C `remainder`. | RISK R08 / O-REM |
 | ldexp | exponent construction + multiplies (`has_ldexp=0`) | same | same | Test supported exponent domain, scaling, overflow classification and declared controls. | RISK R08 / O-LDEXP |
 | fneg | late multiply by -1 | same | same | Preserve required sign/special-value behavior; account for denorm policy. | RISK R04 / O-SPECIAL |
-| Signed integer modulo | `nir_op_imod -> DXIL_BINOP_UREM` | same | same | Source `OpSMod` needs divisor-sign semantics. Defined negative, nonzero, non-power-of-two operands are the sensitive path. | **RISK R02 / O-SMOD** |
+| Signed integer modulo | `nir_op_imod -> DXIL_BINOP_UREM` | same | same | Source `OpSMod` needs divisor-sign semantics. Negative inputs require enabled Vulkan maintenance8. Nonzero, non-power-of-two operands are the sensitive path. | **RISK R02 / O-SMOD** |
 | Signed/unsigned divide and remainder | SDIV/UDIV/SREM/UREM | same | same | Constant zero-divisor idiv/udiv is replaced by zero; only defined inputs are conformance assertions. | RISK R09 / O-INTEGER |
 | Integer shift | count masked to width-1 | same | same | Check in-range counts; masking out-of-range counts is an implementation choice on undefined inputs. | MATCH (source scope), R09 boundary tests |
 | firstbit / bitfield | FirstbitHi/SHI/Lo, IBFE/UBFE + lowering | same | same | Verify zero/-1 sentinels, signedness and valid offset/count boundaries. | RISK R09 / O-INTEGER |
@@ -524,7 +526,7 @@ policy results must be separate. MSL-pass/IR-fail cases enter this backlog; comm
 failures remain recorded shared limitations under the user's plan. A GPU RED must
 be a defined-contract failure, not a malformed fixture or different legal result.
 
-## Checkpoint result and remaining work
+## Original A0/A checkpoint (superseded status)
 
 A0: all 11 fork diffs inspected; source unchanged; MSC4 artifact/target assessment
 completed; current KosmicKrisp reference inspected. A: 180 NIR option fields plus
@@ -532,12 +534,125 @@ mode/translation/instruction tables recorded, with 14 ranked risk families and
 explicit oracle assignments. The two clearest new source mismatch candidates are
 R01 and R02. **No new GPU-confirmed violation and no new behavior fix is claimed.**
 
-B1–B3: extraction/statistics tooling and the 976-module host sample completed.
-B4 static three-mode differential compilation, broader phone corpus, C0 CTS,
-C RED/GREEN repairs and D/E regression remain unexecuted. The earlier #48 results
-are reused only within their original scope (including its fresh-build replay gap).
+B1–B3 completed extraction and statistics on 976 host modules. The user then
+approved B4 first, R02/R01 RED next, R03/R05 before C0, followed by regression.
+The original no-GPU statement and pause at A0/A no longer describe the current
+execution state. The frozen source tables above remain the baseline audit.
 
-Per the user-approved plan, stop here and obtain confirmation before C0/C execution
-or any behavioral repair. Do not change default math policy, upgrade MSC, alter
-Ryujinx SPIR-V, or broaden the accepted contract to make a test pass. The host had
-about 13 GiB free at entry; the 20 GiB replay_plugin gate remains unsatisfied.
+## Approved follow-up results
+
+### B4 and its fixture correction
+
+The complete matrix has 976 modules × two routes × three requested modes = 5,856
+cases. **IR compiles 976/976 per mode.** SPIRV-Cross generates source for 975/976;
+one vertex module consumes a subgroup builtin unsupported by the selected
+ordinary-vertex MSL configuration. Its original pipeline/stage-capability context
+is unavailable, so this is not automatically a game-runtime defect.
+
+The first matrix used zero topology flags and reported two IR fragment failures
+with duplicate `texcoord0` inputs. Both consume `PointCoord`. The native compiler
+requires its point-raster variant for those inputs. After the helper selected
+`MVK_METAL_IR_RENDERING_POINTS` for active fragment PointCoord, both compiled in
+all modes; the full matrix was rerun. This was a fixture correction, **not a
+production fix**. An independent unused-PointCoord rendering control passed on
+both routes, rejecting the earlier unused-interface hypothesis. Original errors
+and corrected runs are retained privately.
+
+MSC's indirect MPS/Metal loads were caught by the provider guard. Every complete
+matrix therefore ran sequentially through the canonical queue. No dispatch or
+pipeline creation is part of B4. MSL math mode does not affect SPIRV-Cross source
+generation, and its identical source hashes across requested modes are expected.
+There are 900 IR modules with mode-dependent artifact hashes; a binary difference
+is not a numerical failure. No fallback was used.
+
+### R02: confirmed, repaired in patch 0011
+
+The **valid** RED fixture enables maintenance8 explicitly, excludes zero divisors
+and `INT_MIN/-1`, and loads all inputs dynamically. IR passes 6/20 modulo rows in
+each mode while MSL passes 20/20. Both routes pass the signed-remainder and input
+integrity controls. DXIL before MSC has `urem`. With 0011, all six route/mode cases
+pass 20/20 and DXIL uses signed remainder plus divisor-sign correction.
+
+Official CTS independently fails both the 32-bit and 64-bit maintenance8 SMod
+cases on the baseline, then passes with 0011; six positive/remainder controls
+remain passing. The corrected full B4 matrix has **zero changed statuses and zero
+changed artifact hashes** with 0011. The sample contains no `OpSMod`; this is a
+correctness repair, not a demonstrated fix for a current game screenshot.
+
+An earlier diagnostic omitted maintenance8 and is explicitly invalid as a Vulkan
+conformance RED. It is not substituted for the subsequent feature-enabled run.
+See [the repair and reproduction record](signed-modulo.md).
+
+### R01: RED confirmed; compile candidate withheld
+
+Explicitly enabled `shaderFmaFloat32` and `shaderFmaFloat16` reach MSC opcode 47
+and abort in all IR modes; MSL passes the dynamic rounding-sensitive fixtures.
+This confirms the advertised strong-FMA path is broken. The fp16 sentinels have
+normal results, so denormal flush behavior cannot explain their difference.
+
+A local, unpublished FMad-overload candidate removes the abort and passes 12
+route/mode/width combinations. It is **not accepted or included in PR #50**:
+AIR inspection still shows `reassoc nsz arcp afn` on the FMA calls, including Safe
+compilation. Source permissions and full strong semantics require further work;
+four finite sentinels are not a complete acceptance oracle. No global math mode,
+weak-FMA rule, MSC version or source SPIR-V workaround was changed to hide this.
+The crash RED fixtures and the read-only AIR inspector are retained as audit tools.
+
+### R03 and R05
+
+R03's mixed exact/non-exact fp32 vector fixture passes all six route/mode cases,
+with 16 lanes that distinguish fused from separate rounding. The existing scalar
+math-policy and FMA regression matrices also pass. This is tested fp32 coverage,
+not closure of every precision width or all NIR algebraic patterns.
+
+R05 tests FMin/FMax/FClamp separately from number-preferring NMin/NMax/NClamp,
+both operand orders, saturation, NaN, infinity and signed zero. Fast uses only
+inputs allowed by its permissions; Relaxed allows either zero sign where NSZ is
+present. Safe produces **the same ten signed-zero output mismatches on MSL and
+IR**; other tested values pass. These common limitations remain recorded under
+the approved scope rather than being relabelled as an IR-only bug.
+
+### C0: first bounded official CTS slice
+
+Source: `KhronosGroup/VK-GL-CTS` commit
+`bee83722547054754049485ae6ae8344496c02a6`, with its pinned dependencies. The
+126-case list includes 92 fp32 float-controls2 cases, 11 SPIR-V instruction cases,
+12 precision cases, eight arithmetic operators, one builtin-function case and
+two depth cases. This is a declared slice, not the full groups or certification.
+
+Each of six MSL/IR × Fast/Safe/Relaxed runs completed all 126 cases:
+
+| Result per run | Count |
+| --- | ---: |
+| Pass | 116 |
+| Fail | 8 |
+| NotSupported | 2 |
+| MSL-pass / IR-fail at a matching mode | 0 |
+
+All eight failures are the same F/N min/max ±0 cases on both routes, including
+both per-operation decorations and execution-mode controls. The two unsupported
+cases request unsupported float-control properties; they are not passes.
+[The checked-in result matrix](evidence/ir-audit-cts-slice.json) preserves exact
+case names and statuses, while QPA logs and machine identities stay private.
+
+A diagnostic-only ABI forwarding library selects the IR request mode. A queued
+MTLCompileOptions hook selects the MSL mode. Preflight verifies all six effective
+modes and dependency loading; this avoids calling OnDemand “Relaxed” when it
+actually selected Fast. The harness does not edit CTS SPIR-V or production
+policy, and the control library must never be shipped. These are forced-mode
+experiments; they do not certify the default policy or performance.
+
+### Regression and remaining gates
+
+0011 alone passes the existing FMA 18/18 and math-policy 48/48 matrices. Compiler
+sources are identical across the frozen baseline and the later #49 dormant-gate
+removal; the fix branch is rebased onto #49. GPU evidence retains its actual older
+native runtime identity instead of being relabelled as a newly built runtime.
+
+The local free-space floor is still below 20 GiB after this task's disposable
+Mesa and CTS builds were removed. The compiler bundles, CTS executable/data,
+source pins, source code and compact evidence remain. Planned fixed-frame
+replays are pending that floor; no fresh full-game or phone acceptance is claimed.
+Broader phone/multi-game corpora, other risk families and the unrun CTS groups
+remain outside this completed slice. The Mesa fork/pin, MSC 3.1.1 and production
+default math policy are unchanged.

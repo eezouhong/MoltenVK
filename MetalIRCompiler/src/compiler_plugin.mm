@@ -140,6 +140,10 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     conf.shader_model_max=SHADER_MODEL_6_6;conf.keep_io_vars=true;
     conf.disable_math_refactoring=request->mathMode!=MVK_METAL_IR_MATH_FAST;
     conf.relaxed_math_refactoring=request->mathMode==MVK_METAL_IR_MATH_RELAXED;
+    // Safe and Relaxed honor NaN/Inf like MSL. Legacy modules otherwise let
+    // Mesa assume neither occurs (including through FClamp) and fold
+    // real-number identities such as x - x -> 0.
+    conf.preserve_nan_inf=request->mathMode!=MVK_METAL_IR_MATH_FAST;
     if(request->executionModel==0&&(request->vertexTransformFlags&MVK_METAL_IR_FLIP_Y)) {
         conf.yz_flip.mode=DXIL_SPIRV_Y_FLIP_UNCONDITIONAL;
         conf.yz_flip.y_mask=UINT16_MAX;

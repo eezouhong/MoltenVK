@@ -61,6 +61,18 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_program(SPIRV_DIS spirv-dis REQUIRED)
 find_program(SPIRV_AS spirv-as REQUIRED)
 find_program(SPIRV_VAL spirv-val REQUIRED)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/signed_modulo.spv"
+    COMMAND "${SPIRV_AS}" --target-env spv1.3 "${CMAKE_CURRENT_SOURCE_DIR}/signed_modulo.spvasm"
+        -o "${CMAKE_CURRENT_BINARY_DIR}/signed_modulo.spv"
+    COMMAND "${SPIRV_VAL}" --target-env vulkan1.2 "${CMAKE_CURRENT_BINARY_DIR}/signed_modulo.spv"
+    DEPENDS signed_modulo.spvasm VERBATIM)
+add_custom_target(signed_modulo_shader DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/signed_modulo.spv")
+add_executable(signed_modulo_probe signed_modulo_probe.cpp)
+target_compile_features(signed_modulo_probe PRIVATE cxx_std_17)
+target_include_directories(signed_modulo_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(signed_modulo_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(signed_modulo_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(signed_modulo_probe signed_modulo_shader)
 set(MATH_LEGACY "${CMAKE_CURRENT_BINARY_DIR}/math-legacy.spv")
 set(MATH_VARIANTS)
 foreach(KIND safe mixed-precise relaxed fast relaxed-transform mixed-no-contraction fast-transform)

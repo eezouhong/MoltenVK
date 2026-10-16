@@ -1,4 +1,7 @@
 // Read-only inspection of real MSC AIR; never creates a Metal device.
+// Build against any LLVM >= 17 (MSC AIR bitcode is forward-readable):
+//   c++ -std=c++17 $(llvm-config --cxxflags) -fexceptions inspect_fma_air.cpp \
+//     $(llvm-config --ldflags --libs bitreader core support) $(llvm-config --system-libs)
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -23,7 +26,8 @@ int main(int argc,char**argv){try{
  auto parsed=llvm::parseBitcodeFile(mem->getMemBufferRef(),ctx);if(!parsed)throw std::runtime_error(llvm::toString(parsed.takeError()));
  auto& module=**parsed;unsigned f16=0,f32=0,flagged=0;
  for(auto& fn:module)for(auto& block:fn)for(auto& inst:block)if(auto* call=llvm::dyn_cast<llvm::CallBase>(&inst))if(auto* callee=call->getCalledFunction()){
-  auto name=callee->getName();if(name=="air.fma.f16"||name=="air.fma.f32"){f16+=name=="air.fma.f16";f32+=name=="air.fma.f32";flagged+=call->getFastMathFlags().any();call->print(llvm::errs());llvm::errs()<<"\n";}
+  // Classify by element type so vector overloads are counted with their scalars.
+  if(callee->getName().starts_with("air.fma.")){bool h=call->getType()->getScalarType()->isHalfTy();f16+=h;f32+=!h;flagged+=call->getFastMathFlags().any();call->print(llvm::errs());llvm::errs()<<"\n";}
  }
  printf("{\"airFma16Calls\":%u,\"airFma32Calls\":%u,\"flaggedFmaCalls\":%u}\n",f16,f32,flagged);
  // Flags are diagnostic output, not an independent semantic verdict. Compare

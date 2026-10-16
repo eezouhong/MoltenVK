@@ -1,0 +1,185 @@
+; Half-precision strong_fma_rules: float inputs are converted exactly to half,
+; every OpFmaKHR runs on half, and results are widened exactly for readback.
+OpCapability Shader
+OpCapability FloatControls2
+OpCapability FMAKHR
+OpCapability Float16
+OpExtension "SPV_KHR_float_controls2"
+OpExtension "SPV_KHR_fma"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpExecutionModeId %main FPFastMathDefault %float %u0
+OpExecutionModeId %main FPFastMathDefault %half %u0
+OpDecorate %values ArrayStride 4
+OpMemberDecorate %Storage 0 Offset 0
+OpDecorate %Storage Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%half = OpTypeFloat 16
+%v4half = OpTypeVector %half 4
+%u0 = OpConstant %uint 0
+%u1 = OpConstant %uint 1
+%u2 = OpConstant %uint 2
+%u3 = OpConstant %uint 3
+%u4 = OpConstant %uint 4
+%u5 = OpConstant %uint 5
+%u6 = OpConstant %uint 6
+%u7 = OpConstant %uint 7
+%u8 = OpConstant %uint 8
+%u9 = OpConstant %uint 9
+%u10 = OpConstant %uint 10
+%u11 = OpConstant %uint 11
+%u12 = OpConstant %uint 12
+%u13 = OpConstant %uint 13
+%u14 = OpConstant %uint 14
+%u15 = OpConstant %uint 15
+%u16 = OpConstant %uint 16
+%u17 = OpConstant %uint 17
+%u18 = OpConstant %uint 18
+%u19 = OpConstant %uint 19
+%u32 = OpConstant %uint 32
+%u33 = OpConstant %uint 33
+%u34 = OpConstant %uint 34
+%u35 = OpConstant %uint 35
+%u36 = OpConstant %uint 36
+%u37 = OpConstant %uint 37
+%u38 = OpConstant %uint 38
+%u39 = OpConstant %uint 39
+%u40 = OpConstant %uint 40
+%u41 = OpConstant %uint 41
+%u42 = OpConstant %uint 42
+%u43 = OpConstant %uint 43
+%zero = OpConstant %half 0
+%one = OpConstant %half 1
+%ka = OpConstant %half 0x1.004p+6
+%kb = OpConstant %half 0x1.004p+0
+%kc = OpConstant %half -0x1.008p+6
+%values = OpTypeRuntimeArray %float
+%Storage = OpTypeStruct %values
+%pStorage = OpTypePointer StorageBuffer %Storage
+%pFloat = OpTypePointer StorageBuffer %float
+%storage = OpVariable %pStorage StorageBuffer
+%main = OpFunction %void None %function
+%entry = OpLabel
+%p0 = OpAccessChain %pFloat %storage %u0 %u0
+%p1 = OpAccessChain %pFloat %storage %u0 %u1
+%p2 = OpAccessChain %pFloat %storage %u0 %u2
+%p3 = OpAccessChain %pFloat %storage %u0 %u3
+%p4 = OpAccessChain %pFloat %storage %u0 %u4
+%p5 = OpAccessChain %pFloat %storage %u0 %u5
+%p6 = OpAccessChain %pFloat %storage %u0 %u6
+%p7 = OpAccessChain %pFloat %storage %u0 %u7
+%p8 = OpAccessChain %pFloat %storage %u0 %u8
+%p9 = OpAccessChain %pFloat %storage %u0 %u9
+%p10 = OpAccessChain %pFloat %storage %u0 %u10
+%p11 = OpAccessChain %pFloat %storage %u0 %u11
+%p12 = OpAccessChain %pFloat %storage %u0 %u12
+%p13 = OpAccessChain %pFloat %storage %u0 %u13
+%p14 = OpAccessChain %pFloat %storage %u0 %u14
+%p15 = OpAccessChain %pFloat %storage %u0 %u15
+%p16 = OpAccessChain %pFloat %storage %u0 %u16
+%p17 = OpAccessChain %pFloat %storage %u0 %u17
+%p18 = OpAccessChain %pFloat %storage %u0 %u18
+%p19 = OpAccessChain %pFloat %storage %u0 %u19
+%x0 = OpLoad %float %p0
+%x1 = OpLoad %float %p1
+%x2 = OpLoad %float %p2
+%x3 = OpLoad %float %p3
+%x4 = OpLoad %float %p4
+%x5 = OpLoad %float %p5
+%x6 = OpLoad %float %p6
+%x7 = OpLoad %float %p7
+%x8 = OpLoad %float %p8
+%x9 = OpLoad %float %p9
+%x10 = OpLoad %float %p10
+%x11 = OpLoad %float %p11
+%x12 = OpLoad %float %p12
+%x13 = OpLoad %float %p13
+%x14 = OpLoad %float %p14
+%x15 = OpLoad %float %p15
+%x16 = OpLoad %float %p16
+%x17 = OpLoad %float %p17
+%x18 = OpLoad %float %p18
+%x19 = OpLoad %float %p19
+%h0 = OpFConvert %half %x0
+%h1 = OpFConvert %half %x1
+%h2 = OpFConvert %half %x2
+%h3 = OpFConvert %half %x3
+%h4 = OpFConvert %half %x4
+%h5 = OpFConvert %half %x5
+%h6 = OpFConvert %half %x6
+%h7 = OpFConvert %half %x7
+%h8 = OpFConvert %half %x8
+%h9 = OpFConvert %half %x9
+%h10 = OpFConvert %half %x10
+%h11 = OpFConvert %half %x11
+%h12 = OpFConvert %half %x12
+%h13 = OpFConvert %half %x13
+%h14 = OpFConvert %half %x14
+%h15 = OpFConvert %half %x15
+%h16 = OpFConvert %half %x16
+%h17 = OpFConvert %half %x17
+%h18 = OpFConvert %half %x18
+%h19 = OpFConvert %half %x19
+%r0 = OpFmaKHR %half %h0 %h1 %h2
+%r1 = OpFmaKHR %half %h3 %h4 %zero
+%r2 = OpFmaKHR %half %h3 %one %zero
+%r3 = OpFmaKHR %half %h3 %h4 %h7
+%r4 = OpFmaKHR %half %h0 %kb %kc
+%r5 = OpFmaKHR %half %ka %kb %kc
+%n0 = OpFNegate %half %h0
+%n2 = OpFNegate %half %h2
+%r6 = OpFmaKHR %half %n0 %h1 %n2
+%t7 = OpFmaKHR %half %h0 %h1 %h2
+%r7 = OpFmaKHR %half %t7 %h5 %h6
+%va = OpCompositeConstruct %v4half %h8 %h9 %h10 %h11
+%vb = OpCompositeConstruct %v4half %h12 %h13 %h14 %h15
+%vc = OpCompositeConstruct %v4half %h16 %h17 %h18 %h19
+%vr = OpFmaKHR %v4half %va %vb %vc
+%r8 = OpCompositeExtract %half %vr 0
+%r9 = OpCompositeExtract %half %vr 1
+%r10 = OpCompositeExtract %half %vr 2
+%r11 = OpCompositeExtract %half %vr 3
+%w0 = OpFConvert %float %r0
+%w1 = OpFConvert %float %r1
+%w2 = OpFConvert %float %r2
+%w3 = OpFConvert %float %r3
+%w4 = OpFConvert %float %r4
+%w5 = OpFConvert %float %r5
+%w6 = OpFConvert %float %r6
+%w7 = OpFConvert %float %r7
+%w8 = OpFConvert %float %r8
+%w9 = OpFConvert %float %r9
+%w10 = OpFConvert %float %r10
+%w11 = OpFConvert %float %r11
+%o0 = OpAccessChain %pFloat %storage %u0 %u32
+%o1 = OpAccessChain %pFloat %storage %u0 %u33
+%o2 = OpAccessChain %pFloat %storage %u0 %u34
+%o3 = OpAccessChain %pFloat %storage %u0 %u35
+%o4 = OpAccessChain %pFloat %storage %u0 %u36
+%o5 = OpAccessChain %pFloat %storage %u0 %u37
+%o6 = OpAccessChain %pFloat %storage %u0 %u38
+%o7 = OpAccessChain %pFloat %storage %u0 %u39
+%o8 = OpAccessChain %pFloat %storage %u0 %u40
+%o9 = OpAccessChain %pFloat %storage %u0 %u41
+%o10 = OpAccessChain %pFloat %storage %u0 %u42
+%o11 = OpAccessChain %pFloat %storage %u0 %u43
+OpStore %o0 %w0
+OpStore %o1 %w1
+OpStore %o2 %w2
+OpStore %o3 %w3
+OpStore %o4 %w4
+OpStore %o5 %w5
+OpStore %o6 %w6
+OpStore %o7 %w7
+OpStore %o8 %w8
+OpStore %o9 %w9
+OpStore %o10 %w10
+OpStore %o11 %w11
+OpReturn
+OpFunctionEnd

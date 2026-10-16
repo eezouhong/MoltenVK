@@ -1,0 +1,18 @@
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -3123,8 +3123,13 @@
+       assert(alu->def.bit_size == 32);
+       return emit_tertiary_intin(ctx, alu, DXIL_INTR_FMAD, src[0], src[1], src[2]);
+    case nir_op_ffma:
+-      if (alu->def.bit_size == 64)
+-         ctx->mod.feats.dx11_1_double_extensions = 1;
++      /* DXIL Fma (47) is double-only. MSC 3.1.1 rejects its half/float
++       * overloads. For those widths MSC lowers FMad (46) to an AIR fma
++       * intrinsic; retain that single-rounding operation in every mode.
++       */
++      if (alu->def.bit_size != 64)
++         return emit_tertiary_intin(ctx, alu, DXIL_INTR_FMAD, src[0], src[1], src[2]);
++      ctx->mod.feats.dx11_1_double_extensions = 1;
+       return emit_tertiary_intin(ctx, alu, DXIL_INTR_FMA, src[0], src[1], src[2]);
+ 
+    case nir_op_ibfe: return emit_tertiary_intin(ctx, alu, DXIL_INTR_IBFE, src[2], src[1], src[0]);

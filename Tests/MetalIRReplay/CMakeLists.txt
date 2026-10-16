@@ -96,6 +96,23 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv"
     DEPENDS strong_fma16.spvasm VERBATIM)
 add_custom_target(strong_fma16_shader DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv")
 add_dependencies(strong_fma_probe strong_fma16_shader)
+set(STRONG_FMA_RULES_SHADERS)
+foreach(NAME strong_fma_rules strong_fma_rules16)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        COMMAND "${SPIRV_AS}" --target-env spv1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${NAME}.spvasm"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        COMMAND "${SPIRV_VAL}" --target-env vulkan1.2 "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        DEPENDS "${NAME}.spvasm" VERBATIM)
+    list(APPEND STRONG_FMA_RULES_SHADERS "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv")
+endforeach()
+add_custom_target(strong_fma_rules_shader DEPENDS ${STRONG_FMA_RULES_SHADERS})
+add_executable(strong_fma_rules_probe strong_fma_rules_probe.cpp)
+target_compile_features(strong_fma_rules_probe PRIVATE cxx_std_17)
+target_compile_options(strong_fma_rules_probe PRIVATE -ffp-contract=off)
+target_include_directories(strong_fma_rules_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(strong_fma_rules_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(strong_fma_rules_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(strong_fma_rules_probe strong_fma_rules_shader)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/minmax-safe.spv"
                          "${CMAKE_CURRENT_BINARY_DIR}/minmax-relaxed.spv"
                          "${CMAKE_CURRENT_BINARY_DIR}/minmax-fast.spv"

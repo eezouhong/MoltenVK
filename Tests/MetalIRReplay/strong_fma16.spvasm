@@ -1,0 +1,55 @@
+; OpFmaKHR has the strong Vulkan FMA contract. No weak GLSL Fma substitution.
+OpCapability Shader
+OpCapability Float16
+OpCapability FloatControls2
+OpCapability FMAKHR
+OpExtension "SPV_KHR_float_controls2"
+OpExtension "SPV_KHR_fma"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gid
+OpExecutionMode %main LocalSize 1 1 1
+OpExecutionModeId %main FPFastMathDefault %float %flags
+OpDecorate %gid BuiltIn GlobalInvocationId
+OpDecorate %rows ArrayStride 16
+OpMemberDecorate %Storage 0 Offset 0
+OpDecorate %Storage Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%half = OpTypeFloat 16
+%flags = OpConstant %uint 196620
+%u0 = OpConstant %uint 0
+%u1 = OpConstant %uint 1
+%u2 = OpConstant %uint 2
+%u3 = OpConstant %uint 3
+%v3uint = OpTypeVector %uint 3
+%v4float = OpTypeVector %float 4
+%rows = OpTypeRuntimeArray %v4float
+%Storage = OpTypeStruct %rows
+%pInput = OpTypePointer Input %v3uint
+%pStorage = OpTypePointer StorageBuffer %Storage
+%pFloat = OpTypePointer StorageBuffer %float
+%gid = OpVariable %pInput Input
+%storage = OpVariable %pStorage StorageBuffer
+%main = OpFunction %void None %function
+%entry = OpLabel
+%xyz = OpLoad %v3uint %gid
+%index = OpCompositeExtract %uint %xyz 0
+%pa = OpAccessChain %pFloat %storage %u0 %index %u0
+%pb = OpAccessChain %pFloat %storage %u0 %index %u1
+%pc = OpAccessChain %pFloat %storage %u0 %index %u2
+%a = OpLoad %float %pa
+%b = OpLoad %float %pb
+%c = OpLoad %float %pc
+%ha = OpFConvert %half %a
+%hb = OpFConvert %half %b
+%hc = OpFConvert %half %c
+%hresult = OpFmaKHR %half %ha %hb %hc
+%result = OpFConvert %float %hresult
+%output = OpAccessChain %pFloat %storage %u0 %index %u3
+OpStore %output %result
+OpReturn
+OpFunctionEnd

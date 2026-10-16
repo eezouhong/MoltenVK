@@ -1,0 +1,61 @@
+; Mixed exact/non-exact vector arithmetic without a module FPFastMathDefault.
+OpCapability Shader
+OpCapability FloatControls2
+OpExtension "SPV_KHR_float_controls2"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gid
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %gid BuiltIn GlobalInvocationId
+OpDecorate %rows ArrayStride 80
+OpMemberDecorate %Row 0 Offset 0
+OpMemberDecorate %Row 1 Offset 16
+OpMemberDecorate %Row 2 Offset 32
+OpMemberDecorate %Row 3 Offset 48
+OpMemberDecorate %Row 4 Offset 64
+OpMemberDecorate %Storage 0 Offset 0
+OpDecorate %Storage Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+OpDecorate %prod NoContraction
+OpDecorate %sum NoContraction
+OpDecorate %looseprod FPFastMathMode NSZ|AllowRecip|AllowContract|AllowReassoc|AllowTransform
+OpDecorate %loosesum FPFastMathMode NSZ|AllowRecip|AllowContract|AllowReassoc|AllowTransform
+%void = OpTypeVoid
+%function = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%u0 = OpConstant %uint 0
+%u1 = OpConstant %uint 1
+%u2 = OpConstant %uint 2
+%u3 = OpConstant %uint 3
+%u4 = OpConstant %uint 4
+%v3uint = OpTypeVector %uint 3
+%v4float = OpTypeVector %float 4
+%Row = OpTypeStruct %v4float %v4float %v4float %v4float %v4float
+%rows = OpTypeRuntimeArray %Row
+%Storage = OpTypeStruct %rows
+%pInput = OpTypePointer Input %v3uint
+%pStorage = OpTypePointer StorageBuffer %Storage
+%pVec = OpTypePointer StorageBuffer %v4float
+%gid = OpVariable %pInput Input
+%storage = OpVariable %pStorage StorageBuffer
+%main = OpFunction %void None %function
+%entry = OpLabel
+%xyz = OpLoad %v3uint %gid
+%index = OpCompositeExtract %uint %xyz 0
+%pa = OpAccessChain %pVec %storage %u0 %index %u0
+%pb = OpAccessChain %pVec %storage %u0 %index %u1
+%pc = OpAccessChain %pVec %storage %u0 %index %u2
+%a = OpLoad %v4float %pa
+%b = OpLoad %v4float %pb
+%c = OpLoad %v4float %pc
+%prod = OpFMul %v4float %a %b
+%sum = OpFAdd %v4float %prod %c
+%looseprod = OpFMul %v4float %a %c
+%loosesum = OpFAdd %v4float %looseprod %b
+%exactout = OpAccessChain %pVec %storage %u0 %index %u3
+%looseout = OpAccessChain %pVec %storage %u0 %index %u4
+OpStore %exactout %sum
+OpStore %looseout %loosesum
+OpReturn
+OpFunctionEnd

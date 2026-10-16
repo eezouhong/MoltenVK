@@ -73,6 +73,43 @@ target_include_directories(signed_modulo_probe PRIVATE "${VULKAN_HEADERS}")
 target_link_libraries(signed_modulo_probe PRIVATE "${MOLTENVK_LIBRARY}")
 set_target_properties(signed_modulo_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
 add_dependencies(signed_modulo_probe signed_modulo_shader)
+
+foreach(NAME strong_fma nocontraction_vector)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        COMMAND "${SPIRV_AS}" --target-env spv1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${NAME}.spvasm"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        COMMAND "${SPIRV_VAL}" --target-env vulkan1.2 "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv"
+        DEPENDS "${NAME}.spvasm" VERBATIM)
+    add_custom_target(${NAME}_shader DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.spv")
+    add_executable(${NAME}_probe "${NAME}_probe.cpp")
+    target_compile_features(${NAME}_probe PRIVATE cxx_std_17)
+    target_compile_options(${NAME}_probe PRIVATE -ffp-contract=off)
+    target_include_directories(${NAME}_probe PRIVATE "${VULKAN_HEADERS}")
+    target_link_libraries(${NAME}_probe PRIVATE "${MOLTENVK_LIBRARY}")
+    set_target_properties(${NAME}_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+    add_dependencies(${NAME}_probe ${NAME}_shader)
+endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv"
+    COMMAND "${SPIRV_AS}" --target-env spv1.3 "${CMAKE_CURRENT_SOURCE_DIR}/strong_fma16.spvasm"
+        -o "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv"
+    COMMAND "${SPIRV_VAL}" --target-env vulkan1.2 "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv"
+    DEPENDS strong_fma16.spvasm VERBATIM)
+add_custom_target(strong_fma16_shader DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/strong_fma16.spv")
+add_dependencies(strong_fma_probe strong_fma16_shader)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/minmax-safe.spv"
+                         "${CMAKE_CURRENT_BINARY_DIR}/minmax-relaxed.spv"
+                         "${CMAKE_CURRENT_BINARY_DIR}/minmax-fast.spv"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/prepare_minmax.py" --output "${CMAKE_CURRENT_BINARY_DIR}"
+    DEPENDS prepare_minmax.py VERBATIM)
+add_custom_target(minmax_shader DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/minmax-safe.spv"
+    "${CMAKE_CURRENT_BINARY_DIR}/minmax-relaxed.spv" "${CMAKE_CURRENT_BINARY_DIR}/minmax-fast.spv")
+add_executable(minmax_probe minmax_probe.cpp)
+target_compile_features(minmax_probe PRIVATE cxx_std_17)
+target_compile_options(minmax_probe PRIVATE -ffp-contract=off)
+target_include_directories(minmax_probe PRIVATE "${VULKAN_HEADERS}")
+target_link_libraries(minmax_probe PRIVATE "${MOLTENVK_LIBRARY}")
+set_target_properties(minmax_probe PROPERTIES BUILD_RPATH "${MOLTENVK_DIRECTORY}")
+add_dependencies(minmax_probe minmax_shader)
 set(MATH_LEGACY "${CMAKE_CURRENT_BINARY_DIR}/math-legacy.spv")
 set(MATH_VARIANTS)
 foreach(KIND safe mixed-precise relaxed fast relaxed-transform mixed-no-contraction fast-transform)

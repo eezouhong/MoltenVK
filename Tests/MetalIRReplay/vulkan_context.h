@@ -46,7 +46,8 @@ public:
 
     explicit Context(bool emptySets = false, bool negativeDepthMode = false, bool largePoints = false,
                      bool floatControls2 = false, bool fragmentStorageMode = false, bool layeredOutputs = false,
-                     bool portableLoader = false, bool signedDivision = false)
+                     bool portableLoader = false, bool signedDivision = false,
+                     bool strongFma = false, bool halfFma = false)
         : negativeDepth(negativeDepthMode), fragmentStorage(fragmentStorageMode) {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion = floatControls2 || layeredOutputs ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
         VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
@@ -86,11 +87,24 @@ public:
             if(!signedMath.maintenance8)throw std::runtime_error("maintenance8 is required for negative SMod/SRem inputs");
             extensions.push_back(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
         }
+        VkPhysicalDeviceShaderFmaFeaturesKHR fma{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FMA_FEATURES_KHR};
+        VkPhysicalDeviceShaderFloat16Int8Features half{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+        if(strongFma) {
+            VkPhysicalDeviceFeatures2 available{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};available.pNext=&fma;fma.pNext=&half;
+            vkGetPhysicalDeviceFeatures2(physical,&available);
+            if(!fma.shaderFmaFloat32)throw std::runtime_error("shaderFmaFloat32 not supported");
+            if(halfFma&&(!fma.shaderFmaFloat16||!half.shaderFloat16))throw std::runtime_error("float16 FMA not supported");
+            fma.shaderFmaFloat16=halfFma;fma.shaderFmaFloat64=VK_FALSE;fma.pNext=nullptr;
+            half.shaderInt8=VK_FALSE;half.shaderFloat16=halfFma;
+            extensions.push_back(VK_KHR_SHADER_FMA_EXTENSION_NAME);
+        }
         VkPhysicalDeviceDepthClipControlFeaturesEXT depth{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT}; depth.depthClipControl=VK_TRUE;
         VkPhysicalDeviceShaderFloatControls2FeaturesKHR math{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR}; math.shaderFloatControls2=VK_TRUE;
         if(floatControls2) { draw.pNext=&math; if(negativeDepth) math.pNext=&depth; }
         else if(negativeDepth) draw.pNext=&depth;
         if(signedDivision) { signedMath.pNext=draw.pNext;draw.pNext=&signedMath; }
+        if(strongFma) { fma.pNext=draw.pNext;draw.pNext=&fma; }
+        if(halfFma) { half.pNext=draw.pNext;draw.pNext=&half; }
         VkPhysicalDeviceVulkan12Features layered{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         if(layeredOutputs) { layered.shaderOutputLayer=VK_TRUE;layered.shaderOutputViewportIndex=VK_TRUE;layered.pNext=draw.pNext;draw.pNext=&layered; }
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&draw; dc.pEnabledFeatures=&features;

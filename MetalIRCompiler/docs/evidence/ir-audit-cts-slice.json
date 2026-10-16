@@ -1,0 +1,1406 @@
+{
+  "schema": 1,
+  "ctsCommit": "bee83722547054754049485ae6ae8344496c02a6",
+  "candidate": "Mesa patches 0001-0011; MSC 3.1.1",
+  "modes": {
+    "0": "Fast",
+    "1": "Safe",
+    "2": "Relaxed"
+  },
+  "forcedDiagnosticModes": true,
+  "modeAndNativeIdentityVerified": true,
+  "perRunCounts": {
+    "Pass": 116,
+    "Fail": 8,
+    "NotSupported": 2
+  },
+  "caseCount": 126,
+  "cases": [
+    {
+      "case": "dEQP-VK.glsl.builtin.function.common.clamp.clamp_const_array_dynamic_index",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.clamp.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.clamp.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.fma.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.fma.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.inversesqrt.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.inversesqrt.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.max.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.max.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.min.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.min.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.sqrt.highp.scalar",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.builtin.precision.sqrt.highp.vec4",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.add.highp_float_fragment",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.add.highp_float_vertex",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.div.highp_float_fragment",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.div.highp_float_vertex",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.mul.highp_float_fragment",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.mul.highp_float_vertex",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.sub.highp_float_fragment",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.glsl.operator.binary_operator.sub.highp_float_vertex",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.pipeline.monolithic.depth.depth_clip_control.d16_unorm_less",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.pipeline.monolithic.depth.depth_clip_control.d32_sfloat_less",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.expression_rearrangement.ftz_mul_add_no_contraction",
+      "statusByRun": {
+        "IR-0": "NotSupported",
+        "IR-1": "NotSupported",
+        "IR-2": "NotSupported",
+        "MSL-0": "NotSupported",
+        "MSL-1": "NotSupported",
+        "MSL-2": "NotSupported"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.expression_rearrangement.preserve_add_no_contraction",
+      "statusByRun": {
+        "IR-0": "NotSupported",
+        "IR-1": "NotSupported",
+        "IR-2": "NotSupported",
+        "MSL-0": "NotSupported",
+        "MSL-1": "NotSupported",
+        "MSL-2": "NotSupported"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_minusOne_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_minusOne_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_inf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_inf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_one_arg2_inf_res_inf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_one_arg2_inf_res_inf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_one_arg2_minusInf_res_minusInf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotInf_arg1_one_arg2_minusInf_res_minusInf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotNaN_arg1_one_arg2_nan_res_oneORnan_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.clamp_testedWithout_NotNaN_arg1_one_arg2_nan_res_oneORnan_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_AllowContract_arg1_zeroPtOne_arg2_twentyFivePtEight_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_AllowContract_arg1_zeroPtOne_arg2_twentyFivePtEight_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusOne_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusOne_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NotNaN_arg1_nan_arg2_one_res_nan_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.fma_testedWithout_NotNaN_arg1_nan_arg2_one_res_nan_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_minusZero_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_minusZero_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotInf_arg1_minusInf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotInf_arg1_minusInf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.max_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotInf_arg1_inf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotInf_arg1_inf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotInf_arg1_minusInf_arg2_one_res_minusInf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotInf_arg1_minusInf_arg2_one_res_minusInf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.min_testedWithout_NotNaN_arg1_nan_arg2_one_res_oneORnan_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_minusOne_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_minusOne_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_inf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_inf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_one_arg2_inf_res_inf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_one_arg2_inf_res_inf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_one_arg2_minusInf_res_minusInf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotInf_arg1_one_arg2_minusInf_res_minusInf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotNaN_arg1_one_arg2_nan_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nclamp_testedWithout_NotNaN_arg1_one_arg2_nan_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_minusZero_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_minusZero_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotInf_arg1_inf_arg2_one_res_inf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotInf_arg1_minusInf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotInf_arg1_minusInf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmax_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_minusZero_arg2_zero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Fail",
+        "IR-1": "Fail",
+        "IR-2": "Fail",
+        "MSL-0": "Fail",
+        "MSL-1": "Fail",
+        "MSL-2": "Fail"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NSZ_arg1_zero_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotInf_arg1_inf_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotInf_arg1_inf_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotInf_arg1_minusInf_arg2_one_res_minusInf_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotInf_arg1_minusInf_arg2_one_res_minusInf_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.nmin_testedWithout_NotNaN_arg1_nan_arg2_one_res_one_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.sz_fma_testedWithout_NSZ_OR_AllowContract_arg1_minusZero_arg2_minusZero_res_minusZero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.sz_fma_testedWithout_NSZ_OR_AllowContract_arg1_minusZero_arg2_minusZero_res_minusZero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.sz_fma_testedWithout_NSZ_OR_AllowContract_arg1_minusZero_arg2_zero_res_zero_deco",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.input_args.sz_fma_testedWithout_NSZ_OR_AllowContract_arg1_minusZero_arg2_zero_res_zero_exec",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsmod.all",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsmod.positive",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsmod64.all",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsmod64.positive",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsrem.all",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsrem.positive",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsrem64.all",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.maintenance8.opsrem64.positive",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    },
+    {
+      "case": "dEQP-VK.spirv_assembly.instruction.compute.opnop.all",
+      "statusByRun": {
+        "IR-0": "Pass",
+        "IR-1": "Pass",
+        "IR-2": "Pass",
+        "MSL-0": "Pass",
+        "MSL-1": "Pass",
+        "MSL-2": "Pass"
+      }
+    }
+  ]
+}

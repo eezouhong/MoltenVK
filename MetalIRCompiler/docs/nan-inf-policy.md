@@ -1,4 +1,4 @@
-# NaN and Inf in IR Safe and Relaxed
+# NaN and Inf in IR
 
 A Vulkan shader without `SignedZeroInfNanPreserve` or `FPFastMathDefault` lets
 the implementation assume no NaN or Inf. Mesa's `spirv_to_nir` takes that
@@ -23,8 +23,7 @@ is set, vtn marks every float instruction `preserve_nan | preserve_inf |
 no_transform`, including `FClamp`. `no_transform` turns off the inexact
 real-number rewrites. Contraction and reassociation keep their own bits.
 
-`compiler_plugin.mm` sets the option for Safe and Relaxed, and leaves it off in
-Fast. Relaxed still gets reassociation and contraction from the AIR adapter,
+`compiler_plugin.mm` set the option for Safe and Relaxed only. Relaxed still gets reassociation and contraction from the AIR adapter,
 which marks binops without `nnan` or `ninf`, the same way as MSL Relaxed.
 
 Patch 0006 used to select those Relaxed markers with `nir_alu_instr_is_exact`,
@@ -34,10 +33,31 @@ Relaxed branch of `emit_binop` check only `no_contract` and `no_reassoc`, so
 `NoContraction` ops stay exact and all other binops keep `nsz | arcp`. The Fast
 branch still uses `nir_alu_instr_is_exact`.
 
+## Fast (patch 0014)
+
+Under the default on-demand policy every legacy module resolves to Fast, so
+Fast is what games run. MSL Fast does not keep every NaN: Metal fast math folds
+`Inf - Inf` to 0 and `NaN == NaN` to true. It does keep source order, so
+`1 - clamp(NaN, 0, 1)` is still 1. IR Fast swapped the clamp, and the same F1
+difference and five more v2b differences stayed in Fast after patch 0013.
+
+The static IR Fast AIR has no `nnan` or `ninf` flags, so these differences come
+from NIR rules tagged `nnan`/`ninf`, not from MSC.
+
+Patch 0014 splits the option in two:
+
+- `preserve_nan_inf` sets `preserve_nan | preserve_inf` on every float op,
+  `FClamp` included. That disables the rules that assume no NaN or Inf.
+- `skip_real_number_rewrites` adds `no_transform`. That disables the inexact
+  real-number rules such as `x - x -> 0`.
+
+`compiler_plugin.mm` sets `preserve_nan_inf` in every mode and
+`skip_real_number_rewrites` in Safe and Relaxed. Fast keeps the real-number
+rules, as MSL fast math does, and without `no_transform` its binops keep
+`DXIL_UNSAFE_ALGEBRA`. Safe and Relaxed compile exactly as with patch 0013.
+
 The math-mode policy, the frontend SPIR-V generator and the Mesa/MSC pins are
-unchanged. Fast still assumes no NaN or Inf on both routes. Under the default
-on-demand policy every legacy module resolves to Fast, so the production
-default does not change.
+unchanged.
 
 ## Oracle
 
@@ -65,7 +85,8 @@ The runner covers MSL and IR in Fast (on-demand) and Safe
 and the observed IR math mode, and it records identities before and after
 execution.
 
-Safe must preserve all five rows. Fast is reported but not required.
+Safe must preserve all five rows. Fast need not preserve every row, but IR Fast
+must preserve each row that MSL Fast preserves.
 Relaxed shares the Safe code path in the plugin, but this legacy module cannot
 select it under the on-demand policy, so the oracle does not run it.
 
@@ -111,6 +132,32 @@ Other checks with the GREEN compiler:
   NaN outputs differed from MSL (`case-0554`, `0742`, `1175`, `2120`, `2170`,
   input 0) now match MSL element by element in Safe and Relaxed, with NaN
   compared as NaN. They still differ in Fast.
+
+### Fast evidence
+
+The baseline is patch 0013 (merge `a5d09c62`).
+
+| Run | MSL Fast | IR Fast | Rows MSL keeps but IR loses |
+| --- | --- | --- | --- |
+| RED (0013) | 3/5 | 3/5 | clamp |
+| GREEN (0014) | 3/5 | 4/5 | none |
+
+- Both routes still turn `Inf - Inf` into a non-NaN in Fast. IR Fast keeps
+  `NaN == NaN` false before and after; MSL Fast makes it true.
+- Full static matrix: only IR Fast changed, in 2,287 modules, with no
+  classification change. On those artifacts bytes grow 0.008% and AIR
+  instructions 0.018% (5,089,388 to 5,090,313); 234 modules grow and none
+  shrink. Binops with `contract` stay at about 11,980.
+- Official CTS slice in IR Fast, Safe and Relaxed: case-for-case identical to
+  the C0 baseline run.
+- `minmax`, `nocontraction_vector` and the strong FMA probes give the same
+  results as with patch 0013.
+- v2b execution: F1 and the five other NaN subjects now match MSL element by
+  element in Fast too.
+- v2b Fast sweep of every fixture whose IR Fast artifact changed (1,767 cases
+  from 589 modules): every status matches the R02 sweep except F1, which moves
+  from DIFF to an equivalent nonfinite result. All 28 nonfinite results that
+  are not bit-identical match MSL element by element.
 
 This is host compiler and host GPU evidence, not phone acceptance or a Vulkan
 conformance claim.

@@ -55,6 +55,17 @@ def main():
                                 (expected==0 or oracle[0]['preserved']==oracle[0]['total'])))
             results.append(row);print(json.dumps(row),flush=True)
             (out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
+    # Fast need not preserve every row, but IR Fast must preserve each row
+    # that MSL Fast preserves.
+    def kept(route):
+        row=next(r for r in results if r['route']==route and r['mode']==0)
+        return {x['name'] for x in row['oracle'][0]['rows'] if x['matches']} if row['oracle'] else set()
+    missing=sorted(kept('MSL')-kept('IR'))
+    for row in results:
+        if row['route']=='IR' and row['mode']==0:
+            row['missingFromMSL']=missing;row['passed']=row['passed'] and not missing
+    (out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
+    if missing: print(json.dumps(dict(fastRowsLostOnIR=missing)),flush=True)
     unchanged=all(sha(Path(p))==h for p,h in identity.items())
     summary=dict(cases=len(results),passed=sum(r['passed'] for r in results),
                  valid=sum(r['executionValid'] for r in results),identityUnchanged=unchanged)

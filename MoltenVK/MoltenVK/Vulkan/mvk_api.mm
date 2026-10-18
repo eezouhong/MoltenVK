@@ -203,6 +203,10 @@ extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkResult vkConfigureMetalIRCacheMVK(
     return mvkMetalIRConfigureCache(device?MVKDevice::getMVKDevice(device):nullptr,directory,maxBytes);
 }
 
+extern "C" MVK_PUBLIC_VULKAN_SYMBOL VkResult vkSetMetalIRCacheAotWritesMVK(VkDevice device,VkBool32 enabled) {
+    return mvkMetalIRSetCacheAotWrites(device?MVKDevice::getMVKDevice(device):nullptr,enabled!=VK_FALSE);
+}
+
 MVK_PUBLIC_VULKAN_SYMBOL uint32_t vkGetMetalIRCompilerStatisticsMVK(
     VkDevice device, uint64_t* output, uint32_t capacity) {
     return device ? mvkMetalIRCompilerStatistics(MVKDevice::getMVKDevice(device), output, capacity) : 0;

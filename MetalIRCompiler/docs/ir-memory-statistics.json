@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "fieldCount": 40,
+  "fieldCount": 48,
   "fields": [
     {
       "index": 0,
@@ -161,6 +161,38 @@
     {
       "index": 39,
       "name": "diskLibraryCreateMaxNs"
+    },
+    {
+      "index": 40,
+      "name": "aotFlags"
+    },
+    {
+      "index": 41,
+      "name": "aotIndexedBytes"
+    },
+    {
+      "index": 42,
+      "name": "aotEntries"
+    },
+    {
+      "index": 43,
+      "name": "aotDroppedWrites"
+    },
+    {
+      "index": 44,
+      "name": "aotFailedWrites"
+    },
+    {
+      "index": 45,
+      "name": "aotCompletedWrites"
+    },
+    {
+      "index": 46,
+      "name": "aotWrittenBytes"
+    },
+    {
+      "index": 47,
+      "name": "aotFileHits"
     }
   ],
   "flags": {
@@ -182,5 +214,5 @@
   "sampling": "app emits low-frequency MELONX_IR_MEMORY_STATS; native API itself is read-only",
   "lifetime": "device cumulative counters; zero live values after release are valid, missing API/coverage must remain explicit",
   "legacyFieldCount": 37,
-  "compatibility": "Version-1 prefix fields 0-36 unchanged; capacity 37-39 returns 37, capacity >=40 returns 40. Timing-tail presence indicates support, not observation: timing is available only when flags 2 and 4 are both set. Missing, disabled or partial timing is unavailable, not zero."
+  "compatibility": "Version-1 prefix fields 0-36 unchanged; capacity 37-39 returns 37, capacity 40-47 returns 40, capacity >=48 returns 48. aotFlags bit 1 means the aot directory is available, bit 2 that new entries are written there. Timing-tail presence indicates support, not observation: timing is available only when flags 2 and 4 are both set. Missing, disabled or partial timing is unavailable, not zero."
 }

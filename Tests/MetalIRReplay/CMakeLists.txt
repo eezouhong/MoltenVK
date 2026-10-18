@@ -267,3 +267,8 @@ add_custom_command(OUTPUT ${VARYING_SHADERS}
     DEPENDS prepare_varyings.py VERBATIM)
 add_custom_target(varying_shaders ALL DEPENDS ${VARYING_SHADERS})
 add_dependencies(varying_probe varying_shaders)
+
+# Disk cache tiers only; needs no device.
+add_executable(disk_cache_probe disk_cache_probe.cpp)
+target_compile_features(disk_cache_probe PRIVATE cxx_std_17)
+target_include_directories(disk_cache_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../MoltenVK/MoltenVK/GPUObjects")

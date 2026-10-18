@@ -19,7 +19,8 @@ public:
     MVKShaderStageResult compileStage(const MVKShaderStageRequest& request) const override {
         MVKShaderStageResult result;
         result.artifactOwner = mvkCompileMetalIR(request.owner, request.layout, request.module,
-                                                request.stage, request.vertexTransforms, request.runtimeOptions);
+                                                request.stage, request.vertexTransforms, request.runtimeOptions,
+                                                request.dropFragDepth, request.dropFragStencilRef);
         if (auto& artifact = result.artifactOwner) {
             result.metadata = artifact->metadata;
             result.function = MVKMTLFunction(artifact->function, {},

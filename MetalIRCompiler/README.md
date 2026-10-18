@@ -55,6 +55,13 @@ for CPU-only count/byte, ownership, and concurrency regression checks. CI runs
 the same script with assertions enabled; it does not enable IR or create a Metal
 device.
 
+A fragment stage whose pipeline has no depth or stencil attachment loses its
+FragDepth / FragStencilRefEXT output before IR compilation, matching the MSL
+route's `enable_frag_depth_builtin` / `enable_frag_stencil_ref_builtin`; Metal
+otherwise rejects the pipeline. Run
+`python3 Scripts/test-metal-ir-fragment-outputs.py` (needs glslangValidator and
+SPIRV-Tools on `PATH`) for the CPU-only rewrite checks.
+
 `MELONX_METAL_IR_COMPILE_WORKERS` accepts 1–8 (default 2) for process-wide native
 compiler admission. Native memory relief runs once after a quiet completed
 batch. Disk-cache teardown telemetry reports dropped/failed writes. These are

@@ -90,4 +90,5 @@ struct MVKMetalIRArtifact : MVKMetalIRMetadata {
 
 std::shared_ptr<MVKMetalIRArtifact> mvkCompileMetalIR(
     MVKPipeline* owner, MVKPipelineLayout* layout, MVKShaderModule* module,
-    const VkPipelineShaderStageCreateInfo* stage, uint32_t vertexTransformFlags = 0, uint32_t runtimeOptions = 0);
+    const VkPipelineShaderStageCreateInfo* stage, uint32_t vertexTransformFlags = 0, uint32_t runtimeOptions = 0,
+    bool dropFragDepth = false, bool dropFragStencilRef = false);

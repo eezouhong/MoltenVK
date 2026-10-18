@@ -1,0 +1,19 @@
+; FragDepth whose pointer escapes into OpCopyObject; the rewrite must leave it alone.
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %depth
+               OpExecutionMode %main OriginUpperLeft
+               OpExecutionMode %main DepthReplacing
+               OpDecorate %depth BuiltIn FragDepth
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+  %ptr_float = OpTypePointer Output %float
+       %half = OpConstant %float 0.5
+      %depth = OpVariable %ptr_float Output
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+       %copy = OpCopyObject %ptr_float %depth
+               OpStore %copy %half
+               OpReturn
+               OpFunctionEnd

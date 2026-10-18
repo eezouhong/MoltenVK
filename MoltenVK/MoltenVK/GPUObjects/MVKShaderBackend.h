@@ -20,6 +20,9 @@ struct MVKShaderStageRequest {
     // Wrap the existing conversion/cache logic; its configuration names and
     // mutations deliberately remain unchanged during this structural step.
     std::function<MVKMTLFunction()> compileMSL;
+    // Fragment outputs whose attachment is absent; the MSL route drops them in SPIRV-Cross.
+    bool dropFragDepth = false;
+    bool dropFragStencilRef = false;
 };
 struct MVKShaderStageResult {
     // Carries existing reflection and optional MTL4 descriptor/keys unchanged.

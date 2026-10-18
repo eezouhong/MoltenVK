@@ -21,6 +21,7 @@
 #include <chrono>
 #include <malloc/malloc.h>
 #include "MVKSPIRVMathFlags.h"
+#include "MVKMetalIRFragmentOutputs.h"
 #include "mvkGitRevDerived.h"
 
 bool mvkMetalIREnabled() {
@@ -369,7 +370,8 @@ void mvkMetalIRDestroyDevice(MVKDevice* device) {
 }
 
 static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVKPipelineLayout* layout,
-                                                    MVKShaderModule* module,const VkPipelineShaderStageCreateInfo* stage,uint32_t vertexTransformFlags,uint32_t runtimeOptions) {
+                                                    MVKShaderModule* module,const VkPipelineShaderStageCreateInfo* stage,uint32_t vertexTransformFlags,uint32_t runtimeOptions,
+                                                    bool dropFragDepth,bool dropFragStencilRef) {
     auto reject = [&](const char* reason, VkResult result = VK_ERROR_FEATURE_NOT_PRESENT) -> std::shared_ptr<MVKMetalIRArtifact> {
         if(telemetryEnabled()&&result!=VK_PIPELINE_COMPILE_REQUIRED) {
             try {++deviceArtifacts(owner->getDevice())->rejected;} catch(...) {}
@@ -412,7 +414,15 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             bindings.push_back(irBinding);
         }
     }
-    const auto& code=module->getSPIRV();
+    // Metal rejects a fragment function that writes a depth or stencil attachment
+    // the pipeline lacks; such outputs become private variables. The rewritten
+    // words are part of the cache key.
+    std::vector<uint32_t> fragmentCode;
+    if(stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT&&(dropFragDepth||dropFragStencilRef)) {
+        fragmentCode=module->getSPIRV();
+        if(!mvkir::dropFragmentOutputs(fragmentCode,dropFragDepth,dropFragStencilRef))fragmentCode.clear();
+    }
+    const auto& code=fragmentCode.empty()?module->getSPIRV():fragmentCode;
     for(size_t pos=5;pos<code.size();) {
         uint32_t count=code[pos]>>16,op=code[pos]&65535;
         if(!count||pos+count>code.size())return reject("malformed SPIR-V instruction");
@@ -618,8 +628,9 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
 }
 
 std::shared_ptr<MVKMetalIRArtifact> mvkCompileMetalIR(MVKPipeline* owner,MVKPipelineLayout* layout,
-                                                    MVKShaderModule* module,const VkPipelineShaderStageCreateInfo* stage,uint32_t vertexTransformFlags,uint32_t runtimeOptions) {
-    try {return compileMetalIR(owner,layout,module,stage,vertexTransformFlags,runtimeOptions);}
+                                                    MVKShaderModule* module,const VkPipelineShaderStageCreateInfo* stage,uint32_t vertexTransformFlags,uint32_t runtimeOptions,
+                                                    bool dropFragDepth,bool dropFragStencilRef) {
+    try {return compileMetalIR(owner,layout,module,stage,vertexTransformFlags,runtimeOptions,dropFragDepth,dropFragStencilRef);}
     catch(const std::exception& error) {
         owner->setConfigurationResult(owner->reportError(VK_ERROR_INITIALIZATION_FAILED,"MetalIR compilation failed: %s; MSL fallback disabled.",error.what()));
     } catch(...) {

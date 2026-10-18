@@ -630,6 +630,7 @@
 		C5FDE67AB4EF6513C4F42030 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		481DA529DFE8998F0B29344E /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		545987F5BB20710D78A7F40B /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		AD7443DAE9D546404F9E1056 /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		705EF52DC5C39E015493FFC9 /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		FF363A2362988CAB80DDC823 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		2D3B262DAE36C85B780DA0CF /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -645,6 +646,7 @@
 		45D356B32A1636F74CBBC4BB /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		11288EAC80F49D75514452C0 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		686A63394EF60AD5B15B3CF2 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		2BFA5BA0D5D2D7FBF7C8FBCA /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		1B5C590AA356D1D5ED3EC235 /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		D54935722694730C87D2B176 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		C54A8F75617D42CBEC0E20B1 /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -667,6 +669,7 @@
 		48F68F0537334CE8A1D11744 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		8F8F46C717E0264C9479FBA9 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		B304CEA96DEABA27E75D6CF4 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		99BE18F9267E996AE7C8861E /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		CAA72BED8EC0C76F09E94FEA /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		CB827185B05E7DD11477A757 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		5BFA6F9E790196FE83B33251 /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -682,6 +685,7 @@
 		29B7C1EFE0B1213F6549659D /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		618601F5F0DB82965898EB38 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		F87778768ABA80A3BCB81C33 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		5D790325D65491DE6A7ABE71 /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		AE0E2B0B8489545EE62EAB22 /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		5811FA5BBCA4B191DAB3F017 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		3266BE26EBD79E808202FB5B /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -704,6 +708,7 @@
 		248E21AA016FE1A24EC7389C /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		397A7EC2C99C437A375654DB /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		13C919F5C1B58F977865BF11 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		34C26E034EF640A7F7C17457 /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		BB3C899F09C1A3FA9508E90D /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		C3A80C771BE4BBAF16AB9323 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		6A8BC575370A909274C6A8E9 /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -719,6 +724,7 @@
 		2C4526A503F2DFDEDC263AE8 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		706A430C9BD47130765A8203 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		AFCFD9CE709FA7856347563A /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		CCD39CEE22D8160069D4B293 /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		BC736D9C86FE19E7CA783C38 /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		D3AE2B9F90ACC5B55772D032 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		0C30368A7C19D447A5B548CA /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -734,6 +740,7 @@
 		FBA537984526358861AFD3D0 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		0CD4A9DC01AB99797C6BDA69 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		4A9546543019FB88542E5D5C /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		292854299A777B578EFD59EE /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		BAD97DBE01CCA505A4C76438 /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		C9D16ECA2CB3FEE0DCDD3604 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		AC70B3CA415D92651E4C2DBC /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -756,6 +763,7 @@
 		6A9F277D7DD6BB750D94833C /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		D5D218CBC88AA5FB1900DE59 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		1CF2822A7D88E5E0DFDE6C23 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		086F180B26BA70F6E82A3ADF /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		41D3F61CDE0AB2169F1B935F /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		D67FCF026D891E72C26E8C88 /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		09E14CD686D11D4BDB59361B /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -771,6 +779,7 @@
 		BD91058B23565091634D1C72 /* MVKMetalIRBridge.h in Headers */ = {isa = PBXBuildFile; fileRef = 428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */; };
 		A5E889DE42876F1E21904C70 /* MVKMetalIRCache.h in Headers */ = {isa = PBXBuildFile; fileRef = C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */; };
 		8DB69CFAE168F260FEDBE5F1 /* MVKMetalIRCompilerLimit.h in Headers */ = {isa = PBXBuildFile; fileRef = F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */; };
+		4748A6759238631B82035B99 /* MVKMetalIRFragmentOutputs.h in Headers */ = {isa = PBXBuildFile; fileRef = 33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */; };
 		903473301A1C1ECF9E7E8A7E /* MVKMetalIRResidentCache.h in Headers */ = {isa = PBXBuildFile; fileRef = 69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */; };
 		16A0373925ABCCAB741A5BDF /* MVKMetalIRRuntimeData.h in Headers */ = {isa = PBXBuildFile; fileRef = 1510374C17143FFC5EF2FEA0 /* MVKMetalIRRuntimeData.h */; };
 		6FB69D32AD9E625C6FEBA784 /* MVKSPIRVMathFlags.h in Headers */ = {isa = PBXBuildFile; fileRef = 207F945B9CF1F765334B0AB6 /* MVKSPIRVMathFlags.h */; };
@@ -1055,6 +1064,7 @@
 		428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRBridge.h; sourceTree = "<group>"; };
 		C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRCache.h; sourceTree = "<group>"; };
 		F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRCompilerLimit.h; sourceTree = "<group>"; };
+		33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRFragmentOutputs.h; sourceTree = "<group>"; };
 		6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRDescriptors.mm; sourceTree = "<group>"; };
 		90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MVKMetalIRPipeline.mm; sourceTree = "<group>"; };
 		69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MVKMetalIRResidentCache.h; sourceTree = "<group>"; };
@@ -1229,6 +1239,7 @@
 				428ACA98ABF244C83A5E4EA0 /* MVKMetalIRBridge.h */,
 				C54E499371C0DC83467D3FC7 /* MVKMetalIRCache.h */,
 				F07F31ECF235152BEA78F26F /* MVKMetalIRCompilerLimit.h */,
+				33E356F4A2231865BF32CC55 /* MVKMetalIRFragmentOutputs.h */,
 				6B74930D193CF28BDFD7B98C /* MVKMetalIRDescriptors.mm */,
 				90079A84839080AB5A110253 /* MVKMetalIRPipeline.mm */,
 				69FC1782160E330CE926A2E5 /* MVKMetalIRResidentCache.h */,
@@ -1455,6 +1466,7 @@
 				FBA537984526358861AFD3D0 /* MVKMetalIRBridge.h in Headers */,
 				0CD4A9DC01AB99797C6BDA69 /* MVKMetalIRCache.h in Headers */,
 				4A9546543019FB88542E5D5C /* MVKMetalIRCompilerLimit.h in Headers */,
+				292854299A777B578EFD59EE /* MVKMetalIRFragmentOutputs.h in Headers */,
 				BAD97DBE01CCA505A4C76438 /* MVKMetalIRResidentCache.h in Headers */,
 				C9D16ECA2CB3FEE0DCDD3604 /* MVKMetalIRRuntimeData.h in Headers */,
 				AC70B3CA415D92651E4C2DBC /* MVKSPIRVMathFlags.h in Headers */,
@@ -1558,6 +1570,7 @@
 				C5FDE67AB4EF6513C4F42030 /* MVKMetalIRBridge.h in Headers */,
 				481DA529DFE8998F0B29344E /* MVKMetalIRCache.h in Headers */,
 				545987F5BB20710D78A7F40B /* MVKMetalIRCompilerLimit.h in Headers */,
+				AD7443DAE9D546404F9E1056 /* MVKMetalIRFragmentOutputs.h in Headers */,
 				705EF52DC5C39E015493FFC9 /* MVKMetalIRResidentCache.h in Headers */,
 				FF363A2362988CAB80DDC823 /* MVKMetalIRRuntimeData.h in Headers */,
 				2D3B262DAE36C85B780DA0CF /* MVKSPIRVMathFlags.h in Headers */,
@@ -1590,6 +1603,7 @@
 				BD91058B23565091634D1C72 /* MVKMetalIRBridge.h in Headers */,
 				A5E889DE42876F1E21904C70 /* MVKMetalIRCache.h in Headers */,
 				8DB69CFAE168F260FEDBE5F1 /* MVKMetalIRCompilerLimit.h in Headers */,
+				4748A6759238631B82035B99 /* MVKMetalIRFragmentOutputs.h in Headers */,
 				903473301A1C1ECF9E7E8A7E /* MVKMetalIRResidentCache.h in Headers */,
 				16A0373925ABCCAB741A5BDF /* MVKMetalIRRuntimeData.h in Headers */,
 				6FB69D32AD9E625C6FEBA784 /* MVKSPIRVMathFlags.h in Headers */,
@@ -1692,6 +1706,7 @@
 				45D356B32A1636F74CBBC4BB /* MVKMetalIRBridge.h in Headers */,
 				11288EAC80F49D75514452C0 /* MVKMetalIRCache.h in Headers */,
 				686A63394EF60AD5B15B3CF2 /* MVKMetalIRCompilerLimit.h in Headers */,
+				2BFA5BA0D5D2D7FBF7C8FBCA /* MVKMetalIRFragmentOutputs.h in Headers */,
 				1B5C590AA356D1D5ED3EC235 /* MVKMetalIRResidentCache.h in Headers */,
 				D54935722694730C87D2B176 /* MVKMetalIRRuntimeData.h in Headers */,
 				C54A8F75617D42CBEC0E20B1 /* MVKSPIRVMathFlags.h in Headers */,
@@ -1794,6 +1809,7 @@
 				48F68F0537334CE8A1D11744 /* MVKMetalIRBridge.h in Headers */,
 				8F8F46C717E0264C9479FBA9 /* MVKMetalIRCache.h in Headers */,
 				B304CEA96DEABA27E75D6CF4 /* MVKMetalIRCompilerLimit.h in Headers */,
+				99BE18F9267E996AE7C8861E /* MVKMetalIRFragmentOutputs.h in Headers */,
 				CAA72BED8EC0C76F09E94FEA /* MVKMetalIRResidentCache.h in Headers */,
 				CB827185B05E7DD11477A757 /* MVKMetalIRRuntimeData.h in Headers */,
 				5BFA6F9E790196FE83B33251 /* MVKSPIRVMathFlags.h in Headers */,
@@ -1826,6 +1842,7 @@
 				6A9F277D7DD6BB750D94833C /* MVKMetalIRBridge.h in Headers */,
 				D5D218CBC88AA5FB1900DE59 /* MVKMetalIRCache.h in Headers */,
 				1CF2822A7D88E5E0DFDE6C23 /* MVKMetalIRCompilerLimit.h in Headers */,
+				086F180B26BA70F6E82A3ADF /* MVKMetalIRFragmentOutputs.h in Headers */,
 				41D3F61CDE0AB2169F1B935F /* MVKMetalIRResidentCache.h in Headers */,
 				D67FCF026D891E72C26E8C88 /* MVKMetalIRRuntimeData.h in Headers */,
 				09E14CD686D11D4BDB59361B /* MVKSPIRVMathFlags.h in Headers */,
@@ -1858,6 +1875,7 @@
 				2C4526A503F2DFDEDC263AE8 /* MVKMetalIRBridge.h in Headers */,
 				706A430C9BD47130765A8203 /* MVKMetalIRCache.h in Headers */,
 				AFCFD9CE709FA7856347563A /* MVKMetalIRCompilerLimit.h in Headers */,
+				CCD39CEE22D8160069D4B293 /* MVKMetalIRFragmentOutputs.h in Headers */,
 				BC736D9C86FE19E7CA783C38 /* MVKMetalIRResidentCache.h in Headers */,
 				D3AE2B9F90ACC5B55772D032 /* MVKMetalIRRuntimeData.h in Headers */,
 				0C30368A7C19D447A5B548CA /* MVKSPIRVMathFlags.h in Headers */,
@@ -1890,6 +1908,7 @@
 				248E21AA016FE1A24EC7389C /* MVKMetalIRBridge.h in Headers */,
 				397A7EC2C99C437A375654DB /* MVKMetalIRCache.h in Headers */,
 				13C919F5C1B58F977865BF11 /* MVKMetalIRCompilerLimit.h in Headers */,
+				34C26E034EF640A7F7C17457 /* MVKMetalIRFragmentOutputs.h in Headers */,
 				BB3C899F09C1A3FA9508E90D /* MVKMetalIRResidentCache.h in Headers */,
 				C3A80C771BE4BBAF16AB9323 /* MVKMetalIRRuntimeData.h in Headers */,
 				6A8BC575370A909274C6A8E9 /* MVKSPIRVMathFlags.h in Headers */,
@@ -1922,6 +1941,7 @@
 				29B7C1EFE0B1213F6549659D /* MVKMetalIRBridge.h in Headers */,
 				618601F5F0DB82965898EB38 /* MVKMetalIRCache.h in Headers */,
 				F87778768ABA80A3BCB81C33 /* MVKMetalIRCompilerLimit.h in Headers */,
+				5D790325D65491DE6A7ABE71 /* MVKMetalIRFragmentOutputs.h in Headers */,
 				AE0E2B0B8489545EE62EAB22 /* MVKMetalIRResidentCache.h in Headers */,
 				5811FA5BBCA4B191DAB3F017 /* MVKMetalIRRuntimeData.h in Headers */,
 				3266BE26EBD79E808202FB5B /* MVKSPIRVMathFlags.h in Headers */,

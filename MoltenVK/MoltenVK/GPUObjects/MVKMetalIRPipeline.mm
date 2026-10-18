@@ -77,7 +77,9 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 		}
         // Vertex-only work still writes resources. A discarded fragment stage
         // is ignored by Vulkan and must not be compiled or encoded.
-        auto fragmentIR = vertexIR && _isRasterizing && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {}}).artifactOwner : nullptr;
+        auto fragmentIR = vertexIR && _isRasterizing && pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, rasterOptions, {},
+            !shaderConfig.options.mslOptions.enable_frag_depth_builtin,
+            !shaderConfig.options.mslOptions.enable_frag_stencil_ref_builtin}).artifactOwner : nullptr;
         if (fragmentIR && getPrimitiveTopologyClass() == MTLPrimitiveTopologyClassPoint && fragmentIR->usesPointCoordinates &&
             !capabilities.supportsPointCoordinates(fragmentIR->runtimeFlags)) {
             mvkMetalIRRecordPipelineRejection(getDevice(), "point_coordinate_semantics");

@@ -512,8 +512,11 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
                     size_t indexOffset=size_t(nul-data)+1;uint16_t index=read<uint16_t>(data,indexOffset);
                     uint32_t bit=name=="melonx_native_vertex_id0"?VertexID:name=="melonx_native_instance_id0"?InstanceID:0;
                     if(bit) {
-                        if(!(nativeIDs&bit)||(attributes&bit)||!(index&0x8000))return fail("unexpected native vertex attribute record");
-                        write<uint16_t>(output,indexOffset,index&0x7fff);attributes|=bit;
+                        if(!(nativeIDs&bit)||(attributes&bit))return fail("unexpected native vertex attribute record");
+                        // MSC already leaves the fetch flag clear when the
+                        // shader declares the ID but never uses its value.
+                        if(index&0x8000)write<uint16_t>(output,indexOffset,index&0x7fff);
+                        attributes|=bit;
                     }
                     entry=indexOffset+2;
                 }

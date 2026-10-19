@@ -259,9 +259,10 @@ Patch 0007 adds a separate Metal-only Mesa entry point. Existing Mesa config
 and metadata structs and converter entry points retain their ABI. Vertex and
 instance IDs travel through hidden uint input semantics; the AIR adapter
 restores native builtins and disables the corresponding public `VATT` fetch
-attributes without moving record ranges. Ordinary vertex attributes remain
-unchanged. If two spare input slots are unavailable, the prior runtime route
-is retained. BaseVertex, BaseInstance and DrawID still use their explicit
+attributes without moving record ranges. A record MSC emits without the fetch
+flag (the ID is declared but its value is unused) is kept as is. Ordinary
+vertex attributes remain unchanged. If two spare input slots are unavailable,
+the prior runtime route is retained. BaseVertex, BaseInstance and DrawID still use their explicit
 runtime inputs. This stays on SM 6.6.
 
 The optional compiler requires the matched Mesa sidecar exporting the new

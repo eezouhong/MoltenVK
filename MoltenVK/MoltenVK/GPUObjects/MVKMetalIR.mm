@@ -523,12 +523,12 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     bool telemetry=telemetryEnabled();
     if (!telemetry) state->lifetime->complete = false;
     auto diskStarted = telemetry && disk ? IRClock::now() : IRClock::time_point{};
-    bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
-    // The disk cache a restored entry came from, so a bad one is removed there.
-    auto restoredFrom=fromDisk?disk:nullptr;
-    if(!fromDisk&&aotDisk&&aotDisk->load(key,execution,result,cachedReflection)) {
-        fromDisk=true;restoredFrom=aotDisk;state->aotHits.fetch_add(1,std::memory_order_relaxed);
-    }
+    // The aot directory comes first: an entry found there is never copied
+    // again. The disk cache a restored entry came from removes a bad one.
+    bool fromDisk=aotDisk&&aotDisk->load(key,execution,result,cachedReflection);
+    auto restoredFrom=fromDisk?aotDisk:nullptr;
+    if(fromDisk) state->aotHits.fetch_add(1,std::memory_order_relaxed);
+    else if(disk&&disk->load(key,execution,result,cachedReflection)) {fromDisk=true;restoredFrom=disk;}
     if (telemetry && disk) {
         ++state->diskLookupCount;
         const auto duration = elapsedNs(diskStarted);

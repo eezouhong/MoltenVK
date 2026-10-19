@@ -139,10 +139,19 @@ using IRClock=std::chrono::steady_clock;
 static uint64_t elapsedNs(IRClock::time_point start) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(IRClock::now()-start).count();
 }
+std::shared_ptr<mvkir::DiskCache> makeAotDisk(const std::string& directory) {
+    auto aot=std::make_shared<mvkir::DiskCache>(std::filesystem::path(directory)/"aot",0,true);
+    return aot->enabled()?aot:nullptr;
+}
 struct DeviceArtifacts {
     using Cache=mvkir::ResidentCache<MVKMetalIRArtifact>;
     Cache cache;
     std::shared_ptr<mvkir::DiskCache> disk;
+    // Ahead-of-time entries, in the aot subdirectory of the disk cache. They
+    // are never trimmed and a full write queue makes the compiler wait.
+    std::shared_ptr<mvkir::DiskCache> aotDisk;
+    std::atomic<bool> aotWrites{false};
+    std::atomic<uint64_t> aotHits{0};
     std::string diskDirectory;
     std::mutex diskConfigurationLock;
     std::atomic<uint64_t> compilerCalls{0},diskHits{0},mesaNs{0},converterNs{0},rasterAdapterNs{0},libraryNs{0},reflectionNs{0},rejected{0},psoNs{0};
@@ -159,6 +168,7 @@ struct DeviceArtifacts {
         if(directory&&*directory) {
             diskDirectory=directory;
             disk=std::make_shared<mvkir::DiskCache>(diskDirectory);
+            aotDisk=makeAotDisk(diskDirectory);
         }
     }
 };
@@ -221,7 +231,20 @@ VkResult mvkMetalIRConfigureCache(MVKDevice* device,const char* directory,uint64
         auto disk=std::make_shared<mvkir::DiskCache>(directory,maxBytes);
         if(!disk->enabled())return VK_ERROR_INITIALIZATION_FAILED;
         state->diskDirectory=directory;
+        std::atomic_store(&state->aotDisk,makeAotDisk(directory));
         std::atomic_store(&state->disk,std::move(disk));
+        return VK_SUCCESS;
+    } catch(...) {return VK_ERROR_OUT_OF_HOST_MEMORY;}
+}
+
+VkResult mvkMetalIRSetCacheAotWrites(MVKDevice* device,bool enabled) {
+    if(!device||!device->isMetalIRShaderCompilerEnabled())return VK_ERROR_INITIALIZATION_FAILED;
+    try {
+        // May precede the cache configuration the first compilation makes.
+        auto state=deviceArtifacts(device);
+        state->aotWrites.store(enabled);
+        // Entries queued for the aot directory are on disk once this returns.
+        if(auto aot=std::atomic_load(&state->aotDisk);aot&&!enabled)aot->waitIdle();
         return VK_SUCCESS;
     } catch(...) {return VK_ERROR_OUT_OF_HOST_MEMORY;}
 }
@@ -260,9 +283,9 @@ uint32_t mvkMetalIRSetTelemetryEnabled(uint32_t enabled) {
 }
 
 uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t capacity) {
-    constexpr uint32_t legacyFields = 37, fields = 40;
+    constexpr uint32_t legacyFields = 37, restoreFields = 40, fields = 48;
     if (!device || !output || capacity < legacyFields) return 0;
-    const uint32_t written = capacity >= fields ? fields : legacyFields;
+    const uint32_t written = capacity >= fields ? fields : capacity >= restoreFields ? restoreFields : legacyFields;
     std::fill(output, output + written, 0);
     output[0] = 1;
     output[1] = 1u | (telemetryEnabled() ? 2u : 0u);
@@ -297,10 +320,20 @@ uint32_t mvkMetalIRCacheStatistics(MVKDevice* device, uint64_t* output, uint32_t
         output[34] = state->successfulDiskRestores.load();
         output[35] = state->successfulDiskRestoreNs.load();
         output[36] = state->successfulDiskRestoreBytes.load();
-        if (written >= fields) {
+        if (written >= restoreFields) {
             output[37] = state->diskLibraryCreateCount.load(std::memory_order_relaxed);
             output[38] = state->diskLibraryCreateNs.load(std::memory_order_relaxed);
             output[39] = state->diskLibraryCreateMaxNs.load(std::memory_order_relaxed);
+        }
+        if (written >= fields) {
+            if (auto aot = std::atomic_load(&state->aotDisk)) {
+                const auto stats = aot->statistics();
+                output[40] = 1u | (state->aotWrites.load() ? 2u : 0u);
+                output[41] = stats.indexedBytes; output[42] = stats.entries;
+                output[43] = stats.droppedWrites; output[44] = stats.failedWrites;
+                output[45] = stats.completedWrites; output[46] = stats.writtenBytes;
+            }
+            output[47] = state->aotHits.load(std::memory_order_relaxed);
         }
     }
     if (@available(macOS 10.15, iOS 13.0, *)) output[32] = device->getPhysicalDevice()->getMTLDevice().currentAllocatedSize;
@@ -364,6 +397,12 @@ void mvkMetalIRDestroyDevice(MVKDevice* device) {
         disk->waitIdle();
         fprintf(stderr,"MetalIR disk summary: dropped_writes=%llu failed_writes=%llu\n",
             (unsigned long long)disk->droppedWrites(),(unsigned long long)disk->failedWrites());
+    }
+    if(telemetryEnabled())if(auto aot=std::atomic_load(&state->aotDisk)) {
+        aot->waitIdle();const auto stats=aot->statistics();
+        fprintf(stderr,"MetalIR aot disk summary: entries=%llu hits=%llu completed_writes=%llu dropped_writes=%llu failed_writes=%llu\n",
+            (unsigned long long)stats.entries,(unsigned long long)state->aotHits.load(),(unsigned long long)stats.completedWrites,
+            (unsigned long long)stats.droppedWrites,(unsigned long long)stats.failedWrites);
     }
     // Release cached Metal objects outside the global map lock. Vulkan requires
     // users to finish device calls before destruction, so pointer reuse is safe.
@@ -479,11 +518,17 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         void reset(){if(data)dispatch_release(data);data=nullptr;}
     } libraryBytes;
     auto disk=std::atomic_load(&state->disk);
+    auto aotDisk=std::atomic_load(&state->aotDisk);
     mvkir::DiskCache::Reflection cachedReflection;
     bool telemetry=telemetryEnabled();
     if (!telemetry) state->lifetime->complete = false;
     auto diskStarted = telemetry && disk ? IRClock::now() : IRClock::time_point{};
-    bool fromDisk=disk&&disk->load(key,execution,result,cachedReflection);
+    // The aot directory comes first: an entry found there is never copied
+    // again. The disk cache a restored entry came from removes a bad one.
+    bool fromDisk=aotDisk&&aotDisk->load(key,execution,result,cachedReflection);
+    auto restoredFrom=fromDisk?aotDisk:nullptr;
+    if(fromDisk) state->aotHits.fetch_add(1,std::memory_order_relaxed);
+    else if(disk&&disk->load(key,execution,result,cachedReflection)) {fromDisk=true;restoredFrom=disk;}
     if (telemetry && disk) {
         ++state->diskLookupCount;
         const auto duration = elapsedNs(diskStarted);
@@ -593,9 +638,13 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             state->successfulDiskRestoreBytes += result.metallibSize;
         }
         if(!artifact&&fromDisk){
-            disk->invalidate(key);free(result.metallib);result={};fromDisk=false;continue;
+            restoredFrom->invalidate(key);free(result.metallib);result={};fromDisk=false;continue;
         }
-        if(artifact&&!fromDisk&&disk) {
+        // While aot writes are on, an entry restored from the main directory is
+        // copied to the aot one too, so trimming the main one cannot lose it.
+        const bool aotWrite=state->aotWrites.load()&&aotDisk;
+        auto target=aotWrite?aotDisk:disk;
+        if(artifact&&target&&(!fromDisk||(aotWrite&&restoredFrom!=aotDisk))) {
             mvkir::DiskCache::Reflection reflection;
             reflection.usedSets=artifact->usedSets;reflection.usedBindings=artifact->usedBindings;
             reflection.vertexLocations=artifact->vertexLocations;reflection.usesPushConstants=artifact->usesPushConstants;
@@ -607,7 +656,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             dispatch_data_t mapped=dispatch_data_create_map(libraryBytes.data,&storage,&size);
             if(mapped) {
                 borrowed.metallib=const_cast<void*>(storage);borrowed.metallibSize=size;
-                disk->store(key,execution,borrowed,reflection);
+                target->store(key,execution,borrowed,reflection);
                 dispatch_release(mapped);
             }
         }

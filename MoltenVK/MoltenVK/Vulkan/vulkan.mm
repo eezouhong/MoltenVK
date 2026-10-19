@@ -329,6 +329,8 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vkGetInstanceProcAddr(
 		func = (PFN_vkVoidFunction)vkGetMetalIRCompilerABIMVK;
 	} else if (mvkStringsAreEqual(pName, "vkConfigureMetalIRCacheMVK")) {
 		func = (PFN_vkVoidFunction)vkConfigureMetalIRCacheMVK;
+	} else if (mvkStringsAreEqual(pName, "vkSetMetalIRCacheAotWritesMVK")) {
+		func = (PFN_vkVoidFunction)vkSetMetalIRCacheAotWritesMVK;
 	} else if (mvkStringsAreEqual(pName, "vkGetMoltenVKConfigurationMVK")) {
 		func = (PFN_vkVoidFunction)vkGetMoltenVKConfigurationMVK;
 	} else if (instance) {

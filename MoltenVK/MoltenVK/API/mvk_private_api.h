@@ -585,6 +585,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTrimShaderLibraryResidencyMVK(VkDevice device);
 VKAPI_ATTR VkResult VKAPI_CALL vkConfigureMetalIRCacheMVK(
     VkDevice device, const char* directory, uint64_t maxBytes);
 
+/** Routes new IR cache entries to the aot subdirectory of the configured cache
+ * directory while enabled. That directory is not counted against maxBytes and
+ * never trimmed, and a full write queue makes the compiler wait instead of
+ * dropping the entry. An entry restored from the main directory while enabled
+ * is copied there too. Lookups read the main directory, then the aot one.
+ * May be called before vkConfigureMetalIRCacheMVK. Disabling returns once
+ * queued aot entries are written. */
+VKAPI_ATTR VkResult VKAPI_CALL vkSetMetalIRCacheAotWritesMVK(VkDevice device, VkBool32 enabled);
+
 /** Opt-in read-only compiler counters. Seven-field callers remain compatible;
  * capacity >=8 includes terminal rejection attempts in field7 (shader compilation,
  * pipeline preflight or descriptor-layout creation); >=9 adds PSO wall
@@ -601,9 +610,12 @@ VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRProbeDiagnosticsMVK(uint32_t flags);
  * Returns the previous enabled value, or UINT32_MAX for invalid input. */
 VKAPI_ATTR uint32_t VKAPI_CALL vkSetMetalIRTelemetryEnabledMVK(uint32_t enabled);
 
-/** Version-1 cache/lifetime snapshot, 40 uint64 fields. Capacities 37–39 retain
- * the original 37-field return and prefix. The final three fields report
- * disk-restored Metal library creation count, total ns and maximum ns.
+/** Version-1 cache/lifetime snapshot, 48 uint64 fields. Capacities 37–39 retain
+ * the original 37-field return and prefix, 40–47 the 40-field one. Fields
+ * 37–39 report disk-restored Metal library creation count, total ns and
+ * maximum ns. Fields 40–47 report the aot directory: bit0 available, bit1
+ * writes on; indexed bytes, entries, dropped, failed and completed writes,
+ * written bytes; and lookups it served, which the disk hit fields include.
  * Unlike the compiler
  * counters, the snapshot reports availability and coverage explicitly. Library
  * byte fields measure metallib code, not Metal-private physical memory.

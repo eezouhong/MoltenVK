@@ -35,7 +35,6 @@ public:
     ~MVKMetalIRPSOTimer();
 };
 VkResult mvkMetalIRConfigureCache(MVKDevice* device, const char* directory, uint64_t maxBytes);
-VkResult mvkMetalIRSetCacheAotWrites(MVKDevice* device, bool enabled);
 void mvkMetalIRDestroyDevice(MVKDevice* device);
 uint64_t mvkMetalIRRelieveCompilerMemory();
 uint32_t mvkMetalIRCompilerAdmissionStatistics(uint64_t* output,uint32_t capacity);

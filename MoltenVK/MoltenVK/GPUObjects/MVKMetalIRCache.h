@@ -47,7 +47,7 @@ private:
     std::filesystem::path _directory;
     uint64_t _maxBytes=0, _diskBytes=0;
     std::mutex _lock;
-    std::condition_variable _workReady, _idle, _room;
+    std::condition_variable _workReady, _idle;
     // Filesystem mutation never holds the reservation/index lock. Valid loads
     // perform their reads without either lock.
     std::mutex _fileLock;
@@ -58,8 +58,6 @@ private:
     std::unordered_map<std::string,Entry> _entries;
     size_t _pendingBytes=0, _pendingCount=0;
     bool _stopping=false;
-    // A blocking cache waits for queue room instead of dropping a write.
-    bool _blocking=false;
     std::thread _writer;
     static constexpr size_t MaxBytes=16*1024*1024, MaxBindings=4096;
     inline static std::atomic<uint64_t> temporarySequence{0};
@@ -109,7 +107,6 @@ private:
     void releaseReservation(size_t bytes) {
         std::lock_guard<std::mutex> lock(_lock);_pendingBytes-=bytes;--_pendingCount;
         if(!_pendingCount) _idle.notify_all();
-        if(_blocking) _room.notify_all();
         if(_stopping) _workReady.notify_all();
     }
     void writeLoop() {
@@ -170,8 +167,7 @@ public:
                 _droppedWrites.load(), _failedWrites.load(),
                 _completedWrites.load(), _writtenBytes.load()};
     }
-    // maxBytes 0 keeps every entry: nothing is trimmed.
-    explicit DiskCache(std::filesystem::path directory,uint64_t maxBytes=2ull*1024*1024*1024,bool blocking=false) noexcept : _maxBytes(maxBytes),_blocking(blocking) {
+    explicit DiskCache(std::filesystem::path directory,uint64_t maxBytes=2ull*1024*1024*1024) noexcept : _maxBytes(maxBytes) {
       try {
         if(directory.empty())return;std::error_code error;
         std::filesystem::create_directories(directory,error);if(error)return;
@@ -193,7 +189,7 @@ public:
     uint64_t failedWrites() const {return _failedWrites.load(std::memory_order_relaxed);}
     bool enabled() const {return !_directory.empty();}
     ~DiskCache() {
-        {std::lock_guard<std::mutex> lock(_lock);_stopping=true;}_workReady.notify_one();_room.notify_all();
+        {std::lock_guard<std::mutex> lock(_lock);_stopping=true;}_workReady.notify_one();
         if(_writer.joinable())_writer.join();
     }
     void waitIdle() {
@@ -243,10 +239,8 @@ public:
         const size_t bytes=result.metallibSize+reflection.usedBindings.size()*8+sizeof(Header);
         if(_maxBytes&&bytes>_maxBytes)return;
         {
-            std::unique_lock<std::mutex> lock(_lock);
-            auto full=[&]{return _pendingCount>=32||(_pendingCount&&_pendingBytes+bytes>MaxBytes);};
-            if(_blocking)_room.wait(lock,[&]{return _stopping||!full();});
-            if(_stopping||full()||(!_blocking&&_pendingBytes+bytes>MaxBytes)){++_droppedWrites;return;}
+            std::lock_guard<std::mutex> lock(_lock);
+            if(_stopping||_pendingCount>=32||_pendingBytes+bytes>MaxBytes){++_droppedWrites;return;}
             ++_pendingCount;_pendingBytes+=bytes;
         }
       try {

@@ -384,7 +384,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     if (!plugin().compile || !plugin().release) return reject("compiler plugin unavailable or ABI incompatible", VK_ERROR_INITIALIZATION_FAILED);
     const auto& capabilities = owner->getDevice()->shaderBackend().capabilities();
     if(!capabilities.supportsSpecialization(stage->pSpecializationInfo ? stage->pSpecializationInfo->mapEntryCount : 0))return reject("specialization constants unsupported");
-    if(!capabilities.supportsStageClass(stage->stage==VK_SHADER_STAGE_VERTEX_BIT||stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT||stage->stage==VK_SHADER_STAGE_COMPUTE_BIT))return reject("shader stage unsupported");
+    if(!capabilities.supportsStageClass(stage->stage==VK_SHADER_STAGE_VERTEX_BIT||stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT||
+                                        stage->stage==VK_SHADER_STAGE_COMPUTE_BIT||stage->stage==VK_SHADER_STAGE_MESH_BIT_EXT))return reject("shader stage unsupported");
     const auto compileConfig=mvkShaderCompileConfig();
     const char* stages=compileConfig.stages;
     if(stages&&((strcmp(stages,"graphics")==0&&stage->stage==VK_SHADER_STAGE_COMPUTE_BIT)||
@@ -432,7 +433,10 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
            (code[pos+2]==spv::ExecutionModeDenormPreserve||code[pos+2]==spv::ExecutionModeRoundingModeRTZ))return reject("floating-point execution mode unsupported");
         pos+=count;
     }
-    uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:5;
+    // SPIR-V execution models: the plugin compiles MeshEXT to a Metal mesh function.
+    constexpr uint32_t meshExecution=spv::ExecutionModelMeshEXT;
+    uint32_t execution=stage->stage==VK_SHADER_STAGE_VERTEX_BIT?0:stage->stage==VK_SHADER_STAGE_FRAGMENT_BIT?4:
+        stage->stage==VK_SHADER_STAGE_MESH_BIT_EXT?meshExecution:5;
     const char* strictMathOption=compileConfig.strictMath;
     uint32_t mathMode=strictMathOption?(strcmp(strictMathOption,"1")==0):shaderMathMode(code,stage->pName,(spv::ExecutionModel)execution,owner->getMVKConfig().fastMathEnabled);
     mvkir::DiskCache::Reflection shaderReflection;
@@ -466,7 +470,7 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
     // Preserve each used binding's physical offsets and dense register number.
     // Only trailing unused root slots can disappear without changing the ABI.
     while(!sizes.empty() && !(shaderReflection.usedSets & (1ull<<(sizes.size()-1))))sizes.pop_back();
-    MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0,mathMode,vertexTransformFlags,runtimeOptions};
+    MVKMetalIRCompileRequest request={MVK_METAL_IR_ABI_VERSION,execution,code.data(),code.size(),stage->pName,bindings.data(),bindings.size(),sizes.data(),(uint32_t)sizes.size(),layout->getPushConstantsLength(),execution==0||execution==meshExecution,mathMode,vertexTransformFlags,runtimeOptions};
     std::string key=keyFor(request);
     auto state=deviceArtifacts(owner->getDevice());
     auto compiled = state->cache.get(key,[&]() -> DeviceArtifacts::Cache::Result {
@@ -516,7 +520,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
         validResult&=execution==0||!(result.runtimeFlags&MVK_METAL_IR_DRAW_BASES);
         validResult&=execution==5||!(result.runtimeFlags&MVK_METAL_IR_DISPATCH_GROUPS);
         validResult&=execution!=4||!(result.runtimeFlags&MVK_METAL_IR_RUNTIME_DATA);
-        if(execution==5)validResult&=result.threadgroupSize[0]&&result.threadgroupSize[0]<=1024&&
+        validResult&=execution!=meshExecution||!(result.runtimeFlags&(MVK_METAL_IR_RUNTIME_DATA|MVK_METAL_IR_DISPATCH_GROUPS));
+        if(execution==5||execution==meshExecution)validResult&=result.threadgroupSize[0]&&result.threadgroupSize[0]<=1024&&
             result.threadgroupSize[1]&&result.threadgroupSize[1]<=1024&&result.threadgroupSize[2]&&result.threadgroupSize[2]<=1024&&
             (uint64_t)result.threadgroupSize[0]*result.threadgroupSize[1]*result.threadgroupSize[2]<=1024;
         if(compileStatus==0&&validResult) {
@@ -546,7 +551,8 @@ static std::shared_ptr<MVKMetalIRArtifact> compileMetalIR(MVKPipeline* owner,MVK
             }
             if(artifact->library) { mvkreplay::Timer trace(mvkreplay::IRFunction); artifact->function=[artifact->library newFunctionWithName:@(result.entry)]; }
             if(telemetry)state->libraryNs+=elapsedNs(libraryStart);
-            MTLFunctionType expectedType=execution==0?MTLFunctionTypeVertex:execution==4?MTLFunctionTypeFragment:MTLFunctionTypeKernel;
+            MTLFunctionType expectedType=execution==0?MTLFunctionTypeVertex:execution==4?MTLFunctionTypeFragment:
+                execution==meshExecution?MTLFunctionTypeMesh:MTLFunctionTypeKernel;
             if(artifact->function&&artifact->function.functionType!=expectedType){[artifact->function release];artifact->function=nil;}
             if (artifact->function && artifact->lifetimeCounters) {
                 artifact->trackedFunction = true;

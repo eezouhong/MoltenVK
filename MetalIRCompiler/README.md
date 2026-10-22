@@ -55,6 +55,18 @@ for CPU-only count/byte, ownership, and concurrency regression checks. CI runs
 the same script with assertions enabled; it does not enable IR or create a Metal
 device.
 
+Mesa supports `MeshEXT` modules (no task shaders or payloads) and emits
+a DXIL mesh shader: `SetMeshOutputCounts`, `StoreVertexOutput`, and per-primitive
+outputs (`SV_CullPrimitive`) in the primitive signature. `EmitIndices` takes a
+primitive's three indices together, so Mesa merges the SPIR-V component stores
+after CSE; a partial index write fails the compile. Mesh outputs stay in place,
+so Y flip and the [-1, 1] to [0, 1] depth conversion apply to each position
+store; a depth conversion needs z and w in one store. MSC converts the shader to
+a Metal mesh function, and MoltenVK binds its root table to the mesh stage.
+SPIR-V 1.4 entry points (all mesh modules) list every global; Mesa drops the
+resources no instruction references, as it already does before 1.4, because
+MoltenVK puts only referenced bindings in the root signature.
+
 A fragment stage whose pipeline has no depth or stencil attachment loses its
 FragDepth / FragStencilRefEXT output before IR compilation, matching the MSL
 route's `enable_frag_depth_builtin` / `enable_frag_stencil_ref_builtin`; Metal
@@ -73,9 +85,12 @@ out. GPU workloads always enter the Debug Tool queue.
 ## Dependencies
 
 - Xcode **27**, macOS arm64; select it with `DEVELOPER_DIR`. Deployment target 26.0.
-- Mesa fork `https://gitlab.freedesktop.org/has207/mesa.git`, exact commit in
-  `mesa/MESA_COMMIT`. Ordered patches in `mesa/patches/` reproduce the local changes.
-  The pinned fork already includes its bindless extension.
+- Mesa from the private repository in `mesa/MESA_REPOSITORY`, branch `melonx`,
+  exact commit in `mesa/MESA_COMMIT`. Its first commit is the tree of
+  `https://gitlab.freedesktop.org/has207/mesa.git` 7a1fc756 (which includes its
+  bindless extension); each MeloNX change follows as one commit. Change Mesa by
+  committing there and moving `MESA_COMMIT`. `--mesa-repository` accepts a local
+  clone for offline builds.
 - LLVM **17.0.6**, static SDK with `llvm-config`, headers, and core/bitreader/bitwriter
   dependencies. This is a dependency SDK; its standard archives are not rebuilt by
   the host script. The custom AIR writer and adapter are always rebuilt from source.

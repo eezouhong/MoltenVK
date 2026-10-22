@@ -32,7 +32,8 @@ def main():
     parser.add_argument("--msc-dir", type=Path, required=True)
     parser.add_argument("--llvm-config", type=Path, required=True)
     parser.add_argument("--zstd-library", type=Path)
-    parser.add_argument("--mesa-repository", default="https://gitlab.freedesktop.org/has207/mesa.git")
+    parser.add_argument("--mesa-repository", default=(ROOT / "mesa/MESA_REPOSITORY").read_text().strip(),
+                        help="override the pinned Mesa repository, e.g. with a local clone")
     parser.add_argument("--meson", default="meson")
     parser.add_argument("--ninja", default="ninja")
     parser.add_argument("--jobs", type=int, default=4)
@@ -83,9 +84,6 @@ def main():
     run(["git", "init", "-q", source])
     run(["git", "-C", source, "fetch", "--depth=1", args.mesa_repository, revision])
     run(["git", "-C", source, "checkout", "--detach", "-q", "FETCH_HEAD"])
-    for patch in sorted((ROOT / "mesa/patches").glob("*.patch")):
-        run(["git", "-C", source, "apply", "--check", patch])
-        run(["git", "-C", source, "apply", patch])
     meson = shutil.which(args.meson)
     ninja = shutil.which(args.ninja)
     if not meson or not ninja:
@@ -130,7 +128,7 @@ def main():
                 "dependencyIdentity": identity, "sdk": sdk,
                 "binaries": {p.name: {"sha256": sha(p), "bytes": p.stat().st_size}
                              for p in (plugin, mesa, lib / msc.name)},
-                "patches": {p.name: sha(p) for p in sorted((ROOT / "mesa/patches").glob("*.patch"))},
+                "mesaRepository": (ROOT / "mesa/MESA_REPOSITORY").read_text().strip(),
                 "llvmArchives": {name: sha(llvm_libdir / name) for name in llvm_libraries},
                 "sourceCommit": output(["git", "-C", ROOT, "rev-parse", "HEAD"])}
     (out / "identity.json").write_text(json.dumps(manifest, indent=2) + "\n")

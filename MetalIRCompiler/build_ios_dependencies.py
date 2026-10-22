@@ -30,7 +30,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--llvm-source', type=Path, required=True,
                         help='LLVM 17.0.6 source root containing llvm/ and cmake/')
-    parser.add_argument('--mesa-repository', default='https://gitlab.freedesktop.org/has207/mesa.git')
+    parser.add_argument('--mesa-repository', default=(ROOT / 'mesa/MESA_REPOSITORY').read_text().strip(),
+                        help='override the pinned Mesa repository, e.g. with a local clone')
     parser.add_argument('--meson', default='meson')
     parser.add_argument('--ninja', default='ninja')
     parser.add_argument('--host-tablegen', type=Path,
@@ -120,9 +121,6 @@ def main():
     run(['git', 'init', '-q', source])
     run(['git', '-C', source, 'fetch', '--depth=1', args.mesa_repository, revision])
     run(['git', '-C', source, 'checkout', '--detach', '-q', 'FETCH_HEAD'])
-    for patch in sorted((ROOT / 'mesa/patches').glob('*.patch')):
-        run(['git', '-C', source, 'apply', '--check', patch])
-        run(['git', '-C', source, 'apply', patch])
     cross = out / 'ios-arm64.ini'
     compiler_flags = ['-isysroot', sdk, '-arch', 'arm64', '-miphoneos-version-min=17.0']
     cross.write_text('[binaries]\n' +

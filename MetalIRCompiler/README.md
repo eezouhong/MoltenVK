@@ -73,9 +73,12 @@ out. GPU workloads always enter the Debug Tool queue.
 ## Dependencies
 
 - Xcode **27**, macOS arm64; select it with `DEVELOPER_DIR`. Deployment target 26.0.
-- Mesa fork `https://gitlab.freedesktop.org/has207/mesa.git`, exact commit in
-  `mesa/MESA_COMMIT`. Ordered patches in `mesa/patches/` reproduce the local changes.
-  The pinned fork already includes its bindless extension.
+- Mesa from the private repository in `mesa/MESA_REPOSITORY`, branch `melonx`,
+  exact commit in `mesa/MESA_COMMIT`. Its first commit is the tree of
+  `https://gitlab.freedesktop.org/has207/mesa.git` 7a1fc756 (which includes its
+  bindless extension); each MeloNX change follows as one commit. Change Mesa by
+  committing there and moving `MESA_COMMIT`. `--mesa-repository` accepts a local
+  clone for offline builds.
 - LLVM **17.0.6**, static SDK with `llvm-config`, headers, and core/bitreader/bitwriter
   dependencies. This is a dependency SDK; its standard archives are not rebuilt by
   the host script. The custom AIR writer and adapter are always rebuilt from source.

@@ -55,6 +55,18 @@ for CPU-only count/byte, ownership, and concurrency regression checks. CI runs
 the same script with assertions enabled; it does not enable IR or create a Metal
 device.
 
+Mesa supports `MeshEXT` modules (no task shaders or payloads) and emits
+a DXIL mesh shader: `SetMeshOutputCounts`, `StoreVertexOutput`, and per-primitive
+outputs (`SV_CullPrimitive`) in the primitive signature. `EmitIndices` takes a
+primitive's three indices together, so Mesa merges the SPIR-V component stores
+after CSE; a partial index write fails the compile. Mesh outputs stay in place,
+so Y flip and the [-1, 1] to [0, 1] depth conversion apply to each position
+store; a depth conversion needs z and w in one store. MSC converts the shader to
+a Metal mesh function, and MoltenVK binds its root table to the mesh stage.
+SPIR-V 1.4 entry points (all mesh modules) list every global; Mesa drops the
+resources no instruction references, as it already does before 1.4, because
+MoltenVK puts only referenced bindings in the root signature.
+
 A fragment stage whose pipeline has no depth or stencil attachment loses its
 FragDepth / FragStencilRefEXT output before IR compilation, matching the MSL
 route's `enable_frag_depth_builtin` / `enable_frag_stencil_ref_builtin`; Metal

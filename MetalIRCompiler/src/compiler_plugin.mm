@@ -99,7 +99,10 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     if(!request||!result||request->abiVersion!=MVK_METAL_IR_ABI_VERSION)return 1;
     *result={};result->abiVersion=MVK_METAL_IR_ABI_VERSION;result->status=1;
     memset(result->vertexAttributes,255,sizeof(result->vertexAttributes));
-    if(request->executionModel!=0&&request->executionModel!=4&&request->executionModel!=5){result->status=1;return 1;}
+    // SPIR-V execution models: Vertex 0, Fragment 4, GLCompute 5, MeshEXT 5365.
+    constexpr uint32_t meshModel=5365;
+    const bool mesh=request->executionModel==meshModel;
+    if(request->executionModel!=0&&request->executionModel!=4&&request->executionModel!=5&&!mesh){result->status=1;return 1;}
     if((request->runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED)&&request->executionModel!=0) {
         snprintf(result->error,sizeof(result->error),"rasterization-disabled compilation requires a vertex stage");return 1;
     }
@@ -156,15 +159,21 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     CompileResources resources;
     auto& dxil=resources.dxil;
     auto start=std::chrono::steady_clock::now();
-    auto stage=request->executionModel==0?DXIL_SPIRV_SHADER_VERTEX:request->executionModel==4?DXIL_SPIRV_SHADER_FRAGMENT:DXIL_SPIRV_SHADER_COMPUTE;
+    auto stage=request->executionModel==0?DXIL_SPIRV_SHADER_VERTEX:request->executionModel==4?DXIL_SPIRV_SHADER_FRAGMENT:
+        mesh?DXIL_SPIRV_SHADER_MESH:DXIL_SPIRV_SHADER_COMPUTE;
     uint32_t nativeRasterIO=0;
     bool clipHalfZ=request->executionModel==0&&(request->vertexTransformFlags&MVK_METAL_IR_CLIP_HALF_Z);
     // Metal forbids point_size on triangle/line pipelines. Select raster I/O
     // from the Vulkan pipeline topology before compiling, just as the MSL
     // path selects enable_point_size_builtin. Both branches use Mesa + MSC.
-    bool translated=spirv_to_dxil_with_absolute_vertex_ids(words.data(),words.size(),nullptr,0,stage,request->entry,
-        NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,
-        bool(request->runtimeOptions&MVK_METAL_IR_RENDERING_POINTS),&nativeRasterIO);
+    // Mesh outputs stay in place: Mesa converts each position store itself.
+    uint32_t meshPosition=mesh?((request->vertexTransformFlags&MVK_METAL_IR_FLIP_Y)?DXIL_SPIRV_MESH_FLIP_Y:0)|
+        ((request->vertexTransformFlags&MVK_METAL_IR_CLIP_HALF_Z)?DXIL_SPIRV_MESH_CLIP_HALFZ:0):0;
+    bool translated=mesh
+        ?spirv_to_dxil_mesh(words.data(),words.size(),request->entry,NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,meshPosition)
+        :spirv_to_dxil_with_absolute_vertex_ids(words.data(),words.size(),nullptr,0,stage,request->entry,
+            NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,
+            bool(request->runtimeOptions&MVK_METAL_IR_RENDERING_POINTS),&nativeRasterIO);
     result->mesaMs=elapsed(start);
     if(!translated)return 1;
     // Mesa runtime data and MSC draw arguments have separate ABIs. The native
@@ -294,6 +303,13 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                                 result->runtimeFlags|=MVK_METAL_IR_VOID_VERTEX;
                             } else {status=2;snprintf(result->error,sizeof(result->error),"discard vertex adapter allocation failed");}
                         }
+                    }
+                    if(actualStage==IRShaderStageMesh) {
+                        IRVersionedMSInfo ms={};
+                        if(IRShaderReflectionCopyMeshInfo(reflection,IRReflectionVersion_1_0,&ms)) {
+                            for(int i=0;i<3;++i)result->threadgroupSize[i]=ms.info_1_0.num_threads[i];
+                            IRShaderReflectionReleaseMeshInfo(&ms);
+                        } else {status=1;snprintf(result->error,sizeof(result->error),"mesh threadgroup reflection unavailable");}
                     }
                     if(actualStage==IRShaderStageCompute) {
                         IRVersionedCSInfo cs={};

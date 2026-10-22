@@ -337,6 +337,9 @@ private:
 };
 
 
+/** Copies the fragment output state of a vertex pipeline descriptor into a mesh pipeline descriptor. */
+void mvkCopyMeshRenderTargets(MTLMeshRenderPipelineDescriptor* dst, MTLRenderPipelineDescriptor* src) API_AVAILABLE(macos(13.0), ios(16.0));
+
 #pragma mark -
 #pragma mark MVKGraphicsPipeline
 
@@ -499,6 +502,12 @@ protected:
     MTLComputePipelineDescriptor* newMTLTessVertexStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, const VkPipelineShaderStageCreateInfo* pTessCtlSS, MVKMTLFunction* pVtxFunctions);
 	MTLComputePipelineDescriptor* newMTLTessControlStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pTessCtlSS, VkPipelineCreationFeedback* pTessCtlFB, const VkPipelineShaderStageCreateInfo* pVertexSS, const VkPipelineShaderStageCreateInfo* pTessEvalSS);
 	MTLRenderPipelineDescriptor* newMTLTessRasterStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pTessEvalSS, VkPipelineCreationFeedback* pTessEvalFB, const VkPipelineShaderStageCreateInfo* pFragmentSS, VkPipelineCreationFeedback* pFragmentFB, const VkPipelineShaderStageCreateInfo* pTessCtlSS);
+	bool addMetalIRMeshShadersToPipeline(MTLMeshRenderPipelineDescriptor* plDesc,
+	                                     const VkGraphicsPipelineCreateInfo* pCreateInfo,
+	                                     mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+	                                     const VkPipelineShaderStageCreateInfo* pMeshSS,
+	                                     const VkPipelineShaderStageCreateInfo* pFragmentSS,
+	                                     uint32_t viewMask) API_AVAILABLE(macos(13.0), ios(16.0));
 	bool addMetalIRShadersToPipeline(MTLRenderPipelineDescriptor* plDesc,
 	                                const VkGraphicsPipelineCreateInfo* pCreateInfo,
 	                                mvk::SPIRVToMSLConversionConfiguration& shaderConfig,

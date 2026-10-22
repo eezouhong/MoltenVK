@@ -3662,6 +3662,28 @@ static void addMeshStageResourceBindings(SPIRVToMSLConversionConfiguration& shad
 	}
 }
 
+// Copies the fragment output state of a vertex pipeline descriptor into a mesh pipeline descriptor.
+void mvkCopyMeshRenderTargets(MTLMeshRenderPipelineDescriptor* dst, MTLRenderPipelineDescriptor* src) {
+	dst.rasterSampleCount = src.rasterSampleCount;
+	dst.alphaToCoverageEnabled = src.alphaToCoverageEnabled;
+	dst.alphaToOneEnabled = src.alphaToOneEnabled;
+	dst.depthAttachmentPixelFormat = src.depthAttachmentPixelFormat;
+	dst.stencilAttachmentPixelFormat = src.stencilAttachmentPixelFormat;
+	for (uint32_t caIdx = 0; caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
+		MTLRenderPipelineColorAttachmentDescriptor* srcCA = src.colorAttachments[caIdx];
+		MTLRenderPipelineColorAttachmentDescriptor* dstCA = dst.colorAttachments[caIdx];
+		dstCA.pixelFormat = srcCA.pixelFormat;
+		dstCA.writeMask = srcCA.writeMask;
+		dstCA.blendingEnabled = srcCA.blendingEnabled;
+		dstCA.rgbBlendOperation = srcCA.rgbBlendOperation;
+		dstCA.sourceRGBBlendFactor = srcCA.sourceRGBBlendFactor;
+		dstCA.destinationRGBBlendFactor = srcCA.destinationRGBBlendFactor;
+		dstCA.alphaBlendOperation = srcCA.alphaBlendOperation;
+		dstCA.sourceAlphaBlendFactor = srcCA.sourceAlphaBlendFactor;
+		dstCA.destinationAlphaBlendFactor = srcCA.destinationAlphaBlendFactor;
+	}
+}
+
 // Creates the Metal mesh render pipeline for a pipeline that uses a mesh shader instead of vertex input.
 // The mesh shader uses the vertex stage resources of this pipeline, and the fragment and output state
 // is built exactly as for a vertex pipeline, then copied into the mesh render pipeline descriptor.
@@ -3679,62 +3701,45 @@ void MVKGraphicsPipeline::initMeshMTLRenderPipelineState(const VkGraphicsPipelin
 	if (@available(macOS 13.0, iOS 16.0, *)) {
 		SPIRVToMSLConversionConfiguration shaderConfig;
 		initShaderConversionConfig(shaderConfig, pCreateInfo, reflectData);
-		addMeshStageResourceBindings(shaderConfig);
-
-		// Mesh shader
-		const auto& implicit = _stageResources[kMVKShaderStageVertex].implicitBuffers.ids;
-		shaderConfig.options.entryPointStage = spv::ExecutionModelMeshEXT;
-		shaderConfig.options.entryPointName = pMeshSS->pName;
-		addCommonImplicitBuffersToShaderConfig(shaderConfig, implicit);
-		shaderConfig.options.mslOptions.draw_id_buffer_index = implicit[MVKImplicitBuffer::DrawId];
-		shaderConfig.options.mslOptions.capture_output_to_buffer = false;
-		shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
-
-		MVKMTLFunction meshFunc = getMTLFunction(shaderConfig, pMeshSS, pMeshFB, _vertexModule, "Mesh");
-		id<MTLFunction> mtlMeshFunc = meshFunc.getMTLFunction();
-		if ( !mtlMeshFunc ) {
-			_hasValidMTLPipelineStates = false;
-			return;
-		}
-		auto& meshRslts = meshFunc.shaderConversionResults;
-		populateResourceUsage(_stageResources[kMVKShaderStageVertex], shaderConfig, meshRslts, spv::ExecutionModelMeshEXT);
-		_layout->populateBindOperations(_stageResources[kMVKShaderStageVertex].bindScript, shaderConfig, spv::ExecutionModelMeshEXT);
-		if ( !verifyImplicitBuffers(kMVKShaderStageVertex) ) {
-			_hasValidMTLPipelineStates = false;
-			return;
-		}
-		_meshThreadgroupSize = meshFunc.threadGroupSize;
-		if (meshRslts.isRasterizationDisabled) { pFragmentSS = nullptr; }
-
-		// Fragment shader and outputs. Fragment inputs are matched to mesh outputs by location.
-		MTLRenderPipelineDescriptor* rastDesc = [MTLRenderPipelineDescriptor new];		// temp retain
-		SPIRVShaderOutputs meshOutputs;
-		bool isValid = addFragmentShaderToPipeline(rastDesc, pCreateInfo, shaderConfig, meshOutputs, pFragmentSS, pFragmentFB);
-		if (isValid) { addFragmentOutputToPipeline(rastDesc, pCreateInfo); }
-
 		MTLMeshRenderPipelineDescriptor* plDesc = [MTLMeshRenderPipelineDescriptor new];	// temp retain
-		plDesc.meshFunction = mtlMeshFunc;
-		plDesc.fragmentFunction = rastDesc.fragmentFunction;
-		plDesc.rasterizationEnabled = !meshRslts.isRasterizationDisabled;
-		plDesc.rasterSampleCount = rastDesc.rasterSampleCount;
-		plDesc.alphaToCoverageEnabled = rastDesc.alphaToCoverageEnabled;
-		plDesc.alphaToOneEnabled = rastDesc.alphaToOneEnabled;
-		plDesc.depthAttachmentPixelFormat = rastDesc.depthAttachmentPixelFormat;
-		plDesc.stencilAttachmentPixelFormat = rastDesc.stencilAttachmentPixelFormat;
-		for (uint32_t caIdx = 0; caIdx < kMVKMaxColorAttachmentCount; caIdx++) {
-			MTLRenderPipelineColorAttachmentDescriptor* srcCA = rastDesc.colorAttachments[caIdx];
-			MTLRenderPipelineColorAttachmentDescriptor* dstCA = plDesc.colorAttachments[caIdx];
-			dstCA.pixelFormat = srcCA.pixelFormat;
-			dstCA.writeMask = srcCA.writeMask;
-			dstCA.blendingEnabled = srcCA.blendingEnabled;
-			dstCA.rgbBlendOperation = srcCA.rgbBlendOperation;
-			dstCA.sourceRGBBlendFactor = srcCA.sourceRGBBlendFactor;
-			dstCA.destinationRGBBlendFactor = srcCA.destinationRGBBlendFactor;
-			dstCA.alphaBlendOperation = srcCA.alphaBlendOperation;
-			dstCA.sourceAlphaBlendFactor = srcCA.sourceAlphaBlendFactor;
-			dstCA.destinationAlphaBlendFactor = srcCA.destinationAlphaBlendFactor;
-		}
-		[rastDesc release];																		// temp release
+
+		bool isValid = getDevice()->shaderBackend().addGraphicsStages([&]() -> bool {
+			addMeshStageResourceBindings(shaderConfig);
+
+			// Mesh shader
+			const auto& implicit = _stageResources[kMVKShaderStageVertex].implicitBuffers.ids;
+			shaderConfig.options.entryPointStage = spv::ExecutionModelMeshEXT;
+			shaderConfig.options.entryPointName = pMeshSS->pName;
+			addCommonImplicitBuffersToShaderConfig(shaderConfig, implicit);
+			shaderConfig.options.mslOptions.draw_id_buffer_index = implicit[MVKImplicitBuffer::DrawId];
+			shaderConfig.options.mslOptions.capture_output_to_buffer = false;
+			shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
+
+			MVKMTLFunction meshFunc = getMTLFunction(shaderConfig, pMeshSS, pMeshFB, _vertexModule, "Mesh");
+			id<MTLFunction> mtlMeshFunc = meshFunc.getMTLFunction();
+			if ( !mtlMeshFunc ) { return false; }
+			auto& meshRslts = meshFunc.shaderConversionResults;
+			populateResourceUsage(_stageResources[kMVKShaderStageVertex], shaderConfig, meshRslts, spv::ExecutionModelMeshEXT);
+			_layout->populateBindOperations(_stageResources[kMVKShaderStageVertex].bindScript, shaderConfig, spv::ExecutionModelMeshEXT);
+			if ( !verifyImplicitBuffers(kMVKShaderStageVertex) ) { return false; }
+			_meshThreadgroupSize = meshFunc.threadGroupSize;
+			const VkPipelineShaderStageCreateInfo* pRasterFragmentSS = meshRslts.isRasterizationDisabled ? nullptr : pFragmentSS;
+
+			// Fragment shader and outputs. Fragment inputs are matched to mesh outputs by location.
+			MTLRenderPipelineDescriptor* rastDesc = [MTLRenderPipelineDescriptor new];		// temp retain
+			SPIRVShaderOutputs meshOutputs;
+			bool fragmentValid = addFragmentShaderToPipeline(rastDesc, pCreateInfo, shaderConfig, meshOutputs, pRasterFragmentSS, pFragmentFB);
+			if (fragmentValid) { addFragmentOutputToPipeline(rastDesc, pCreateInfo); }
+			plDesc.meshFunction = mtlMeshFunc;
+			plDesc.fragmentFunction = rastDesc.fragmentFunction;
+			plDesc.rasterizationEnabled = !meshRslts.isRasterizationDisabled;
+			mvkCopyMeshRenderTargets(plDesc, rastDesc);
+			[rastDesc release];																	// temp release
+			return fragmentValid;
+		}, [&]() -> bool {
+			return addMetalIRMeshShadersToPipeline(plDesc, pCreateInfo, shaderConfig, pMeshSS, pFragmentSS,
+			                                       getRenderingCreateInfo(pCreateInfo)->viewMask);
+		});
 		setMetalObjectLabel(plDesc, ((MVKPipelineLayout*)pCreateInfo->layout)->getDebugName());
 
 		if (isValid) {

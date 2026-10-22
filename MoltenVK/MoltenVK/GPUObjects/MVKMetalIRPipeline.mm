@@ -115,3 +115,52 @@ bool MVKGraphicsPipeline::addMetalIRShadersToPipeline(
 	}
 	return false;
 }
+
+// A mesh shader occupies the vertex stage of this pipeline: its IR artifact
+// supplies the vertex stage resources, which the encoder binds to the mesh stage.
+bool MVKGraphicsPipeline::addMetalIRMeshShadersToPipeline(
+    MTLMeshRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo,
+    mvk::SPIRVToMSLConversionConfiguration& shaderConfig,
+    const VkPipelineShaderStageCreateInfo* pMeshSS,
+    const VkPipelineShaderStageCreateInfo* pFragmentSS, uint32_t viewMask) {
+	const auto& capabilities = getDevice()->shaderBackend().capabilities();
+	bool discard = pCreateInfo->pRasterizationState->rasterizerDiscardEnable;
+	const char* rejectionReason = capabilities.graphicsRejectionReason(false, true, discard, mvkIsMultiview(viewMask));
+	if (!rejectionReason && pCreateInfo->pMultisampleState &&
+	    !capabilities.supportsSampleShading(pCreateInfo->pMultisampleState->sampleShadingEnable,
+	                                        pCreateInfo->pMultisampleState->minSampleShading)) {
+		rejectionReason = "sample_shading";
+	}
+	if (rejectionReason || !_isRasterizing) {
+		mvkMetalIRRecordPipelineRejection(getDevice(), rejectionReason ? rejectionReason : "mesh_rasterization_disabled");
+		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT,
+			"MetalIR mesh pipeline rejected: %s, mesh_code=%016zx, fragment_code=%016zx; MSL fallback disabled.",
+			rejectionReason ? rejectionReason : "mesh_rasterization_disabled", _vertexModule->getKey().codeHash,
+			_fragmentModule ? _fragmentModule->getKey().codeHash : 0));
+		return false;
+	}
+	// The mesh function writes clip-space positions, so it takes the vertex stage's transforms.
+	uint32_t transforms = (shaderConfig.options.shouldFlipVertexY ? MVK_METAL_IR_FLIP_Y : 0) |
+		(shaderConfig.options.shouldFixupClipSpace ? MVK_METAL_IR_CLIP_HALF_Z : 0);
+	auto meshIR = getDevice()->shaderBackend().compileStage({this, _layout, _vertexModule, pMeshSS, transforms, 0, {}}).artifactOwner;
+	if (!meshIR) return false;
+	auto fragmentIR = pFragmentSS ? getDevice()->shaderBackend().compileStage({this, _layout, _fragmentModule, pFragmentSS, 0, 0, {},
+		!shaderConfig.options.mslOptions.enable_frag_depth_builtin,
+		!shaderConfig.options.mslOptions.enable_frag_stencil_ref_builtin}).artifactOwner : nullptr;
+	if (pFragmentSS && !fragmentIR) return false;
+
+	_stageResources[kMVKShaderStageVertex].metalIR = meshIR->metadata;
+	_stageResources[kMVKShaderStageFragment].metalIR = fragmentIR ? fragmentIR->metadata : nullptr;
+	mvkPopulateMetalIRResidencyOperations(_layout, _stageResources[kMVKShaderStageVertex]);
+	if (fragmentIR) mvkPopulateMetalIRResidencyOperations(_layout, _stageResources[kMVKShaderStageFragment]);
+	_meshThreadgroupSize = MTLSizeMake(meshIR->threadgroupSize[0], meshIR->threadgroupSize[1], meshIR->threadgroupSize[2]);
+
+	MTLRenderPipelineDescriptor* rastDesc = [MTLRenderPipelineDescriptor new];		// temp retain
+	addFragmentOutputToPipeline(rastDesc, pCreateInfo);
+	plDesc.meshFunction = meshIR->function;
+	plDesc.fragmentFunction = fragmentIR ? fragmentIR->function : nil;
+	plDesc.rasterizationEnabled = true;
+	mvkCopyMeshRenderTargets(plDesc, rastDesc);
+	[rastDesc release];																	// temp release
+	return true;
+}

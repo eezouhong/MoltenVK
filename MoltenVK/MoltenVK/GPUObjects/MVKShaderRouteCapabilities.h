@@ -8,17 +8,19 @@ struct MVKShaderRouteCapabilities {
     bool supportsSpecialization(uint32_t entries) const { return !metalIR || entries == 0; }
     bool supportsStageClass(bool vertexFragmentCompute) const { return !metalIR || vertexFragmentCompute; }
     bool supportsPushDescriptors() const { return !metalIR; }
-    bool supportsStages(bool tessellation, bool mesh) const { return !metalIR || (!tessellation && !mesh); }
-    bool supportsGraphics(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
-        // Discard suppresses rasterization, not vertex-stage storage writes.
-        return !metalIR || (!tessellation && !mesh && !multiview);
+    // Mesh shaders compile to Metal mesh functions; tessellation has no IR route.
+    bool supportsStages(bool tessellation, bool /*mesh*/) const { return !metalIR || !tessellation; }
+    bool supportsGraphics(bool tessellation, bool mesh, bool discard, bool multiview) const {
+        // Discard suppresses rasterization, not vertex-stage storage writes. A
+        // mesh function has no void-output variant, so it must rasterize.
+        return !metalIR || (!tessellation && !multiview && !(mesh && discard));
     }
     // Deterministic diagnostic classification only; supportsGraphics stays authoritative.
-    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool /*discard*/, bool multiview) const {
+    const char* graphicsRejectionReason(bool tessellation, bool mesh, bool discard, bool multiview) const {
         if (!metalIR) return nullptr;
         if (tessellation) return "tessellation_stage";
-        if (mesh) return "mesh_stage";
         if (multiview) return "multiview";
+        if (mesh && discard) return "mesh_rasterization_disabled";
         return nullptr;
     }
     bool supportsSampleShading(bool enabled, float minimum) const { return !metalIR || !enabled || minimum == 0.0f; }

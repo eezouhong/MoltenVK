@@ -50,6 +50,18 @@ const char* MeloNXMetalIRDependencyIdentity() {
 extern "C" __attribute__((visibility("default")))
 uint32_t MeloNXMetalIRABIVersion() { return MVK_METAL_IR_ABI_VERSION; }
 
+// A fragment shader that declares a second color output (SPIR-V `Index 1`) is written for dual-source blending.
+// The converter's default leaves the choice to a `dualSourceBlendingEnabled` function constant that neither route
+// supplies, so the second output was dropped and every pipeline blending with it failed to build.
+static bool declaresDualSourceOutput(const uint32_t* words,size_t count) {
+    for(size_t at=5;at<count;) {
+        uint32_t length=words[at]>>16,opcode=words[at]&0xffff;
+        if(length==0||at+length>count)return false;
+        if(opcode==71&&length>=4&&words[at+2]==32&&words[at+3]==1)return true; // OpDecorate <id> Index 1
+        at+=length;
+    }
+    return false;
+}
 static double elapsed(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
 }
@@ -248,11 +260,16 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
 #endif
         if(request->preserveInvariance)flags|=IRCompatibilityFlagPositionInvariance;
         IRCompilerSetCompatibilityFlags(compiler,(IRCompatibilityFlags)flags);
+        if(request->executionModel==4&&declaresDualSourceOutput(request->words,request->wordCount))
+            IRCompilerSetDualSourceBlendingConfiguration(compiler,IRDualSourceBlendingConfigurationForceEnabled);
         start=std::chrono::steady_clock::now(); { ReplayCompilerPhase trace("apple_converter",request->executionModel); output=IRCompilerAllocCompileAndLink(compiler,nullptr,input,&error); } result->converterMs=elapsed(start);
 #if TARGET_OS_IPHONE
         if(!output&&iOS18TargetRetryAvailable()&&mscRequiresIOS18Target(error)) {
             IRErrorDestroy(error);error=nullptr;
             IRCompilerSetMinimumDeploymentTarget(compiler,IROperatingSystem_iOS,"18.0");
+            // The converter resets this after each compilation.
+            if(request->executionModel==4&&declaresDualSourceOutput(request->words,request->wordCount))
+                IRCompilerSetDualSourceBlendingConfiguration(compiler,IRDualSourceBlendingConfigurationForceEnabled);
             start=std::chrono::steady_clock::now();
             { ReplayCompilerPhase trace("apple_converter_ios18",request->executionModel); output=IRCompilerAllocCompileAndLink(compiler,nullptr,input,&error); }
             result->converterMs+=elapsed(start);

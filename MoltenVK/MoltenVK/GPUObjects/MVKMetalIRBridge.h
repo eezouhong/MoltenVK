@@ -16,6 +16,13 @@ enum : uint32_t { MVK_METAL_IR_ALLOW_DISPATCH_BASE = 1, MVK_METAL_IR_RENDERING_P
 // produced a void vertex entry; an older plugin is rejected explicitly.
 enum : uint32_t { MVK_METAL_IR_RASTERIZATION_DISABLED = 4 };
 enum : uint32_t { MVK_METAL_IR_VOID_VERTEX = 128 };
+// ABI 9 additive option: a vertex stage compiled as a Metal post-tessellation
+// vertex function, [[patch(triangle|quad, 0)]]. The module's PrimitiveId and
+// TessCoord built-ins are [[patch_id]] and [[position_in_patch]]; it may not
+// read VertexIndex. The matching result bit proves the compiler did it; an
+// older plugin is rejected explicitly.
+enum : uint32_t { MVK_METAL_IR_POST_TESSELLATION_TRIANGLES = 8, MVK_METAL_IR_POST_TESSELLATION_QUADS = 16 };
+enum : uint32_t { MVK_METAL_IR_POST_TESSELLATION_VERTEX = 256 };
 struct MVKMetalIRBinding {
     uint32_t set;
     uint32_t binding;

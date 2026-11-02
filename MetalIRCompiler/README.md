@@ -283,3 +283,22 @@ runtime inputs. This stays on SM 6.6.
 The optional compiler requires the matched Mesa sidecar exporting the new
 entry point. An older sidecar causes plugin loading to fail explicitly; it
 does not silently select MSL. The native/plugin binding ABI remains 9.
+
+### Post-tessellation vertex functions
+
+`MVK_METAL_IR_POST_TESSELLATION_TRIANGLES` or `_QUADS` in `runtimeOptions` compiles a SPIR-V vertex stage as a
+Metal post-tessellation vertex function (`[[patch(triangle|quad, 0)]]`) for drawing with the hardware tessellator
+(`drawPatches`, no control-point buffer). The stage reads the patch index as an input decorated `BuiltIn PrimitiveId`
+and the domain coordinate as `BuiltIn TessCoord` (the module declares the `Tessellation` capability); it must not
+read `VertexIndex`. Mesa commit `cbd73fb` ("spirv_to_dxil: native post-tessellation vertex inputs") passes the two
+through hidden inputs; the AIR adapter restores `air.patch_id` and `air.position_in_patch` (`float2` for quads,
+`float3` for triangles), drops their vertex-fetch records, and adds the patch domain to the entry. The result sets
+`MVK_METAL_IR_POST_TESSELLATION_VERTEX`; without it the caller must not build a tessellation pipeline. The options
+exclude each other, `RASTERIZATION_DISABLED` and `RENDERING_POINTS`. Other stages compile as before: their AIR is
+unchanged apart from the Mesa version string.
+
+`tests/run_post_tessellation.py --plugin <plugin> --output <new dir>` builds `tests/post_tessellation_probe.mm`,
+compiles `tests/post_tessellation.vert` (redecorated by `prepare_post_tessellation.py`) through the plugin for both
+domains, draws two patches at factors 1, 3, 7.5 (fractional odd) and 64 under Metal API and shader validation, and
+checks every covered pixel against the affine domain-coordinate and patch-index oracle. Run it through the canonical
+graphics queue.

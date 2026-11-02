@@ -48,7 +48,7 @@ class RasterBitstream {
     llvm::BitstreamWriter writer;
     std::optional<llvm::BitstreamBlockInfo> blockInfo;
     std::map<std::string,uint64_t> strings;
-    uint32_t execution,requiredIO;
+    uint32_t execution,requiredIO,domain;
     bool globalNamesInStringTable=false;
     unsigned stringBlocks=0;uint32_t changed=0;
     int functionOrdinal=-1;
@@ -72,14 +72,17 @@ class RasterBitstream {
             if(value==marker)value=execution==0?"air.point_size":"air.point_coord";
             if((requiredIO&VertexID)&&value=="user(melonx_native_vertex_id0)")value="air.vertex_id";
             if((requiredIO&InstanceID)&&value=="user(melonx_native_instance_id0)")value="air.instance_id";
+            if((requiredIO&PatchID)&&value=="user(melonx_native_patch_id0)")value="air.patch_id";
+            if((requiredIO&PositionInPatch)&&value=="user(melonx_native_position_in_patch0)")value="air.position_in_patch";
             lengthWriter.EmitVBR(value.size(),6);characters+=value;
         }
         lengthWriter.FlushToWord();values[1]=encoded.size();
         return std::string(encoded.begin(),encoded.end())+characters;
     }
     void rewriteNode(llvm::SmallVectorImpl<uint64_t>& values) {
-        const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)"};
-        for(unsigned i=0;i<4;++i) {
+        const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)",
+                               "user(melonx_native_patch_id0)","user(melonx_native_position_in_patch0)"};
+        for(unsigned i=0;i<6;++i) {
             uint32_t bit=1u<<i;if(!(requiredIO&bit))continue;
             auto found=strings.find(markers[i]);if(found==strings.end())continue;
             if(std::find(values.begin(),values.end(),found->second)==values.end())continue;
@@ -87,8 +90,9 @@ class RasterBitstream {
             auto typePos=std::find(values.begin(),values.end(),type),namePos=std::find(values.begin(),values.end(),name);
             if(typePos==values.end()||namePos==values.end()||std::next(typePos)==values.end()||std::next(namePos)==values.end())throw std::runtime_error("unsupported AIR native metadata node");
             uint64_t typeValue=*std::next(typePos),nameValue=*std::next(namePos),index=values.front();
-            const char* expected=i==0?"float":i==1?"float2":"uint";
-            if(typeValue!=strings.at(expected)||(changed&bit))throw std::runtime_error("unexpected AIR native type or duplicate node");
+            const char* expected=i==0?"float":i==1?"float2":i==5?(domain==QuadPatch?"float2":"float3"):"uint";
+            auto expectedType=strings.find(expected);
+            if(expectedType==strings.end()||typeValue!=expectedType->second||(changed&bit))throw std::runtime_error("unexpected AIR native type or duplicate node");
             values.clear();if(i)values.push_back(index);
             values.append({found->second,type,typeValue,name,nameValue});changed|=bit;return;
         }
@@ -166,8 +170,8 @@ class RasterBitstream {
         if(!root)throw std::runtime_error("truncated AIR block");
     }
 public:
-    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage,uint32_t required,RecordFilter records={})
-        :reader(source),writer(output),execution(stage),requiredIO(required),filter(std::move(records)) {}
+    RasterBitstream(llvm::ArrayRef<uint8_t> source,llvm::SmallVectorImpl<char>& output,uint32_t stage,uint32_t required,RecordFilter records={},uint32_t patch=0)
+        :reader(source),writer(output),execution(stage),requiredIO(required),domain(patch),filter(std::move(records)) {}
     void run() {
         if(checked(reader.Read(32))!=0xdec04342)throw std::runtime_error("invalid AIR magic");
         writer.Emit(0xdec04342,32);block(0,true);writer.FlushToWord();
@@ -303,6 +307,116 @@ struct DiscardPlan {
     }
 };
 
+// [[patch(domain, 0)]] is a fourth operand of the AIR vertex entry node:
+// !{!"air.patch", !"quad"|"triangle", !"air.patch_control_point", i32 0}.
+// MSC emits none of these strings. Appending them to the string table would
+// renumber every metadata node, so they are appended as single-string records
+// after the last module metadata record, with the new node; the entry node
+// refers to it forward. The i32 0 is the existing value of the entry's
+// argument 0 index. No other record or ID changes.
+struct PatchPlan {
+    struct Record { unsigned code; std::vector<uint64_t> values; };
+    std::vector<Record> metadata;
+    std::string metadataName;
+    uint64_t stage=UINT64_MAX,zero=UINT64_MAX,count=0;
+    bool functionMetadata=false,appended=false;
+    unsigned next=0;
+    uint32_t domain=0;
+
+    static bool counted(unsigned code) {
+        using namespace llvm;
+        return code==bitc::METADATA_VALUE||code==bitc::METADATA_NODE||
+               code==bitc::METADATA_DISTINCT_NODE||code==bitc::METADATA_STRING_OLD;
+    }
+    void scan(unsigned block,unsigned code,int ordinal,llvm::SmallVectorImpl<uint64_t>& values) {
+        using namespace llvm;
+        if(!code||block!=bitc::METADATA_BLOCK_ID)return;
+        // Function-local metadata IDs follow the module's: new module records would renumber them.
+        if(ordinal>=0) {functionMetadata=true;return;}
+        if(code==bitc::METADATA_NAME) {metadataName.assign(values.begin(),values.end());return;}
+        if(code==bitc::METADATA_NAMED_NODE) {
+            if(metadataName=="air.vertex") {
+                if(values.size()!=1||stage!=UINT64_MAX)throw std::runtime_error("ambiguous AIR vertex entry");
+                stage=values[0];
+            }
+            metadataName.clear();return;
+        }
+        if(code==bitc::METADATA_STRINGS) {
+            if(values.size()!=2||values[0]>65536)throw std::runtime_error("invalid AIR metadata strings");
+            metadata.resize(metadata.size()+values[0]);return;
+        }
+        if(code==bitc::METADATA_KIND||code==bitc::METADATA_GLOBAL_DECL_ATTACHMENT)return;
+        if(!counted(code))throw std::runtime_error("unsupported AIR patch metadata record "+std::to_string(code));
+        metadata.push_back({code,{values.begin(),values.end()}});
+    }
+    void finish(unsigned zeroInput) {
+        using namespace llvm;
+        if(functionMetadata)throw std::runtime_error("AIR function-local metadata unsupported for patch entry");
+        auto node=[&](uint64_t id)->const Record& {
+            if(id>=metadata.size())throw std::runtime_error("invalid AIR patch metadata reference");
+            return metadata[id];
+        };
+        const auto& entry=node(stage);
+        if(entry.code!=bitc::METADATA_NODE||entry.values.size()!=3||!entry.values[2])
+            throw std::runtime_error("unsupported AIR patch entry metadata");
+        const auto& inputs=node(entry.values[2]-1);
+        if(inputs.code!=bitc::METADATA_NODE||zeroInput>=inputs.values.size()||!inputs.values[zeroInput])
+            throw std::runtime_error("AIR patch entry inputs missing");
+        const auto& input=node(inputs.values[zeroInput]-1);
+        if(input.code!=bitc::METADATA_NODE||input.values.empty()||!input.values[0]||
+           node(input.values[0]-1).code!=bitc::METADATA_VALUE)
+            throw std::runtime_error("AIR argument index metadata missing");
+        zero=input.values[0]-1;count=metadata.size();
+    }
+    void rewrite(unsigned block,unsigned code,int ordinal,llvm::SmallVectorImpl<uint64_t>& values) {
+        using namespace llvm;
+        if(block!=bitc::METADATA_BLOCK_ID||ordinal>=0)return;
+        if(code==bitc::METADATA_STRINGS) {next+=values[0];return;}
+        if(code&&counted(code)) {
+            if(next==stage)values.push_back(count+3+1);
+            ++next;return;
+        }
+        if(code||appended)return;
+        if(next!=count)throw std::runtime_error("AIR patch metadata count changed");
+        for(const char* text:{"air.patch",domain==QuadPatch?"quad":"triangle","air.patch_control_point"}) {
+            size_t length=strlen(text);
+            values.append({bitc::METADATA_STRING_OLD,length});
+            for(size_t i=0;i<length;++i)values.push_back((unsigned char)text[i]);
+        }
+        values.append({bitc::METADATA_NODE,4,count+1,count+2,count+3,zero+1});
+        appended=true;
+    }
+};
+
+// Argument 0's index operand is the i32 0 the patch attribute reuses.
+bool zeroArgumentInput(llvm::Module& module,unsigned& position,std::string& error) {
+    using namespace llvm;
+    auto* named=module.getNamedMetadata("air.vertex");
+    auto* stage=named&&named->getNumOperands()==1?named->getOperand(0):nullptr;
+    auto* inputs=stage&&stage->getNumOperands()==3?dyn_cast<MDNode>(stage->getOperand(2)):nullptr;
+    if(!inputs) {error="AIR patch entry interface unsupported";return false;}
+    for(unsigned i=0;i<inputs->getNumOperands();++i) {
+        auto* item=dyn_cast<MDNode>(inputs->getOperand(i));
+        auto* index=item&&item->getNumOperands()?dyn_cast<ConstantAsMetadata>(item->getOperand(0)):nullptr;
+        auto* integer=index?dyn_cast<ConstantInt>(index->getValue()):nullptr;
+        if(integer&&integer->getType()->isIntegerTy(32)&&integer->isZero()) {position=i;return true;}
+    }
+    error="AIR patch entry has no argument 0";return false;
+}
+bool patchEntry(llvm::Module& module,uint32_t domain,std::string& error) {
+    using namespace llvm;
+    auto* named=module.getNamedMetadata("air.vertex");
+    auto* stage=named&&named->getNumOperands()==1?named->getOperand(0):nullptr;
+    if(!stage||stage->getNumOperands()!=4) {error="AIR patch entry attribute missing";return false;}
+    auto* patch=dyn_cast<MDNode>(stage->getOperand(3));
+    auto text=[&](unsigned i)->StringRef {auto* s=patch&&patch->getNumOperands()==4?dyn_cast<MDString>(patch->getOperand(i)):nullptr;return s?s->getString():"";};
+    auto* points=patch&&patch->getNumOperands()==4?dyn_cast<ConstantAsMetadata>(patch->getOperand(3)):nullptr;
+    auto* count=points?dyn_cast<ConstantInt>(points->getValue()):nullptr;
+    if(text(0)!="air.patch"||text(1)!=(domain==QuadPatch?"quad":"triangle")||text(2)!="air.patch_control_point"||
+       !count||!count->isZero()) {error="AIR patch entry attribute invalid";return false;}
+    return true;
+}
+
 llvm::Function* discardEntry(llvm::Module& module,bool transformed,std::string& error) {
     using namespace llvm;
     auto* named=module.getNamedMetadata("air.vertex");
@@ -325,7 +439,7 @@ bool compatibleMemory(llvm::AttributeList attributes) {
                 !legacyMemory(attr.getMemoryEffects()).exact) return false;
     return true;
 }
-bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::string& error) {
+bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,uint32_t domain,std::string& error) {
     using namespace llvm;
     auto* named=module.getNamedMetadata(execution==0?"air.vertex":"air.fragment");
     if (!named || named->getNumOperands()!=1) {error="AIR stage metadata unavailable";return false;}
@@ -335,9 +449,10 @@ bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::stri
     auto* function=functionMD?dyn_cast<Function>(functionMD->getValue()):nullptr;
     if(!function){error="AIR native function unavailable";return false;}
     uint32_t found=0;auto& context=module.getContext();
-    const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)"};
-    const char* builtins[]={"air.point_size","air.point_coord","air.vertex_id","air.instance_id"};
-    for(unsigned k=0;k<4;++k) {
+    const char* markers[]={"user(melonx_native_point_size0)","user(melonx_native_point_coord0)","user(melonx_native_vertex_id0)","user(melonx_native_instance_id0)",
+                           "user(melonx_native_patch_id0)","user(melonx_native_position_in_patch0)"};
+    const char* builtins[]={"air.point_size","air.point_coord","air.vertex_id","air.instance_id","air.patch_id","air.position_in_patch"};
+    for(unsigned k=0;k<6;++k) {
         const uint32_t bit=1u<<k;if(!(requiredIO&bit))continue;
         auto* group=dyn_cast<MDNode>(stage->getOperand(k==0?1:2));
         if(!group){error="AIR native interface group missing";return false;}
@@ -355,11 +470,15 @@ bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::stri
                 uint64_t arg=integer?integer->getZExtValue():UINT64_MAX;
                 if(arg>=function->arg_size()){error="AIR native argument missing";return false;}
                 Type* type=function->getArg(arg)->getType();
-                if(k==1){auto* vec=dyn_cast<FixedVectorType>(type);if(!vec||vec->getNumElements()!=2||!vec->getElementType()->isFloatTy()){error="AIR point coordinates not float2";return false;}}
+                if(k==1||k==5) {
+                    unsigned size=k==1||domain==QuadPatch?2:3;
+                    auto* vec=dyn_cast<FixedVectorType>(type);
+                    if(!vec||vec->getNumElements()!=size||!vec->getElementType()->isFloatTy()){error=k==1?"AIR point coordinates not float2":"AIR position in patch has the wrong type";return false;}
+                }
                 else if(!type->isIntegerTy(32)){error="AIR native ID not i32";return false;}
                 replacement.push_back(index);
             }
-            const char* typeName=k==0?"float":k==1?"float2":"uint";
+            const char* typeName=k==0?"float":k==1?"float2":k==5?(domain==QuadPatch?"float2":"float3"):"uint";
             replacement.append({text(context,builtins[k]),text(context,"air.arg_type_name"),text(context,typeName),text(context,"air.arg_name"),text(context,builtins[k])});
             group->replaceOperandWith(i,MDNode::get(context,replacement));found|=bit;
         }
@@ -379,12 +498,14 @@ bool retag(llvm::Module& module,uint32_t execution,uint32_t requiredIO,std::stri
 }
 
 static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
-                        uint32_t requiredIO,bool discard,std::vector<uint8_t>& output,std::string& error) {
+                        uint32_t requiredIO,bool discard,uint32_t domain,std::vector<uint8_t>& output,std::string& error) {
     using namespace llvm;
     output.clear();error.clear();
     auto fail=[&](const char* message){error=message;return false;};
+    const uint32_t vertexIO=domain?(InstanceID|PatchID|PositionInPatch):(PointSize|VertexID|InstanceID);
     if (!bytes || size<88 || size>64*1024*1024 || (!requiredIO&&!discard) ||
-        (execution!=0 && execution!=4) || (requiredIO & ~(execution==0?(PointSize|VertexID|InstanceID):PointCoordinates)))
+        (execution!=0 && execution!=4) || (requiredIO & ~(execution==0?vertexIO:PointCoordinates)) ||
+        (domain && (execution!=0 || discard || !(requiredIO&PositionInPatch) || (domain!=TrianglePatch&&domain!=QuadPatch))))
         return fail("invalid native raster adapter input");
     auto* data=(const uint8_t*)bytes;
     if (!tag(data,size,0,"MTLB") || read<uint64_t>(data,16)!=size)
@@ -399,7 +520,9 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
     auto module=parseBitcodeFile(MemoryBufferRef(StringRef((const char*)data+bitcodeOffset,bitcodeSize),"MetalIR raster adapter"),context);
     if (!module) {error=toString(module.takeError());return false;}
     if(discard) {if(!discardEntry(**module,false,error))return false;}
-    else if (!retag(**module,execution,requiredIO,error)) return false;
+    unsigned zeroInput=0;
+    if(domain&&!zeroArgumentInput(**module,zeroInput,error))return false;
+    if(!discard&&!retag(**module,execution,requiredIO,domain,error)) return false;
     SmallVector<char,0> serialized;
     // Read the original wrapper directly, not the pointer-upgraded LLVM Module.
     if(bitcodeSize<20)return fail("truncated AIR wrapper");
@@ -408,14 +531,20 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
         return fail("unsupported AIR bitcode wrapper");
     try {
         auto source=ArrayRef<uint8_t>(data+bitcodeOffset+payloadOffset,payloadSize);
-        DiscardPlan plan;
+        DiscardPlan plan;PatchPlan patch;patch.domain=domain;
         if(discard) {
             SmallVector<char,0> ignored;
             RasterBitstream scan(source,ignored,execution,0,[&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){plan.scan(b,c,f,v);});
             scan.run();plan.finish();
+        } else if(domain) {
+            SmallVector<char,0> ignored;
+            RasterBitstream scan(source,ignored,execution,0,[&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){patch.scan(b,c,f,v);});
+            scan.run();patch.finish(zeroInput);
         }
-        RasterBitstream transform(source,serialized,execution,requiredIO,
-            discard?std::function<void(unsigned,unsigned,int,SmallVectorImpl<uint64_t>&)>([&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){plan.rewrite(b,c,f,v);}):nullptr);
+        using Filter=std::function<void(unsigned,unsigned,int,SmallVectorImpl<uint64_t>&)>;
+        Filter filter=discard?Filter([&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){plan.rewrite(b,c,f,v);}):
+            domain?Filter([&](unsigned b,unsigned c,int f,SmallVectorImpl<uint64_t>& v){patch.rewrite(b,c,f,v);}):nullptr;
+        RasterBitstream transform(source,serialized,execution,requiredIO,filter,domain);
         transform.run();
         LLVMContext validation;
         auto verified=parseBitcodeFile(MemoryBufferRef(StringRef(serialized.data(),serialized.size()),"retagged AIR"),validation);
@@ -424,6 +553,11 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
             if(!plan.returns||!discardEntry(**verified,true,error))return false;
             std::string diagnostic;raw_string_ostream stream(diagnostic);
             if(verifyModule(**verified,&stream)) {error="invalid discarded AIR: "+stream.str();return false;}
+        }
+        if(domain) {
+            if(!patch.appended||!patchEntry(**verified,domain,error))return false;
+            std::string diagnostic;raw_string_ostream stream(diagnostic);
+            if(verifyModule(**verified,&stream)) {error="invalid post-tessellation AIR: "+stream.str();return false;}
         }
     } catch(const std::exception& failure) {error=failure.what();return false;}
     std::vector<uint8_t> bitcode;
@@ -472,6 +606,8 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
         cursor+=6+length;
     }
     if (!hashSeen || !sizeSeen || !versionSeen) return fail("required metallib tags unavailable");
+    const size_t functionEnd=cursor;
+    std::vector<size_t> footerRanges;
     cursor+=4;
     if (tag(data,size,cursor,"ENDT")) cursor+=4;
     while (cursor<publicOffset && !tag(data,size,cursor,"ENDT")) {
@@ -484,13 +620,14 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
             if (start<bitcodeOffset+bitcodeSize || start>size || extent>size-start)
                 return fail("unsupported metallib footer range");
             write<uint64_t>(output,cursor+6,start-bitcodeSize+bitcode.size());
+            footerRanges.push_back(cursor+6);
         }
         cursor+=6+length;
     }
     // MSC's public attribute records are separate from AIR's interface nodes.
     // Retagged native IDs must also stop requesting vertex-fetch attributes.
     // Preserve all record extents, indices and ordinary attribute bytes.
-    const uint32_t nativeIDs=requiredIO&(VertexID|InstanceID);
+    const uint32_t nativeIDs=requiredIO&(VertexID|InstanceID|PatchID|PositionInPatch);
     if(execution==0 && nativeIDs) {
         uint64_t publicSize=read<uint64_t>(data,48);
         if(publicSize<8||publicOffset>size||publicSize>size-publicOffset||
@@ -510,7 +647,8 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
                     if(!nul||limit-size_t(nul-data)-1<2)return fail("truncated vertex attribute name/index");
                     std::string name(reinterpret_cast<const char*>(data+entry),size_t(nul-(data+entry)));
                     size_t indexOffset=size_t(nul-data)+1;uint16_t index=read<uint16_t>(data,indexOffset);
-                    uint32_t bit=name=="melonx_native_vertex_id0"?VertexID:name=="melonx_native_instance_id0"?InstanceID:0;
+                    uint32_t bit=name=="melonx_native_vertex_id0"?VertexID:name=="melonx_native_instance_id0"?InstanceID:
+                        name=="melonx_native_patch_id0"?PatchID:name=="melonx_native_position_in_patch0"?PositionInPatch:0;
                     if(bit) {
                         if(!(nativeIDs&bit)||(attributes&bit))return fail("unexpected native vertex attribute record");
                         // MSC already leaves the fetch flag clear when the
@@ -528,13 +666,86 @@ static bool adaptRaster(const void* bytes,size_t size,uint32_t execution,
             return fail("public vertex metadata end tag missing");
         if(attributes!=nativeIDs)return fail("native vertex attribute metadata missing");
     }
+    if(domain) {
+        // The patch markers are no vertex inputs any more: drop their public
+        // attribute records (names/indices and types), or Metal requires a
+        // vertex descriptor for them. Without other inputs both tags go, as
+        // in Metal's own post-tessellation functions.
+        uint64_t publicSize=read<uint64_t>(output.data(),48);
+        size_t field=publicOffset+4,end=publicOffset+publicSize;
+        std::vector<uint8_t> record(4,0);std::vector<bool> keep;
+        std::vector<std::pair<std::string,uint16_t>> kept;
+        while(field<end && !tag(output.data(),output.size(),field,"ENDT")) {
+            uint16_t length=read<uint16_t>(output.data(),field+4);
+            if(length>end-field-6)return fail("public attribute tag exceeds record");
+            const uint8_t* value=output.data()+field+6;
+            if(tag(output.data(),output.size(),field,"VATT")) {
+                uint16_t count=read<uint16_t>(output.data(),field+6);size_t entry=field+8,limit=field+6+length;
+                for(unsigned i=0;i<count;++i) {
+                    const auto* nul=static_cast<const uint8_t*>(memchr(output.data()+entry,0,limit-entry));
+                    if(!nul||limit-size_t(nul-output.data())-1<2)return fail("truncated vertex attribute name/index");
+                    std::string name(reinterpret_cast<const char*>(output.data()+entry),size_t(nul-(output.data()+entry)));
+                    size_t indexOffset=size_t(nul-output.data())+1;
+                    bool marker=name=="melonx_native_patch_id0"||name=="melonx_native_position_in_patch0"||name=="melonx_native_instance_id0";
+                    keep.push_back(!marker);
+                    if(!marker)kept.emplace_back(name,read<uint16_t>(output.data(),indexOffset));
+                    entry=indexOffset+2;
+                }
+                if(!kept.empty()) {
+                    std::vector<uint8_t> payload(2);write<uint16_t>(payload,0,kept.size());
+                    for(auto& [name,index]:kept) {
+                        payload.insert(payload.end(),name.begin(),name.end());payload.push_back(0);
+                        payload.push_back(index&255);payload.push_back(index>>8);
+                    }
+                    record.insert(record.end(),{'V','A','T','T',uint8_t(payload.size()&255),uint8_t(payload.size()>>8)});
+                    record.insert(record.end(),payload.begin(),payload.end());
+                }
+            } else if(tag(output.data(),output.size(),field,"VATY")) {
+                uint16_t count=read<uint16_t>(output.data(),field+6);
+                if(count!=keep.size()||length!=2u+count)return fail("vertex attribute types do not match the attributes");
+                if(!kept.empty()) {
+                    std::vector<uint8_t> payload(2);write<uint16_t>(payload,0,kept.size());
+                    for(unsigned i=0;i<count;++i)if(keep[i])payload.push_back(value[2+i]);
+                    record.insert(record.end(),{'V','A','T','Y',uint8_t(payload.size()&255),uint8_t(payload.size()>>8)});
+                    record.insert(record.end(),payload.begin(),payload.end());
+                }
+            } else {
+                record.insert(record.end(),output.data()+field,output.data()+field+6+length);
+            }
+            field+=6+length;
+        }
+        if(field>end||end-field<4)return fail("public vertex metadata end tag missing");
+        record.insert(record.end(),{'E','N','D','T'});
+        write<uint32_t>(record,0,record.size());
+        const int64_t delta=int64_t(record.size())-int64_t(publicSize);
+        output.erase(output.begin()+publicOffset,output.begin()+publicOffset+publicSize);
+        output.insert(output.begin()+publicOffset,record.begin(),record.end());
+        for(size_t header:{16,48,56,72})write<uint64_t>(output,header,read<uint64_t>(output.data(),header)+delta);
+        for(size_t range:footerRanges)write<uint64_t>(output,range,read<uint64_t>(output.data(),range)+delta);
+
+        // TESS: patch type in bits 0-1, control point count (0: any) above.
+        // Inserted before the function's end tag; every later offset moves.
+        constexpr uint64_t added=7;
+        const uint8_t tag[added]={'T','E','S','S',1,0,(uint8_t)domain};
+        if(functionEnd<functionOffset+8||functionEnd>publicOffset)return fail("invalid metallib function end");
+        output.insert(output.begin()+functionEnd,tag,tag+added);
+        write<uint32_t>(output,functionOffset+4,read<uint32_t>(output.data(),functionOffset+4)+added);
+        for(size_t field:{16,32,40,56,72})write<uint64_t>(output,field,read<uint64_t>(output.data(),field)+added);
+        for(size_t field:footerRanges)write<uint64_t>(output,field+added,read<uint64_t>(output.data(),field+added)+added);
+        if(read<uint64_t>(output.data(),16)!=output.size())return fail("post-tessellation metallib size mismatch");
+    }
     return true;
 }
 bool restoreNativeRasterIO(const void* bytes,size_t size,uint32_t execution,uint32_t requiredIO,
                           std::vector<uint8_t>& output,std::string& error) {
-    return adaptRaster(bytes,size,execution,requiredIO,false,output,error);
+    return adaptRaster(bytes,size,execution,requiredIO,false,0,output,error);
+}
+bool makePostTessellationVertex(const void* bytes,size_t size,uint32_t domain,uint32_t requiredIO,
+                                std::vector<uint8_t>& output,std::string& error) {
+    if(domain!=TrianglePatch&&domain!=QuadPatch) {error="invalid post-tessellation domain";return false;}
+    return adaptRaster(bytes,size,0,requiredIO,false,domain,output,error);
 }
 bool discardVertexOutputs(const void* bytes,size_t size,std::vector<uint8_t>& output,std::string& error) {
-    return adaptRaster(bytes,size,0,0,true,output,error);
+    return adaptRaster(bytes,size,0,0,true,0,output,error);
 }
 }

@@ -118,6 +118,13 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
     if((request->runtimeOptions&MVK_METAL_IR_RASTERIZATION_DISABLED)&&request->executionModel!=0) {
         snprintf(result->error,sizeof(result->error),"rasterization-disabled compilation requires a vertex stage");return 1;
     }
+    const uint32_t patchOptions=request->runtimeOptions&(MVK_METAL_IR_POST_TESSELLATION_TRIANGLES|MVK_METAL_IR_POST_TESSELLATION_QUADS);
+    const uint32_t patchDomain=patchOptions==MVK_METAL_IR_POST_TESSELLATION_TRIANGLES?melonx::air::TrianglePatch:
+        patchOptions==MVK_METAL_IR_POST_TESSELLATION_QUADS?melonx::air::QuadPatch:0;
+    if(patchOptions&&(!patchDomain||request->executionModel!=0||
+       (request->runtimeOptions&(MVK_METAL_IR_RASTERIZATION_DISABLED|MVK_METAL_IR_RENDERING_POINTS)))) {
+        snprintf(result->error,sizeof(result->error),"post-tessellation compilation requires one domain and a rasterized vertex stage");return 1;
+    }
     if(request->wordCount<5||request->setCount>8||request->mathMode>MVK_METAL_IR_MATH_RELAXED)return 1;
     std::vector<uint32_t> words(request->words,request->words+request->wordCount);
     std::unordered_map<uint32_t,uint32_t> sets,bindings;
@@ -183,11 +190,20 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
         ((request->vertexTransformFlags&MVK_METAL_IR_CLIP_HALF_Z)?DXIL_SPIRV_MESH_CLIP_HALFZ:0):0;
     bool translated=mesh
         ?spirv_to_dxil_mesh(words.data(),words.size(),request->entry,NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,meshPosition)
+        :patchDomain
+        ?spirv_to_dxil_with_post_tessellation_inputs(words.data(),words.size(),nullptr,0,stage,request->entry,
+            NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,
+            patchDomain==melonx::air::QuadPatch?DXIL_SPIRV_POST_TESSELLATION_QUADS:DXIL_SPIRV_POST_TESSELLATION_TRIANGLES,
+            &nativeRasterIO)
         :spirv_to_dxil_with_absolute_vertex_ids(words.data(),words.size(),nullptr,0,stage,request->entry,
             NO_DXIL_VALIDATION,&debug,&conf,&logger,&dxil,clipHalfZ,
             bool(request->runtimeOptions&MVK_METAL_IR_RENDERING_POINTS),&nativeRasterIO);
     result->mesaMs=elapsed(start);
     if(!translated)return 1;
+    // Metal post-tessellation functions have no [[vertex_id]], and need the position in the patch.
+    if(patchDomain&&((nativeRasterIO&melonx::air::VertexID)||!(nativeRasterIO&melonx::air::PositionInPatch))) {
+        snprintf(result->error,sizeof(result->error),"post-tessellation vertex stage reads VertexIndex or not TessCoord");return 1;
+    }
     // Mesa runtime data and MSC draw arguments have separate ABIs. The native
     // encoder supplies both, and this metadata must survive disk restoration.
     bool runtimeData=dxil.metadata.requires_runtime_data;
@@ -295,7 +311,19 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                             result->rasterAdapterMs=elapsed(start);
                             if(!valid) {status=1;snprintf(result->error,sizeof(result->error),"math permissions adapter: %s",error.c_str());}
                         }
-                        if(status==0&&nativeRasterIO) {
+                        if(status==0&&patchDomain) {
+                            std::vector<uint8_t> adapted;std::string error;
+                            start=std::chrono::steady_clock::now();
+                            bool valid=melonx::air::makePostTessellationVertex(result->metallib,result->metallibSize,patchDomain,nativeRasterIO,adapted,error);
+                            result->rasterAdapterMs+=elapsed(start);
+                            if(!valid) {status=1;snprintf(result->error,sizeof(result->error),"post-tessellation adapter: %s",error.c_str());}
+                            else if(void* bytes=malloc(adapted.size())) {
+                                memcpy(bytes,adapted.data(),adapted.size());free(result->metallib);
+                                result->metallib=bytes;result->metallibSize=adapted.size();
+                                result->runtimeFlags|=MVK_METAL_IR_POST_TESSELLATION_VERTEX;
+                            } else {status=2;snprintf(result->error,sizeof(result->error),"post-tessellation adapter allocation failed");}
+                        }
+                        else if(status==0&&nativeRasterIO) {
                             std::vector<uint8_t> adapted;std::string error;
                             start=std::chrono::steady_clock::now();
                             bool restored=melonx::air::restoreNativeRasterIO(result->metallib,result->metallibSize,request->executionModel,nativeRasterIO,adapted,error);
@@ -344,7 +372,9 @@ int MeloNXCompileMetalIR(const MVKMetalIRCompileRequest* request,MVKMetalIRCompi
                                 const auto& input=vs.info_1_0.vertex_inputs[i];
                                 if(input.name &&
                                    ((nativeRasterIO&melonx::air::VertexID && !strcasecmp(input.name,"melonx_native_vertex_id0")) ||
-                                    (nativeRasterIO&melonx::air::InstanceID && !strcasecmp(input.name,"melonx_native_instance_id0")))) continue;
+                                    (nativeRasterIO&melonx::air::InstanceID && !strcasecmp(input.name,"melonx_native_instance_id0")) ||
+                                    (nativeRasterIO&melonx::air::PatchID && !strcasecmp(input.name,"melonx_native_patch_id0")) ||
+                                    (nativeRasterIO&melonx::air::PositionInPatch && !strcasecmp(input.name,"melonx_native_position_in_patch0")))) continue;
                                 char* end=nullptr;
                                 unsigned long location=input.name&&strncasecmp(input.name,"texcoord",8)==0?strtoul(input.name+8,&end,10):32;
                                 // MSC reflection indices are relative to the pinned
